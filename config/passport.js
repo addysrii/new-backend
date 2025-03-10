@@ -57,8 +57,6 @@ passport.use(new LinkedInStrategy({
     return done(error, null);
   }
 }));
-
-// Google Strategy
 passport.use(new GoogleStrategy({
   clientID: GOOGLE_CLIENT_ID,
   clientSecret: GOOGLE_CLIENT_SECRET,
@@ -108,5 +106,6 @@ passport.use(new GoogleStrategy({
     return done(error, null);
   }
 }));
+
 
 module.exports = passport;
