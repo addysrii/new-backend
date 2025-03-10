@@ -573,7 +573,8 @@ exports.googleCallback = async (req, res) => {
     const { user, deviceToken } = req;
     
     if (!user) {
-      return res.redirect('/login?error=auth_failed');
+      // Redirect to frontend instead of local route
+      return res.redirect('https://meetkats.com/login?error=auth_failed');
     }
     
     // Update user session and create JWT token
@@ -592,14 +593,15 @@ exports.googleCallback = async (req, res) => {
     
     await user.save();
     
-    // Use the custom redirectTo URL if provided, otherwise use default
-    const redirectUrl = req.redirectTo || `/auth/success?token=${token}`;
+    // Use the custom redirectTo URL if provided, otherwise use default frontend URL
+    const redirectUrl = req.redirectTo || `https://meetkats.com/auth/success?token=${token}`;
     
     // Redirect to frontend with token
     return res.redirect(redirectUrl);
   } catch (error) {
     console.error('Google callback error:', error);
-    return res.redirect('/login?error=server_error');
+    // Redirect to frontend with error instead of local route
+    return res.redirect('https://meetkats.com/login?error=server_error');
   }
 };
 
@@ -643,8 +645,19 @@ exports.linkedinCallback = async (req, res) => {
     const storedState = req.cookies.linkedin_oauth_state;
     
     // Validate state to prevent CSRF
-    if (!state || state !== storedState) {
-      return res.redirect('/login?error=invalid_state');
+    if (!state || !storedState || state !== storedState) {
+      return res.redirect('https://meetkats.com/login?error=invalid_state');
+    }
+    
+    // Extract redirectTo from state if it exists
+    let customRedirectUrl = null;
+    try {
+      const stateData = JSON.parse(Buffer.from(state, 'base64').toString());
+      if (stateData && stateData.redirectTo) {
+        customRedirectUrl = stateData.redirectTo;
+      }
+    } catch (error) {
+      console.error('Error parsing state:', error);
     }
     
     // Clear the state cookie
@@ -668,7 +681,9 @@ exports.linkedinCallback = async (req, res) => {
       }
     );
     
+    
     const accessToken = tokenResponse.data.access_token;
+    
     
     // Get user profile
     const profileResponse = await axios.get(
@@ -736,10 +751,13 @@ exports.linkedinCallback = async (req, res) => {
     await user.save();
     
     // Redirect with token
-    return res.redirect(`/auth/success?token=${token}`);
+   const redirectUrl = customRedirectUrl || `https://meetkats.com/auth/success?token=${token}`;
+    
+    // Redirect with token
+    return res.redirect(redirectUrl);
   } catch (error) {
     console.error('LinkedIn callback error:', error);
-    return res.redirect('/login?error=linkedin_auth_failed');
+    return res.redirect('https://meetkats.com/login?error=linkedin_auth_failed');
   }
 };
 module.exports = exports;
