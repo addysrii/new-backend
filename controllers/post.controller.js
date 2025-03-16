@@ -1,918 +1,2643 @@
-const Post = require('../models/content/post.js');
-const User = require('../models/user/user.js');
-const Hashtag = require('../models/discovery/Hashtag.js');
-const Mention = require('../models/social/mention.js');
-const Notification = require('../models/social/Notification.js');
-const { updateHashtags, createNotification } = require('../utils/helpers.js');
+const Post = require('../models/Post');
+const User = require('../models/User');
+const Comment = require('../models/Post');
+const Reaction = require('../models/Post');
+const Bookmark = require('../models/Post');
+const Notification = require('../models/Notification');
+const Share = require('../models/Post');
+const Report = require('../models/Post');
+const { validationResult } = require('express-validator');
+const socketEvents = require('../utils/socketEvents');
+const cloudStorage = require('../utils/cloudStorage');
+const mongoose = require('mongoose');
+const ObjectId = mongoose.Types.ObjectId;
+const sanitizeHtml = require('sanitize-html');
+const logger = require('../utils/logger');
+const metrics = require('../utils/metrics');
+const rateLimit = require('../middlewares/rateLimit');
+const cache = require('../utils/cache');
+const config = require('../config');
+const crypto = require('crypto');
+
+// Enhanced sanitization options
+const sanitizeOptions = {
+  allowedTags: ['b', 'i', 'em', 'strong', 'a', 'p', 'br'],
+  allowedAttributes: {
+    'a': ['href', 'target', 'rel']
+  },
+  allowedIframeHostnames: []
+};
 
 /**
- * @route   POST /api/posts
- * @desc    Create a new post
- * @access  Private
+ * Sanitize user input to prevent XSS attacks
+ * @param {string} content - The user content to sanitize
+ * @returns {string} Sanitized content
+ */
+const sanitizeContent = (content) => {
+  if (!content) return '';
+  return sanitizeHtml(content, sanitizeOptions);
+};
+
+/**
+ * Extract mentions from content
+ * @param {string} content - The content to extract mentions from
+ * @returns {Array} - Array of mentioned usernames
+ */
+const extractMentions = (content) => {
+  if (!content) return [];
+  const mentionRegex = /@(\w+)/g;
+  const mentions = [];
+  let match;
+  
+  while ((match = mentionRegex.exec(content)) !== null) {
+    mentions.push(match[1]);
+  }
+  
+  return mentions;
+};
+
+/**
+ * Calculate content hash for integrity verification
+ * @param {Buffer|string} content - Content to hash
+ * @returns {string} - SHA256 hash
+ */
+const calculateContentHash = (content) => {
+  const hashSum = crypto.createHash('sha256');
+  hashSum.update(typeof content === 'string' ? content : content);
+  return hashSum.digest('hex');
+};
+
+/**
+ * Check if the user has permission for the operation
+ * @param {string} userId - User ID
+ * @param {string} resourceId - Resource ID (post, comment, etc.)
+ * @param {string} resourceType - Resource type
+ * @param {string} action - Action being performed
+ * @returns {Promise<boolean>} - Whether permission is granted
+ */
+const hasPermission = async (userId, resourceId, resourceType, action) => {
+  try {
+    switch (resourceType) {
+      case 'post':
+        const post = await Post.findById(resourceId).select('author visibility');
+        
+        if (!post) return false;
+        
+        // Author has all permissions
+        if (post.author.toString() === userId) return true;
+        
+        // Visibility checks for non-authors
+        if (post.visibility === 'private') return false;
+        
+        if (post.visibility === 'connections') {
+          // Check if user is connected to author
+          const isConnected = await User.findOne({
+            _id: post.author,
+            connections: userId
+          });
+          
+          return !!isConnected;
+        }
+        
+        // Public posts can be viewed by anyone
+        if (action === 'view' && post.visibility === 'public') return true;
+        
+        return false;
+        
+      case 'comment':
+        const comment = await Comment.findById(resourceId).select('author post');
+        
+        if (!comment) return false;
+        
+        // Comment author has all permissions
+        if (comment.author.toString() === userId) return true;
+        
+        // Post owner can also modify comments
+        if (action === 'delete') {
+          const commentPost = await Post.findById(comment.post).select('author');
+          if (commentPost && commentPost.author.toString() === userId) return true;
+        }
+        
+        return false;
+        
+      default:
+        return false;
+    }
+  } catch (error) {
+    logger.error(`Permission check error: ${error.message}`, {
+      userId,
+      resourceId,
+      resourceType,
+      action
+    });
+    return false;
+  }
+};
+
+/**
+ * Create a new post with enhanced security
+ * @route POST /api/posts
+ * @access Private
  */
 exports.createPost = async (req, res) => {
+  const timer = metrics.startTimer('post_creation');
+  const requestId = req.id || crypto.randomBytes(16).toString('hex');
+  
   try {
-    const {
-      content,
-      type,
-      visibility,
-      location,
-      mentions,
-      tags,
-      pollData,
-      articleData,
-      linkUrl,
-      captions
-    } = req.body;
-    
-    // Validate content requirement
-    if (!content && !req.files?.length && !linkUrl && !pollData && !articleData) {
+    // Validate input
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      logger.warn('Post creation validation failed', { 
+        userId: req.user.id,
+        errors: errors.array(),
+        requestId
+      });
+      
       return res.status(400).json({ 
-        success: false,
-        error: 'Post must have content, media, link, poll, or article data'
+        status: 'error',
+        errors: errors.array(),
+        requestId
       });
     }
     
-    // Determine post type based on provided data
-    let postType = type || 'text';
-    if (!type) {
-      if (req.files?.length > 0) {
-        postType = req.files[0].mimetype.startsWith('image/') ? 'image' : 'video';
-      } else if (linkUrl) {
-        postType = 'link';
-      } else if (pollData) {
-        postType = 'poll';
-      } else if (articleData) {
-        postType = 'article';
-      }
+    const { content, visibility, tags, location, allowComments } = req.body;
+    
+    // Check rate limiting based on user history (if implemented)
+    const userPostCount = await Post.countDocuments({
+      author: req.user.id,
+      createdAt: { $gt: new Date(Date.now() - 24 * 60 * 60 * 1000) }
+    });
+    
+    if (userPostCount > config.MAX_POSTS_PER_DAY) {
+      logger.security.warn(`User exceeded post creation limit`, {
+        userId: req.user.id,
+        count: userPostCount,
+        requestId
+      });
+      
+      return res.status(429).json({
+        status: 'error',
+        message: 'You have reached your daily post limit',
+        requestId
+      });
     }
     
-    // Process location data
-    let locationData = null;
+    // Sanitize content
+    const sanitizedContent = sanitizeContent(content);
+    
+    // Generate content hash for integrity verification
+    const contentHash = calculateContentHash(sanitizedContent);
+    
+    // Create post object
+    const newPost = new Post({
+      author: req.user.id,
+      content: sanitizedContent,
+      contentHash,
+      visibility: visibility || 'public',
+      createdAt: Date.now(),
+      settings: {
+        allowComments: allowComments !== undefined ? allowComments : true
+      }
+    });
+    
+    // Add tags if provided
+    if (tags && Array.isArray(tags) && tags.length > 0) {
+      // Trim, lowercase, and limit length of each tag
+      newPost.tags = tags
+        .map(tag => String(tag).trim().toLowerCase())
+        .filter(tag => tag.length > 0 && tag.length <= config.MAX_TAG_LENGTH)
+        .slice(0, config.MAX_TAGS_PER_POST);
+    }
+    
+    // Add location if provided
     if (location) {
-      try {
-        locationData = typeof location === 'string' ? JSON.parse(location) : location;
-      } catch (error) {
-        console.error('Error parsing location data:', error);
-      }
-    }
-    
-    // Process mentions data
-    let mentionsData = [];
-    if (mentions) {
-      try {
-        mentionsData = typeof mentions === 'string' ? JSON.parse(mentions) : mentions;
-      } catch (error) {
-        console.error('Error parsing mentions data:', error);
-      }
-    }
-    
-    // Process tags/hashtags
-    let parsedTags = [];
-    if (tags) {
-      parsedTags = typeof tags === 'string' ? tags.split(',').map(tag => tag.trim()) : tags;
-    }
-    
-    // Extract hashtags from content
-    const hashtagRegex = /#([a-zA-Z0-9_]+)/g;
-    const hashtagMatches = content ? [...content.matchAll(hashtagRegex)] : [];
-    const contentHashtags = hashtagMatches.map(match => match[1].toLowerCase());
-    
-    // Combine explicit tags and content hashtags
-    const allTags = [...new Set([...parsedTags, ...contentHashtags])];
-    
-    // Process media files and captions
-    let images = [];
-    let videos = [];
-    
-    if (req.files && req.files.length > 0) {
-      let parsedCaptions = {};
-      
-      if (captions) {
-        try {
-          parsedCaptions = typeof captions === 'string' ? JSON.parse(captions) : captions;
-        } catch (error) {
-          console.error('Error parsing captions:', error);
-        }
-      }
-      
-      req.files.forEach((file, index) => {
-        if (file.mimetype.startsWith('image/')) {
-          images.push({
-            url: file.path,
-            caption: parsedCaptions[index] || '',
-            altText: parsedCaptions[index] || '',
-            order: index
-          });
-        } else if (file.mimetype.startsWith('video/')) {
-          videos.push({
-            url: file.path,
-            thumbnail: '', // Cloudinary can generate this automatically
-            caption: parsedCaptions[index] || '',
-            duration: 0 // To be determined later
-          });
-        }
-      });
-    }
-    
-    // Process link preview if URL provided
-    let linkPreviewData = null;
-    if (linkUrl) {
-      // In a real app, you would use a service like OpenGraph to fetch metadata
-      linkPreviewData = {
-        url: linkUrl,
-        title: '',
-        description: '',
-        imageUrl: ''
+      newPost.location = {
+        name: String(location.name).slice(0, 100),
+        address: String(location.address).slice(0, 200),
+        coordinates: location.coordinates ? 
+          [
+            parseFloat(location.coordinates.longitude), 
+            parseFloat(location.coordinates.latitude)
+          ] : 
+          undefined
       };
     }
     
-    // Process poll data
-    let processedPollData = null;
-    if (pollData) {
-      try {
-        const parsed = typeof pollData === 'string' ? JSON.parse(pollData) : pollData;
+    // Handle media uploads with better validation and security
+    if (req.files && req.files.length > 0) {
+      // Limit number of media files
+      const filesToProcess = req.files.slice(0, config.MAX_MEDIA_FILES_PER_POST);
+      newPost.media = [];
+      
+      for (const file of filesToProcess) {
+        // Validate file type and size
+        if (file.size > config.MAX_FILE_SIZE || !config.ALLOWED_MIME_TYPES.includes(file.mimetype)) {
+          logger.security.warn(`File type or size validation failed`, {
+            userId: req.user.id,
+            filename: file.originalname,
+            size: file.size,
+            mimetype: file.mimetype,
+            requestId
+          });
+          continue; // Skip invalid files
+        }
         
-        if (!parsed.question || !parsed.options || !Array.isArray(parsed.options) || parsed.options.length < 2) {
-          return res.status(400).json({ 
-            success: false,
-            error: 'Poll must have a question and at least 2 options'
+        try {
+          // Upload to cloud storage with enhanced security
+          const uploadResult = await cloudStorage.uploadSecureFile(file, {
+            userId: req.user.id,
+            accessControl: {
+              allowDownloads: true,
+              allowScreenshots: true
+            }
+          });
+          
+          // Add to media array with security metadata
+          newPost.media.push({
+            url: uploadResult.secureUrl || uploadResult.url,
+            secureFileId: uploadResult.secureFileId,
+            accessKey: uploadResult.accessKey,
+            type: file.mimetype.split('/')[0], // image, video, etc.
+            filename: file.originalname,
+            size: file.size,
+            dimensions: uploadResult.width && uploadResult.height ? {
+              width: uploadResult.width,
+              height: uploadResult.height
+            } : undefined,
+            contentType: file.mimetype,
+            contentHash: uploadResult.contentHash
+          });
+          
+          // Log secure media attachment
+          logger.info('Secure media attached to post', {
+            userId: req.user.id,
+            fileType: file.mimetype.split('/')[0],
+            secureFileId: uploadResult.secureFileId,
+            requestId
+          });
+        } catch (uploadError) {
+          logger.error('Media upload failed', { 
+            error: uploadError.message,
+            userId: req.user.id,
+            filename: file.originalname,
+            requestId
+          });
+          // Continue with other files
+        }
+      }
+    }
+    
+    // Extract mentions from content
+    const mentions = extractMentions(sanitizedContent);
+    
+    // Find mentioned users by username (case insensitive)
+    if (mentions.length > 0) {
+      const mentionedUsers = await User.find({ 
+        username: { $in: mentions, $regex: new RegExp(mentions.join('|'), 'i') }
+      }).select('_id username').lean();
+        
+      newPost.mentions = mentionedUsers.map(user => user._id);
+    }
+    
+    // Use transaction for post creation and related operations
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    
+    try {
+      // Save post
+      await newPost.save({ session });
+      
+      // Create notifications for mentions
+      if (newPost.mentions && newPost.mentions.length > 0) {
+        const notificationPromises = newPost.mentions.map(userId => {
+          if (userId.toString() === req.user.id.toString()) {
+            return Promise.resolve(); // Skip self-mentions
+          }
+          
+          return Notification.create([{
+            recipient: userId,
+            type: 'mention',
+            sender: req.user.id,
+            data: {
+              postId: newPost._id,
+              preview: sanitizedContent.substring(0, 100)
+            },
+            timestamp: Date.now()
+          }], { session });
+        });
+        
+        await Promise.all(notificationPromises);
+      }
+      
+      // Log successful transaction
+      logger.info('Post creation transaction successful', {
+        userId: req.user.id,
+        postId: newPost._id,
+        requestId
+      });
+      
+      await session.commitTransaction();
+    } catch (txError) {
+      await session.abortTransaction();
+      
+      logger.error('Post creation transaction failed', {
+        error: txError.message,
+        userId: req.user.id,
+        requestId
+      });
+      
+      throw txError;
+    } finally {
+      session.endSession();
+    }
+    
+    // Populate author info - do this after transaction to avoid session issues
+    const populatedPost = await Post.findById(newPost._id)
+      .populate('author', 'firstName lastName username profileImage headline')
+      .populate('mentions', 'firstName lastName username profileImage')
+      .lean();
+    
+    // Emit socket events for mentions
+    if (newPost.mentions && newPost.mentions.length > 0) {
+      newPost.mentions.forEach(userId => {
+        if (userId.toString() !== req.user.id.toString()) {
+          socketEvents.emitToUser(userId.toString(), 'new_mention', {
+            postId: newPost._id,
+            post: populatedPost,
+            from: { id: req.user.id }
+          });
+        }
+      });
+    }
+    
+    // Log and track metrics
+    logger.info('Post created', { 
+      userId: req.user.id, 
+      postId: newPost._id,
+      contentLength: sanitizedContent.length,
+      hasMentions: newPost.mentions && newPost.mentions.length > 0,
+      hasMedia: newPost.media && newPost.media.length > 0,
+      visibility: newPost.visibility,
+      requestId
+    });
+    
+    // Data access audit
+    logger.dataAccess(req.user.id, 'post', 'create', {
+      postId: newPost._id,
+      visibility: newPost.visibility,
+      requestId
+    });
+    
+    metrics.incrementCounter('posts_created');
+    metrics.observePostContentLength(sanitizedContent.length);
+    
+    timer.end();
+    
+    res.status(201).json({
+      status: 'success',
+      data: populatedPost,
+      requestId
+    });
+  } catch (error) {
+    timer.end();
+    
+    logger.error('Create post error', { 
+      error: error.message,
+      stack: error.stack,
+      userId: req.user.id,
+      requestId
+    });
+    
+    metrics.incrementCounter('post_creation_errors');
+    
+    res.status(500).json({ 
+      status: 'error',
+      message: 'Server error when creating post',
+      error: config.NODE_ENV === 'development' ? error.message : undefined,
+      requestId
+    });
+  }
+};
+
+/**
+ * Get posts feed with caching and enhanced security
+ * @route GET /api/posts
+ * @access Private
+ */
+exports.getPosts = async (req, res) => {
+  const timer = metrics.startTimer('get_posts');
+  const requestId = req.id || crypto.randomBytes(16).toString('hex');
+  
+  try {
+    const { 
+      type = 'feed', 
+      userId, 
+      page = 1, 
+      limit = 10, 
+      sort = 'recent',
+      search
+    } = req.query;
+    
+    // Validate and sanitize pagination parameters
+    const validatedPage = Math.max(1, parseInt(page));
+    const validatedLimit = Math.min(config.MAX_POSTS_PER_PAGE, Math.max(1, parseInt(limit)));
+    const skip = (validatedPage - 1) * validatedLimit;
+    
+    // Generate cache key
+    const cacheKey = `posts:${type}:${userId || req.user.id}:${validatedPage}:${validatedLimit}:${sort}:${search || ''}`;
+    
+    // Check cache first
+    const cachedResult = await cache.get(cacheKey);
+    if (cachedResult && !search) { // Don't cache search results
+      timer.end();
+      
+      // Log cache hit
+      logger.debug('Post feed cache hit', {
+        userId: req.user.id,
+        cacheKey,
+        requestId
+      });
+      
+      metrics.incrementCounter('post_feed_cache_hits');
+      
+      return res.json(JSON.parse(cachedResult));
+    }
+    
+    // Build query based on type with security in mind
+    let query = {};
+    let sortOptions = { createdAt: -1 }; // Default sort by most recent
+    
+    switch (type) {
+      case 'feed':
+        // Get connections
+        const user = await User.findById(req.user.id)
+          .select('connections followingCount followedUsers role')
+          .lean();
+        
+        if (!user) {
+          logger.warn('User not found when fetching feed', { 
+            userId: req.user.id,
+            requestId 
+          });
+          
+          return res.status(404).json({ 
+            status: 'error',
+            message: 'User not found',
+            requestId
           });
         }
         
-        processedPollData = {
-          question: parsed.question,
-          options: parsed.options.map(option => ({
-            text: option,
-            votes: []
-          })),
-          expiresAt: parsed.expiresAt ? new Date(parsed.expiresAt) : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // Default 1 week
-          allowMultipleVotes: parsed.allowMultipleVotes || false
-        };
-      } catch (error) {
-        console.error('Error parsing poll data:', error);
-        return res.status(400).json({ 
-          success: false,
-          error: 'Invalid poll data format'
-        });
-      }
-    }
-    
-    // Process article data
-    let processedArticleData = null;
-    if (articleData) {
-      try {
-        processedArticleData = typeof articleData === 'string' ? JSON.parse(articleData) : articleData;
-      } catch (error) {
-        console.error('Error parsing article data:', error);
-      }
-    }
-    
-    // Create the post
-    const post = await Post.create({
-      author: req.user.id,
-      content: content || '',
-      type: postType,
-      images,
-      videos,
-      visibility: visibility || 'public',
-      location: locationData,
-      mentions: mentionsData,
-      hashtags: contentHashtags,
-      linkPreview: linkPreviewData,
-      pollData: processedPollData,
-      articleData: processedArticleData,
-      tags: allTags
-    });
-    
-    // Process hashtags to update global hashtag counts
-    if (allTags.length > 0) {
-      await updateHashtags(allTags, 'post');
-    }
-    
-    // Process mentions to create notifications and mention records
-    if (mentionsData.length > 0) {
-      const user = await User.findById(req.user.id)
-        .select('firstName lastName');
-      
-      for (const mention of mentionsData) {
-        // Create notification
-        await createNotification({
-          recipient: mention.user,
-          sender: req.user.id,
-          type: 'mention',
-          contentType: 'post',
-          contentId: post._id,
-          text: `${user.firstName} ${user.lastName} mentioned you in a post`,
-          actionUrl: `/posts/${post._id}`
-        });
+        // For moderators/admins, include flagged content if specified
+        const includeFlagged = req.query.includeFlagged === 'true' && 
+                               ['admin', 'moderator'].includes(user.role);
         
-        // Create mention record
-        await Mention.create({
-          user: mention.user,
-          mentionedBy: req.user.id,
-          contentType: 'post',
-          contentId: post._id
-        });
-      }
+        // Add followed users to connections for the feed
+        const userConnections = [
+          ...(user.connections || []),
+          ...(user.followedUsers || [])
+        ];
+        
+        // If user has no connections, show trending/popular posts
+        if (userConnections.length === 0) {
+          // Get trending posts (most interactions in last week)
+          const oneWeekAgo = new Date();
+          oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+          
+          query = {
+            visibility: 'public',
+            createdAt: { $gte: oneWeekAgo }
+          };
+          
+          // Exclude flagged content for regular users
+          if (!includeFlagged) {
+            query.flagged = { $ne: true };
+          }
+          
+          // Sort by popularity
+          sortOptions = { interactionCount: -1, createdAt: -1 };
+        } else {
+          // Get posts from connections and followed users
+          query = {
+            $or: [
+              { author: { $in: userConnections } },
+              { author: req.user.id }
+            ],
+            visibility: { $ne: 'private' }
+          };
+          
+          // Exclude flagged content for regular users
+          if (!includeFlagged) {
+            query.flagged = { $ne: true };
+          }
+        }
+        break;
+        
+      case 'user':
+        if (!userId) {
+          logger.warn('Missing userId parameter for user posts', { 
+            userId: req.user.id,
+            requestId 
+          });
+          
+          return res.status(400).json({ 
+            status: 'error',
+            message: 'User ID is required for user posts',
+            requestId
+          });
+        }
+        
+        // Check if viewing own posts
+        const isOwnProfile = userId === req.user.id;
+        
+        // Get user info to check role for moderation
+        const requestingUser = await User.findById(req.user.id)
+          .select('role')
+          .lean();
+          
+        const isModeratorOrAdmin = requestingUser && 
+                                   ['admin', 'moderator'].includes(requestingUser.role);
+        
+        // Check if connected with user
+        let isConnected = false;
+        
+        if (!isOwnProfile) {
+          const userToView = await User.findById(userId).select('connections').lean();
+          isConnected = userToView && userToView.connections && 
+                         userToView.connections.includes(req.user.id);
+        }
+        
+        // Build query based on access level
+        if (isOwnProfile) {
+          // See all own posts
+          query = { author: userId };
+        } else if (isModeratorOrAdmin) {
+          // Moderators/admins can see all posts except private
+          query = {
+            author: userId,
+            visibility: { $ne: 'private' }
+          };
+        } else if (isConnected) {
+          // See public and connection posts
+          query = {
+            author: userId,
+            visibility: { $in: ['public', 'connections'] },
+            flagged: { $ne: true } // Don't show flagged content
+          };
+        } else {
+          // See only public posts
+          query = {
+            author: userId,
+            visibility: 'public',
+            flagged: { $ne: true } // Don't show flagged content
+          };
+        }
+        break;
+        
+      case 'trending':
+        // Get trending posts (most interactions in last week)
+        const oneWeekAgo = new Date();
+        oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+        
+        query = {
+          visibility: 'public',
+          createdAt: { $gte: oneWeekAgo },
+          flagged: { $ne: true } // Don't show flagged content
+        };
+        
+        // Sort by popularity
+        sortOptions = { interactionCount: -1, createdAt: -1 };
+        break;
+        
+      case 'bookmarked':
+        // Get bookmarked posts - optimization: join with aggregation
+        const bookmarks = await Bookmark.find({ user: req.user.id })
+          .select('post')
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(validatedLimit)
+          .lean();
+          
+        const bookmarkedPostIds = bookmarks.map(bookmark => bookmark.post);
+        
+        query = { 
+          _id: { $in: bookmarkedPostIds },
+          flagged: { $ne: true } // Don't show flagged content
+        };
+        
+        // Custom sort to preserve bookmark order
+        sortOptions = {};
+        break;
     }
     
-    // Populate the post for response
-    const populatedPost = await Post.findById(post._id)
-      .populate('author', 'firstName lastName profilePicture headline')
-      .populate('mentions.user', 'firstName lastName profilePicture')
-      .populate('likes.user', 'firstName lastName profilePicture');
-    
-    res.status(201).json({
-      success: true,
-      post: populatedPost
-    });
-  } catch (error) {
-    console.error('Create post error:', error);
-    
-    if (error.code === 'LIMIT_FILE_SIZE') {
-      return res.status(400).json({ 
-        success: false,
-        error: 'File size exceeded. Maximum file size is 100MB.'
+    // Add search if provided
+    if (search) {
+      // Sanitize and secure the search query
+      const sanitizedSearch = search.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+      
+      query.$or = [
+        { content: { $regex: sanitizedSearch, $options: 'i' } },
+        { 'location.name': { $regex: sanitizedSearch, $options: 'i' } },
+        { 'location.address': { $regex: sanitizedSearch, $options: 'i' } },
+        { tags: { $in: [sanitizedSearch.toLowerCase()] } }
+      ];
+      
+      // Log search query for security monitoring
+      logger.info('Post search query', {
+        userId: req.user.id,
+        query: sanitizedSearch,
+        requestId
       });
     }
     
-    if (error.message && error.message.includes('Invalid file type')) {
-      return res.status(400).json({ 
-        success: false,
-        error: error.message
-      });
+    // Apply sorting if specified
+    if (sort === 'popular' && type !== 'trending') {
+      sortOptions = { interactionCount: -1, createdAt: -1 };
     }
     
-    res.status(500).json({ 
-      success: false,
-      error: 'Error creating post'
-    });
-  }
-};
-
-/**
- * @route   GET /api/posts
- * @desc    Get posts with pagination
- * @access  Private
- */
-exports.getPosts = async (req, res) => {
-  try {
-    const { limit = 10, before, after, userId, type } = req.query;
+    // Select specific fields to optimize query performance
+    const postFields = 'author content contentHash visibility createdAt editedAt isEdited media location tags mentions sharedPost interactionCount shareCount settings';
     
-    // Build query
-    let query = {};
-    
-    // Filter by date range
-    if (before) {
-      query.createdAt = { $lt: new Date(before) };
-    }
-    
-    if (after) {
-      query.createdAt = { $gt: new Date(after) };
-    }
-    
-    // Filter by user if provided
-    if (userId) {
-      query.author = userId;
-    }
-    
-    // Filter by post type if provided
-    if (type) {
-      query.type = type;
-    }
-    
-    // Apply privacy filter
-    const user = await User.findById(req.user.id);
-    query.$or = [
-      { visibility: 'public' },
-      { visibility: 'connections', author: { $in: user.connections || [] } },
-      { author: req.user.id }
-    ];
-    
-    // Execute query with sorting and pagination
+    // Get posts
     const posts = await Post.find(query)
-      .populate('author', 'firstName lastName profilePicture headline')
-      .populate('mentions.user', 'firstName lastName profilePicture')
+      .select(postFields)
+      .populate('author', 'firstName lastName username profileImage headline')
+      .populate('mentions', 'firstName lastName username profileImage')
       .populate({
-        path: 'comments',
-        options: { limit: 2, sort: { createdAt: -1 } },
+        path: 'sharedPost',
+        select: postFields,
         populate: {
           path: 'author',
-          select: 'firstName lastName profilePicture'
+          select: 'firstName lastName username profileImage headline'
         }
       })
-      .sort({ createdAt: -1 })
-      .limit(parseInt(limit));
+      .sort(sortOptions)
+      .skip(skip)
+      .limit(validatedLimit)
+      .lean();
     
-    // Get total count
+    // Count total posts with countDocuments for better performance
     const total = await Post.countDocuments(query);
     
-    // Check if user has liked or bookmarked posts
-    const enhancedPosts = posts.map(post => {
-      const postObj = post.toObject();
-      
-      // Check if user has liked this post
-      const userLike = post.likes.find(like => like.user.toString() === req.user.id);
-      postObj.userReaction = userLike ? userLike.reaction : null;
-      
-      // Check if user has bookmarked this post
-      postObj.isBookmarked = post.bookmarks?.includes(req.user.id) || false;
-      
-      return postObj;
-    });
+    // Get post IDs
+    const postIds = posts.map(post => post._id);
     
-    res.json({
-      success: true,
-      posts: enhancedPosts,
-      hasMore: posts.length === parseInt(limit),
-      total
-    });
-  } catch (error) {
-    console.error('Get posts error:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Error fetching posts'
-    });
-  }
-};
-
-/**
- * @route   GET /api/posts/:id
- * @desc    Get a single post by ID
- * @access  Private
- */
-exports.getPostById = async (req, res) => {
-  try {
-    const post = await Post.findById(req.params.id)
-      .populate('author', 'firstName lastName profilePicture headline')
-      .populate('mentions.user', 'firstName lastName profilePicture')
-      .populate({
-        path: 'comments',
-        populate: {
-          path: 'author',
-          select: 'firstName lastName profilePicture'
+    // Get reaction counts using aggregation
+    const reactionCounts = await Reaction.aggregate([
+      {
+        $match: { post: { $in: postIds } }
+      },
+      {
+        $group: {
+          _id: {
+            post: '$post',
+            type: '$type'
+          },
+          count: { $sum: 1 }
         }
-      });
-    
-    if (!post) {
-      return res.status(404).json({ 
-        success: false,
-        error: 'Post not found'
-      });
-    }
-    
-    // Check visibility permissions
-    if (post.visibility !== 'public' && 
-        post.author._id.toString() !== req.user.id && 
-        post.visibility === 'connections' && 
-        !post.author.connections?.includes(req.user.id)) {
-      return res.status(403).json({ 
-        success: false,
-        error: 'Not authorized to view this post'
-      });
-    }
-    
-    // Increment impressions
-    await Post.findByIdAndUpdate(req.params.id, {
-      $inc: { impressions: 1 }
-    });
-    
-    // Check if user has liked or bookmarked this post
-    const postObj = post.toObject();
-    
-    // Check if user has liked this post
-    const userLike = post.likes.find(like => like.user.toString() === req.user.id);
-    postObj.userReaction = userLike ? userLike.reaction : null;
-    
-    // Check if user has bookmarked this post
-    postObj.isBookmarked = post.bookmarks?.includes(req.user.id) || false;
-    
-    res.json({
-      success: true,
-      post: postObj
-    });
-  } catch (error) {
-    console.error('Get post error:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Error fetching post'
-    });
-  }
-};
-
-/**
- * @route   PUT /api/posts/:id
- * @desc    Update a post
- * @access  Private
- */
-exports.updatePost = async (req, res) => {
-  try {
-    const { content, visibility, tags } = req.body;
-    
-    // Find post
-    const post = await Post.findById(req.params.id);
-    
-    if (!post) {
-      return res.status(404).json({ 
-        success: false,
-        error: 'Post not found'
-      });
-    }
-    
-    // Check ownership
-    if (post.author.toString() !== req.user.id) {
-      return res.status(403).json({ 
-        success: false,
-        error: 'Not authorized to update this post'
-      });
-    }
-    
-    // Save previous content for edit history
-    if (content && content !== post.content) {
-      if (!post.editHistory) {
-        post.editHistory = [];
       }
-      
-      post.editHistory.push({
-        content: post.content,
-        editedAt: new Date()
-      });
-      
-      post.isEdited = true;
-    }
+    ]);
     
-    // Update fields if provided
-    if (content) post.content = content;
-    if (visibility) post.visibility = visibility;
-    
-    // Process tags if provided
-    if (tags) {
-      const oldTags = post.tags || [];
-      const newTags = typeof tags === 'string' ? tags.split(',').map(tag => tag.trim()) : tags;
-      
-      post.tags = newTags;
-      
-      // Update hashtag counts
-      await updateHashtags(newTags, 'post', oldTags);
-    }
-    
-    // Extract hashtags from updated content
-    if (content) {
-      const hashtagRegex = /#([a-zA-Z0-9_]+)/g;
-      const hashtagMatches = content ? [...content.matchAll(hashtagRegex)] : [];
-      const contentHashtags = hashtagMatches.map(match => match[1].toLowerCase());
-      
-      post.hashtags = contentHashtags;
-    }
-    
-    post.lastUpdated = new Date();
-    await post.save();
-    
-    // Return updated post
-    const updatedPost = await Post.findById(post._id)
-      .populate('author', 'firstName lastName profilePicture headline')
-      .populate('mentions.user', 'firstName lastName profilePicture')
-      .populate({
-        path: 'comments',
-        options: { limit: 2, sort: { createdAt: -1 } },
-        populate: {
-          path: 'author',
-          select: 'firstName lastName profilePicture'
+    // Get comment counts using aggregation
+    const commentCounts = await Comment.aggregate([
+      {
+        $match: { post: { $in: postIds } }
+      },
+      {
+        $group: {
+          _id: '$post',
+          count: { $sum: 1 }
         }
-      });
-    
-    res.json({
-      success: true,
-      post: updatedPost
-    });
-  } catch (error) {
-    console.error('Update post error:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Error updating post'
-    });
-  }
-};
-
-/**
- * @route   DELETE /api/posts/:id
- * @desc    Delete a post
- * @access  Private
- */
-exports.deletePost = async (req, res) => {
-  try {
-    const post = await Post.findById(req.params.id);
-    
-    if (!post) {
-      return res.status(404).json({ 
-        success: false,
-        error: 'Post not found'
-      });
-    }
-    
-    // Check ownership
-    if (post.author.toString() !== req.user.id) {
-      return res.status(403).json({ 
-        success: false,
-        error: 'Not authorized to delete this post'
-      });
-    }
-    
-    // Soft delete (set deletedAt timestamp)
-    post.deletedAt = new Date();
-    await post.save();
-    
-    // Update hashtag counts
-    if (post.tags && post.tags.length > 0) {
-      await updateHashtags([], 'post', post.tags);
-    }
-    
-    res.json({
-      success: true,
-      message: 'Post deleted successfully'
-    });
-  } catch (error) {
-    console.error('Delete post error:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Error deleting post'
-    });
-  }
-};
-
-/**
- * @route   POST /api/posts/:id/react
- * @desc    React to a post (like, love, etc.)
- * @access  Private
- */
-exports.reactToPost = async (req, res) => {
-  try {
-    const { reaction } = req.body;
-    
-    if (!reaction || !['like', 'love', 'celebrate', 'support', 'insightful', 'curious'].includes(reaction)) {
-      return res.status(400).json({ 
-        success: false,
-        error: 'Invalid reaction type'
-      });
-    }
-    
-    const post = await Post.findById(req.params.id);
-    if (!post) {
-      return res.status(404).json({ 
-        success: false,
-        error: 'Post not found'
-      });
-    }
-    
-    // Check if user already reacted
-    const existingLike = post.likes.find(like => like.user.toString() === req.user.id);
-    
-    if (existingLike) {
-      if (existingLike.reaction === reaction) {
-        // Remove reaction if same type (toggle)
-        post.likes = post.likes.filter(like => like.user.toString() !== req.user.id);
-        
-        await post.save();
-        
-        // Count reactions by type
-        const reactionCounts = {};
-        post.likes.forEach(like => {
-          if (!reactionCounts[like.reaction]) {
-            reactionCounts[like.reaction] = 0;
-          }
-          reactionCounts[like.reaction]++;
-        });
-        
-        return res.json({
-          success: true,
-          reactionCounts,
-          totalLikes: post.likes.length,
-          userReaction: null
-        });
-      } else {
-        // Update reaction type
-        existingLike.reaction = reaction;
-        existingLike.createdAt = new Date();
       }
-    } else {
-      // Add new reaction
-      post.likes.push({
+    ]);
+    
+    // Get user's reactions and bookmarks in a single query per collection
+    const [userReactions, userBookmarks] = await Promise.all([
+      Reaction.find({
         user: req.user.id,
-        reaction,
-        createdAt: new Date()
-      });
+        post: { $in: postIds }
+      }).select('post type').lean(),
       
-      // Notify post author if it's not their own post
-      if (post.author.toString() !== req.user.id) {
-        const user = await User.findById(req.user.id)
-          .select('firstName lastName');
-        
-        await createNotification({
-          recipient: post.author,
-          sender: req.user.id,
-          type: 'like',
-          contentType: 'post',
-          contentId: post._id,
-          text: `${user.firstName} ${user.lastName} reacted to your post with ${reaction}`,
-          actionUrl: `/posts/${post._id}`
-        });
-        
-        // Update analytics
-        await User.findByIdAndUpdate(post.author, {
-          $inc: { 'analytics.contentEngagement.likes': 1 }
-        });
+      Bookmark.find({
+        user: req.user.id,
+        post: { $in: postIds }
+      }).select('post collection').lean()
+    ]);
+    
+    // Create lookup maps for better performance
+    const reactionMap = new Map();
+    reactionCounts.forEach(rc => {
+      const postId = rc._id.post.toString();
+      if (!reactionMap.has(postId)) {
+        reactionMap.set(postId, {});
       }
-    }
-    
-    await post.save();
-    
-    // Count reactions by type
-    const reactionCounts = {};
-    post.likes.forEach(like => {
-      if (!reactionCounts[like.reaction]) {
-        reactionCounts[like.reaction] = 0;
-      }
-      reactionCounts[like.reaction]++;
+      reactionMap.get(postId)[rc._id.type] = rc.count;
     });
     
-    // Get user's current reaction
-    const userReaction = post.likes.find(like => like.user.toString() === req.user.id)?.reaction || null;
-    
-    res.json({
-      success: true,
-      reactionCounts,
-      totalLikes: post.likes.length,
-      userReaction
+    const commentMap = new Map();
+    commentCounts.forEach(cc => {
+      commentMap.set(cc._id.toString(), cc.count);
     });
-  } catch (error) {
-    console.error('Post reaction error:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Error updating post reaction'
-    });
-  }
-};
-
-/**
- * @route   POST /api/posts/:id/bookmark
- * @desc    Bookmark a post
- * @access  Private
- */
-exports.bookmarkPost = async (req, res) => {
-  try {
-    const post = await Post.findById(req.params.id);
     
-    if (!post) {
-      return res.status(404).json({ 
-        success: false,
-        error: 'Post not found'
+    const userReactionMap = new Map();
+    userReactions.forEach(ur => {
+      userReactionMap.set(ur.post.toString(), ur.type);
+    });
+    
+    const userBookmarkMap = new Map();
+    userBookmarks.forEach(ub => {
+      userBookmarkMap.set(ub.post.toString(), {
+        bookmarked: true,
+        collection: ub.collection
       });
-    }
-    
-    // Check if post is already bookmarked
-    const isBookmarked = post.bookmarks && post.bookmarks.includes(req.user.id);
-    
-    if (isBookmarked) {
-      // Remove bookmark
-      post.bookmarks = post.bookmarks.filter(id => id.toString() !== req.user.id);
-    } else {
-      // Add bookmark
-      if (!post.bookmarks) {
-        post.bookmarks = [];
-      }
-      post.bookmarks.push(req.user.id);
-    }
-    
-    await post.save();
-    
-    res.json({
-      success: true,
-      isBookmarked: !isBookmarked,
-      bookmarkCount: post.bookmarks.length
     });
-  } catch (error) {
-    console.error('Bookmark post error:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Error bookmarking post'
+    
+    // Format response with added data efficiently
+    const formattedPosts = posts.map(post => {
+      const postId = post._id.toString();
+      const reactions = reactionMap.get(postId) || {};
+      const reactionCount = Object.values(reactions).reduce((sum, count) => sum + count, 0);
+      const commentCount = commentMap.get(postId) || 0;
+      const bookmark = userBookmarkMap.get(postId) || { bookmarked: false, collection: null };
+      
+      // Verify content integrity
+      const verifyIntegrity = post.contentHash && calculateContentHash(post.content) === post.contentHash;
+      
+      // Prepare secure media URLs if needed
+      const secureMedia = post.media ? post.media.map(media => {
+        // If this is a secure media item with accessKey, handle appropriately
+        if (media.secureFileId && media.accessKey) {
+          return {
+            ...media,
+            url: media.url, // Keep original URL
+            // For frontend to use when requesting the media
+            accessInfo: {
+              secureFileId: media.secureFileId,
+              accessKey: media.accessKey
+            }
+          };
+        }
+        return media;
+      }) : [];
+      
+      return {
+        ...post,
+        reactions,
+        reactionCount,
+        commentCount,
+        userReaction: userReactionMap.get(postId) || null,
+        bookmarked: bookmark.bookmarked,
+        bookmarkCollection: bookmark.collection,
+        media: secureMedia,
+        contentIntegrityVerified: verifyIntegrity
+      };
     });
-  }
-};
-
-/**
- * @route   POST /api/posts/:id/comments
- * @desc    Add a comment to a post
- * @access  Private
- */
-exports.addComment = async (req, res) => {
-  try {
-    const { content, parentCommentId, mentions } = req.body;
     
-    if (!content) {
-      return res.status(400).json({ 
-        success: false,
-        error: 'Comment content is required'
-      });
-    }
-    
-    const post = await Post.findById(req.params.id);
-    
-    if (!post) {
-      return res.status(404).json({ 
-        success: false,
-        error: 'Post not found'
-      });
-    }
-    
-    // Process mentions if provided
-    let mentionsData = [];
-    if (mentions) {
-      try {
-        mentionsData = typeof mentions === 'string' ? JSON.parse(mentions) : mentions;
-      } catch (error) {
-        console.error('Error parsing mentions data:', error);
-      }
-    }
-    
-    // Create new comment object
-    const newComment = {
-      author: req.user.id,
-      content,
-      mentions: mentionsData,
-      createdAt: new Date()
+    const response = {
+      status: 'success',
+      data: {
+        posts: formattedPosts,
+        pagination: {
+          total,
+          page: validatedPage,
+          limit: validatedLimit,
+          pages: Math.ceil(total / validatedLimit)
+        }
+      },
+      requestId
     };
     
-    // Add parent comment reference if it's a reply
-    if (parentCommentId) {
-      newComment.parentComment = parentCommentId;
+    // Cache the results for feed and trending queries (not for search)
+    if (!search && (type === 'feed' || type === 'trending')) {
+      await cache.set(
+        cacheKey, 
+        JSON.stringify(response), 
+        type === 'trending' ? 60 * 30 : 60 * 5 // 30 mins for trending, 5 mins for feed
+      );
     }
     
-    // Add comment to post
-    post.comments.push(newComment);
-    await post.save();
-    
-    // Get the new comment with author populated
-    const populatedPost = await Post.findById(post._id)
-      .populate('author', 'firstName lastName profilePicture')
-      .populate({
-        path: 'comments',
-        populate: {
-          path: 'author',
-          select: 'firstName lastName profilePicture'
-        }
-      });
-    
-    const addedComment = populatedPost.comments[populatedPost.comments.length - 1];
-    
-    // Notify post author of the comment (if not self)
-    if (post.author.toString() !== req.user.id) {
-      const user = await User.findById(req.user.id);
-      
-      await createNotification({
-        recipient: post.author,
-        sender: req.user.id,
-        type: 'comment',
-        contentType: 'post',
-        contentId: post._id,
-        text: `${user.firstName} ${user.lastName} commented on your post`,
-        actionUrl: `/posts/${post._id}`
-      });
-      
-      // Update analytics
-      await User.findByIdAndUpdate(post.author, {
-        $inc: { 'analytics.contentEngagement.comments': 1 }
-      });
-    }
-    
-    // Also notify parent comment author if this is a reply
-    if (parentCommentId) {
-      const parentComment = post.comments.find(c => c._id.toString() === parentCommentId);
-      
-      if (parentComment && parentComment.author.toString() !== req.user.id) {
-        const user = await User.findById(req.user.id);
-        
-        await createNotification({
-          recipient: parentComment.author,
-          sender: req.user.id,
-          type: 'reply',
-          contentType: 'comment',
-          contentId: parentComment._id,
-          text: `${user.firstName} ${user.lastName} replied to your comment`,
-          actionUrl: `/posts/${post._id}`
-        });
-      }
-    }
-    
-    // Process mentions to create notifications
-    if (mentionsData.length > 0) {
-      const user = await User.findById(req.user.id);
-      
-      for (const mention of mentionsData) {
-        // Skip notification if mentioned user is same as comment author
-        if (mention.user.toString() === req.user.id) continue;
-        
-        await createNotification({
-          recipient: mention.user,
-          sender: req.user.id,
-          type: 'mention',
-          contentType: 'comment',
-          contentId: addedComment._id,
-          text: `${user.firstName} ${user.lastName} mentioned you in a comment`,
-          actionUrl: `/posts/${post._id}`
-        });
-      }
-    }
-    
-    res.json({
-      success: true,
-      comment: addedComment
+    // Log data access
+    logger.dataAccess(req.user.id, 'posts', 'read', {
+      type,
+      count: posts.length,
+      requestId
     });
+    
+    timer.end();
+    
+    res.json(response);
   } catch (error) {
-    console.error('Add comment error:', error);
+    timer.end();
+    
+    logger.error('Get posts error', { 
+      error: error.message,
+      stack: error.stack,
+      userId: req.user.id,
+      query: req.query,
+      requestId
+    });
+    
+    metrics.incrementCounter('get_posts_errors');
+    
     res.status(500).json({ 
-      success: false,
-      error: 'Error adding comment'
+      status: 'error',
+      message: 'Server error when retrieving posts',
+      error: config.NODE_ENV === 'development' ? error.message : undefined,
+      requestId
     });
   }
 };
 
 /**
- * @route   DELETE /api/posts/:id/comments/:commentId
- * @desc    Delete a comment
- * @access  Private
+ * Get a single post with enhanced security checks
+ * @route GET /api/posts/:postId
+ * @access Private
  */
-exports.deleteComment = async (req, res) => {
+exports.getPost = async (req, res) => {
+  const timer = metrics.startTimer('get_single_post');
+  const requestId = req.id || crypto.randomBytes(16).toString('hex');
+  
   try {
-    const { id, commentId } = req.params;
+    const { postId } = req.params;
     
-    const post = await Post.findById(id);
+    // Validate ObjectId
+    if (!mongoose.Types.ObjectId.isValid(postId)) {
+      logger.warn('Invalid post ID format', {
+        userId: req.user.id,
+        postId,
+        requestId
+      });
+      
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid post ID format',
+        requestId
+      });
+    }
+    
+    // Check cache first
+    const cacheKey = `post:${postId}:${req.user.id}`;
+    const cachedPost = await cache.get(cacheKey);
+    
+    if (cachedPost) {
+      timer.end();
+      
+      logger.debug('Single post cache hit', {
+        userId: req.user.id,
+        postId,
+        requestId
+      });
+      
+      metrics.incrementCounter('single_post_cache_hits');
+      return res.json(JSON.parse(cachedPost));
+    }
+    
+    // Get user role for permission checks
+    const user = await User.findById(req.user.id).select('role').lean();
+    const isModeratorOrAdmin = user && ['admin', 'moderator'].includes(user.role);
+    
+    // Get post with field selection for better performance
+    const post = await Post.findById(postId)
+      .select('author content contentHash visibility createdAt editedAt isEdited media location tags mentions sharedPost interactionCount shareCount settings flagged flagReason')
+      .populate('author', 'firstName lastName username profileImage headline')
+      .populate('mentions', 'firstName lastName username profileImage')
+      .populate({
+        path: 'sharedPost',
+        populate: {
+          path: 'author',
+          select: 'firstName lastName username profileImage headline'
+        }
+      })
+      .lean();
+    
+    if (!post) {
+      logger.warn('Post not found', {
+        userId: req.user.id,
+        postId,
+        requestId
+      });
+      
+      return res.status(404).json({ 
+        status: 'error',
+        message: 'Post not found',
+        requestId
+      });
+    }
+    
+    // Check if user has access to this post
+    if (post.visibility === 'private' && post.author._id.toString() !== req.user.id) {
+      logger.security.accessDenied(req.user.id, postId, 'view', {
+        reason: 'private post',
+        requestId
+      });
+      
+      return res.status(403).json({ 
+        status: 'error',
+        message: 'You do not have permission to view this post',
+        requestId
+      });
+    }
+    
+    // Handle flagged content - only show to moderators/admins or post owner
+    if (post.flagged && !isModeratorOrAdmin && post.author._id.toString() !== req.user.id) {
+      logger.security.accessDenied(req.user.id, postId, 'view', {
+        reason: 'flagged content',
+        requestId
+      });
+      
+      return res.status(403).json({ 
+        status: 'error',
+        message: 'This content has been flagged and is under review',
+        requestId
+      });
+    }
+    
+    if (post.visibility === 'connections') {
+      // Check if user is connected to author
+      const isConnected = await User.findOne({
+        _id: post.author._id,
+        connections: req.user.id
+      }).lean();
+      
+      if (!isConnected && post.author._id.toString() !== req.user.id && !isModeratorOrAdmin) {
+        logger.security.accessDenied(req.user.id, postId, 'view', {
+          reason: 'connections-only post',
+          requestId
+        });
+        
+        return res.status(403).json({ 
+          status: 'error',
+          message: 'You do not have permission to view this post',
+          requestId
+        });
+      }
+    }
+    
+    // Verify content integrity
+    const contentIntegrityVerified = post.contentHash && 
+                                    calculateContentHash(post.content) === post.contentHash;
+    
+    if (!contentIntegrityVerified && post.contentHash) {
+      logger.security.warn('Post content integrity verification failed', {
+        userId: req.user.id,
+        postId,
+        requestId
+      });
+      
+      // Still continue, but mark as potentially tampered
+    }
+    
+    // Perform parallel queries for better performance
+    const [reactions, commentCount, userReaction, bookmark] = await Promise.all([
+      // Get reactions
+      Reaction.aggregate([
+        {
+          $match: { post: new ObjectId(postId) }
+        },
+        {
+          $group: {
+            _id: '$type',
+            count: { $sum: 1 },
+            users: { $push: '$user' }
+          }
+        }
+      ]),
+      
+      // Get comment count
+      Comment.countDocuments({ post: postId }),
+      
+      // Get user's reaction if any
+      Reaction.findOne({
+        user: req.user.id,
+        post: postId
+      }).select('type').lean(),
+      
+      // Get bookmark status
+      Bookmark.findOne({
+        user: req.user.id,
+        post: postId
+      }).select('collection').lean()
+    ]);
+    
+    // Format response
+    const formattedPost = { ...post };
+    
+    // Add reaction data
+    formattedPost.reactions = {};
+    formattedPost.reactionCount = 0;
+    
+    reactions.forEach(reaction => {
+      formattedPost.reactions[reaction._id] = {
+        count: reaction.count,
+        users: reaction.users.slice(0, 10) // Limit to first 10 users
+      };
+      formattedPost.reactionCount += reaction.count;
+    });
+    
+    // Add comment count
+    formattedPost.commentCount = commentCount;
+    
+    // Add user's reaction if any
+    formattedPost.userReaction = userReaction ? userReaction.type : null;
+    
+    // Add bookmark status
+    formattedPost.bookmarked = !!bookmark;
+    formattedPost.bookmarkCollection = bookmark ? bookmark.collection : null;
+    
+    // Add content integrity verification result
+    formattedPost.contentIntegrityVerified = contentIntegrityVerified;
+    
+    // Prepare secure media URLs if needed
+    if (formattedPost.media && formattedPost.media.length > 0) {
+      formattedPost.media = formattedPost.media.map(media => {
+        // If this is a secure media item with accessKey, handle appropriately
+        if (media.secureFileId && media.accessKey) {
+          return {
+            ...media,
+            url: media.url, // Keep original URL
+            // For frontend to use when requesting the media
+            accessInfo: {
+              secureFileId: media.secureFileId,
+              accessKey: media.accessKey
+            }
+          };
+        }
+        return media;
+      });
+    }
+    
+    // Remove sensitive fields for non-moderators
+    if (!isModeratorOrAdmin && formattedPost.author._id.toString() !== req.user.id) {
+      delete formattedPost.flagReason;
+      delete formattedPost.contentHash;
+    }
+    
+    const response = {
+      status: 'success',
+      data: formattedPost,
+      requestId
+    };
+    
+    // Cache the result (only if not flagged)
+    if (!post.flagged) {
+      await cache.set(cacheKey, JSON.stringify(response), 60 * 5); // 5 minutes
+    }
+    
+    // Log data access
+    logger.dataAccess(req.user.id, 'post', 'read', {
+      postId,
+      authorId: post.author._id.toString(),
+      requestId
+    });
+    
+    timer.end();
+    
+    res.json(response);
+  } catch (error) {
+    timer.end();
+    
+    logger.error('Get post error', { 
+      error: error.message,
+      stack: error.stack,
+      userId: req.user.id,
+      postId: req.params.postId,
+      requestId
+    });
+    
+    metrics.incrementCounter('get_post_errors');
+    
+    res.status(500).json({ 
+      status: 'error',
+      message: 'Server error when retrieving post',
+      error: config.NODE_ENV === 'development' ? error.message : undefined,
+      requestId
+    });
+  }
+};
+
+/**
+ * Update a post with transaction support and security
+ * @route PUT /api/posts/:postId
+ * @access Private
+ */
+exports.updatePost = async (req, res) => {
+  const timer = metrics.startTimer('update_post');
+  const requestId = req.id || crypto.randomBytes(16).toString('hex');
+  
+  try {
+    const { postId } = req.params;
+    const { content, visibility, tags, location, allowComments } = req.body;
+    
+    // Validate ObjectId
+    if (!mongoose.Types.ObjectId.isValid(postId)) {
+      logger.warn('Invalid post ID format', {
+        userId: req.user.id,
+        postId,
+        requestId
+      });
+      
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid post ID format',
+        requestId
+      });
+    }
+    
+    // Get post
+    const post = await Post.findById(postId);
+    
+    if (!post) {
+      logger.warn('Post not found for update', {
+        userId: req.user.id,
+        postId,
+        requestId
+      });
+      
+      return res.status(404).json({ 
+        status: 'error',
+        message: 'Post not found',
+        requestId
+      });
+    }
+    
+    // Check if user is the author
+    if (post.author.toString() !== req.user.id) {
+      logger.security.accessDenied(req.user.id, postId, 'update', {
+        reason: 'not author',
+        requestId
+      });
+      
+      return res.status(403).json({ 
+        status: 'error',
+        message: 'You can only update your own posts',
+        requestId
+      });
+    }
+    
+    // Check if post is flagged (can't update flagged content)
+    if (post.flagged) {
+      logger.security.accessDenied(req.user.id, postId, 'update', {
+        reason: 'flagged content',
+        requestId
+      });
+      
+      return res.status(403).json({ 
+        status: 'error',
+        message: 'This content has been flagged and cannot be modified',
+        requestId
+      });
+    }
+    
+    // Store old mentions for comparison
+    const oldMentions = [...(post.mentions || [])];
+    const oldContent = post.content;
+    const oldVisibility = post.visibility;
+    
+    // Start transaction
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    
+    try {
+      // Update fields
+      if (content !== undefined) {
+        const sanitizedContent = sanitizeContent(content);
+        post.content = sanitizedContent;
+        
+        // Generate new content hash
+        post.contentHash = calculateContentHash(sanitizedContent);
+        
+        // Extract mentions
+        const mentions = extractMentions(sanitizedContent);
+        
+        if (mentions.length > 0) {
+          const mentionedUsers = await User.find({ 
+            username: { $in: mentions, $regex: new RegExp(mentions.join('|'), 'i') }
+          }).select('_id').lean();
+            
+          post.mentions = mentionedUsers.map(user => user._id);
+        } else {
+          post.mentions = [];
+        }
+      }
+      
+      if (visibility) {
+        post.visibility = visibility;
+      }
+      
+      if (tags !== undefined) {
+        // Trim, lowercase, and limit length of each tag
+        post.tags = Array.isArray(tags) ? tags
+          .map(tag => String(tag).trim().toLowerCase())
+          .filter(tag => tag.length > 0 && tag.length <= config.MAX_TAG_LENGTH)
+          .slice(0, config.MAX_TAGS_PER_POST) : [];
+      }
+      
+      if (location !== undefined) {
+        if (location === null) {
+          post.location = undefined;
+        } else {
+          post.location = {
+            name: String(location.name).slice(0, 100),
+            address: String(location.address).slice(0, 200),
+            coordinates: location.coordinates ? 
+              [
+                parseFloat(location.coordinates.longitude), 
+                parseFloat(location.coordinates.latitude)
+              ] : 
+              undefined
+          };
+        }
+      }
+      
+      if (allowComments !== undefined) {
+        post.settings = post.settings || {};
+        post.settings.allowComments = !!allowComments;
+      }
+      
+      // Handle media updates with security
+      if (req.files && req.files.length > 0) {
+        // Limit number of media files
+        const filesToProcess = req.files.slice(0, config.MAX_MEDIA_FILES_PER_POST);
+        post.media = post.media || [];
+        
+        // Check total media count
+        const totalMediaCount = post.media.length + filesToProcess.length;
+        if (totalMediaCount > config.MAX_MEDIA_FILES_PER_POST) {
+          // If too many, only add up to the limit
+          const spaceLeft = Math.max(0, config.MAX_MEDIA_FILES_PER_POST - post.media.length);
+          filesToProcess.length = spaceLeft;
+        }
+        
+        for (const file of filesToProcess) {
+          // Validate file type and size
+          if (file.size > config.MAX_FILE_SIZE || !config.ALLOWED_MIME_TYPES.includes(file.mimetype)) {
+            logger.security.warn(`File type or size validation failed`, {
+              userId: req.user.id,
+              filename: file.originalname,
+              size: file.size,
+              mimetype: file.mimetype,
+              requestId
+            });
+            continue; // Skip invalid files
+          }
+          
+          try {
+            // Upload to cloud storage with enhanced security
+            const uploadResult = await cloudStorage.uploadSecureFile(file, {
+              userId: req.user.id,
+              accessControl: {
+                allowDownloads: true,
+                allowScreenshots: true
+              }
+            });
+            
+            // Add to media array with security metadata
+            post.media.push({
+              url: uploadResult.secureUrl || uploadResult.url,
+              secureFileId: uploadResult.secureFileId,
+              accessKey: uploadResult.accessKey,
+              type: file.mimetype.split('/')[0], // image, video, etc.
+              filename: file.originalname,
+              size: file.size,
+              dimensions: uploadResult.width && uploadResult.height ? {
+                width: uploadResult.width,
+                height: uploadResult.height
+              } : undefined,
+              contentType: file.mimetype,
+              contentHash: uploadResult.contentHash
+            });
+            
+            // Log secure media attachment
+            logger.info('Secure media attached to updated post', {
+              userId: req.user.id,
+              fileType: file.mimetype.split('/')[0],
+              secureFileId: uploadResult.secureFileId,
+              requestId
+            });
+          } catch (uploadError) {
+            logger.error('Media upload failed during post update', { 
+              error: uploadError.message,
+              userId: req.user.id,
+              filename: file.originalname,
+              requestId
+            });
+            // Continue with other files
+          }
+        }
+      }
+      
+      // Update edited timestamp
+      post.editedAt = Date.now();
+      post.isEdited = true;
+      
+      await post.save({ session });
+      
+      // Find new mentions to notify
+      if (post.mentions && post.mentions.length > 0) {
+        const newMentions = post.mentions.filter(
+          mention => !oldMentions.includes(mention.toString())
+        );
+        
+        if (newMentions.length > 0) {
+          const notificationPromises = newMentions.map(userId => {
+            if (userId.toString() === req.user.id) {
+              return Promise.resolve(); // Skip self-mentions
+            }
+            
+            return Notification.create([{
+              recipient: userId,
+              type: 'mention',
+              sender: req.user.id,
+              data: {
+                postId: post._id,
+                preview: post.content.substring(0, 100)
+              },
+              timestamp: Date.now()
+            }], { session });
+          });
+          
+          await Promise.all(notificationPromises);
+        }
+      }
+      
+      // Create audit log entry for the update
+      const changes = [];
+      if (oldContent !== post.content) changes.push('content');
+      if (oldVisibility !== post.visibility) changes.push('visibility');
+      if (req.files && req.files.length > 0) changes.push('media');
+      
+      // In a real implementation, store this in a dedicated AuditLog collection
+      logger.audit('post_update', req.user.id, {
+        postId,
+        changes,
+        requestId
+      });
+      
+      await session.commitTransaction();
+      
+      logger.info('Post update transaction successful', {
+        userId: req.user.id,
+        postId,
+        changes,
+        requestId
+      });
+    } catch (txError) {
+      await session.abortTransaction();
+      
+      logger.error('Post update transaction failed', {
+        error: txError.message,
+        userId: req.user.id,
+        postId,
+        requestId
+      });
+      
+      throw txError;
+    } finally {
+      session.endSession();
+    }
+    
+    // Invalidate caches
+    await cache.deletePattern(`post:${postId}:*`);
+    await cache.deletePattern(`posts:*:${req.user.id}:*`);
+    
+    // Populate and return updated post
+    const updatedPost = await Post.findById(postId)
+      .populate('author', 'firstName lastName username profileImage headline')
+      .populate('mentions', 'firstName lastName username profileImage')
+      .lean();
+    
+    // Emit socket events for new mentions
+    const newMentions = post.mentions.filter(
+      mention => !oldMentions.some(oldMention => oldMention.toString() === mention.toString())
+    );
+    
+    if (newMentions.length > 0) {
+      newMentions.forEach(userId => {
+        if (userId.toString() !== req.user.id) {
+          socketEvents.emitToUser(userId.toString(), 'new_mention', {
+            postId: post._id,
+            post: updatedPost,
+            from: { id: req.user.id }
+          });
+        }
+      });
+    }
+    
+    // Log data access
+    logger.dataAccess(req.user.id, 'post', 'update', {
+      postId,
+      requestId
+    });
+    
+    logger.info('Post updated', { 
+      userId: req.user.id, 
+      postId,
+      requestId
+    });
+    
+    metrics.incrementCounter('posts_updated');
+    
+    timer.end();
+    
+    res.json({
+      status: 'success',
+      data: updatedPost,
+      requestId
+    });
+  } catch (error) {
+    timer.end();
+    
+    logger.error('Update post error', { 
+      error: error.message,
+      stack: error.stack,
+      userId: req.user.id,
+      postId: req.params.postId,
+      requestId
+    });
+    
+    metrics.incrementCounter('update_post_errors');
+    
+    res.status(500).json({ 
+      status: 'error',
+      message: 'Server error when updating post',
+      error: config.NODE_ENV === 'development' ? error.message : undefined,
+      requestId
+    });
+  }
+};
+
+/**
+ * Delete a post with transaction support and security
+ * @route DELETE /api/posts/:postId
+ * @access Private
+ */
+exports.deletePost = async (req, res) => {
+  const timer = metrics.startTimer('delete_post');
+  const requestId = req.id || crypto.randomBytes(16).toString('hex');
+  
+  try {
+    const { postId } = req.params;
+    
+    // Validate ObjectId
+    if (!mongoose.Types.ObjectId.isValid(postId)) {
+      logger.warn('Invalid post ID format', {
+        userId: req.user.id,
+        postId,
+        requestId
+      });
+      
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid post ID format',
+        requestId
+      });
+    }
+    
+    // Get post
+    const post = await Post.findById(postId);
+    
+    if (!post) {
+      logger.warn('Post not found for deletion', {
+        userId: req.user.id,
+        postId,
+        requestId
+      });
+      
+      return res.status(404).json({ 
+        status: 'error',
+        message: 'Post not found',
+        requestId
+      });
+    }
+    
+    // Check if user is the author or a moderator/admin
+    const user = await User.findById(req.user.id).select('role').lean();
+    const isModeratorOrAdmin = user && ['admin', 'moderator'].includes(user.role);
+    
+    if (post.author.toString() !== req.user.id && !isModeratorOrAdmin) {
+      logger.security.accessDenied(req.user.id, postId, 'delete', {
+        reason: 'not author or moderator',
+        requestId
+      });
+      
+      return res.status(403).json({ 
+        status: 'error',
+        message: 'You can only delete your own posts',
+        requestId
+      });
+    }
+    
+    // Save post data for audit log before deletion
+    const postData = {
+      author: post.author,
+      content: post.content.substring(0, 100), // Truncate for audit
+      createdAt: post.createdAt,
+      visibility: post.visibility,
+      hadMedia: post.media && post.media.length > 0
+    };
+    
+    // Start transaction
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    
+    try {
+      // Delete associated data (reactions, comments, bookmarks, shares, notifications)
+      await Promise.all([
+        Reaction.deleteMany({ post: postId }, { session }),
+        Comment.deleteMany({ post: postId }, { session }),
+        Bookmark.deleteMany({ post: postId }, { session }),
+        Share.deleteMany({ post: postId }, { session }),
+        Notification.deleteMany({ 'data.postId': postId }, { session }),
+        // Delete the post
+        Post.findByIdAndDelete(postId, { session })
+      ]);
+      
+      // Create audit log entry
+      logger.audit('post_delete', req.user.id, {
+        postId,
+        wasOwnPost: post.author.toString() === req.user.id,
+        deletedBy: isModeratorOrAdmin ? 'moderator' : 'author',
+        postData,
+        requestId
+      });
+      
+      if (isModeratorOrAdmin && post.author.toString() !== req.user.id) {
+        // Create a notification for the author about the deletion
+        await Notification.create([{
+          recipient: post.author,
+          type: 'post_deleted_by_moderator',
+          sender: req.user.id,
+          data: {
+            postId,
+            preview: post.content.substring(0, 100)
+          },
+          timestamp: Date.now()
+        }], { session });
+      }
+      
+      await session.commitTransaction();
+      
+      logger.info('Post deletion transaction successful', {
+        userId: req.user.id,
+        postId,
+        requestId
+      });
+    } catch (txError) {
+      await session.abortTransaction();
+      
+      logger.error('Post deletion transaction failed', {
+        error: txError.message,
+        userId: req.user.id,
+        postId,
+        requestId
+      });
+      
+      throw txError;
+    } finally {
+      session.endSession();
+    }
+    
+    // Queue task to delete media files
+    if (post.media && post.media.length > 0) {
+      post.media.forEach(mediaItem => {
+        if (mediaItem.url) {
+          // In a real implementation, use a job queue for this
+          cloudStorage.deleteFile(mediaItem.secureFileId || mediaItem.url)
+            .catch(err => logger.error('Failed to delete media', {
+              error: err.message,
+              url: mediaItem.url,
+              postId,
+              requestId
+            }));
+        }
+      });
+    }
+    
+    // Invalidate caches
+    await cache.deletePattern(`post:${postId}:*`);
+    await cache.deletePattern(`posts:*:${req.user.id}:*`);
+    
+    // Log data access
+    logger.dataAccess(req.user.id, 'post', 'delete', {
+      postId,
+      requestId
+    });
+    
+    logger.info('Post deleted', { 
+      userId: req.user.id, 
+      postId,
+      requestId
+    });
+    
+    metrics.incrementCounter('posts_deleted');
+    
+    timer.end();
+    
+    res.json({
+      status: 'success',
+      message: 'Post deleted successfully',
+      requestId
+    });
+  } catch (error) {
+    timer.end();
+    
+    logger.error('Delete post error', { 
+      error: error.message,
+      stack: error.stack,
+      userId: req.user.id,
+      postId: req.params.postId,
+      requestId
+    });
+    
+    metrics.incrementCounter('delete_post_errors');
+    
+    res.status(500).json({ 
+      status: 'error',
+      message: 'Server error when deleting post',
+      error: config.NODE_ENV === 'development' ? error.message : undefined,
+      requestId
+    });
+  }
+};
+
+/**
+ * Report a post for moderation with evidence
+ * @route POST /api/posts/:postId/report
+ * @access Private
+ */
+exports.reportPost = async (req, res) => {
+  const timer = metrics.startTimer('report_post');
+  const requestId = req.id || crypto.randomBytes(16).toString('hex');
+  
+  try {
+    const { postId } = req.params;
+    const { reason, details } = req.body;
+    
+    // Validate input
+    if (!reason) {
+      logger.warn('Missing report reason', {
+        userId: req.user.id,
+        postId,
+        requestId
+      });
+      
+      return res.status(400).json({
+        status: 'error',
+        message: 'Report reason is required',
+        requestId
+      });
+    }
+    
+    // Validate ObjectId
+    if (!mongoose.Types.ObjectId.isValid(postId)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid post ID format',
+        requestId
+      });
+    }
+    
+    // Check if post exists
+    const post = await Post.findById(postId)
+      .select('author content visibility flagged')
+      .populate('author', 'username');
+    
+    if (!post) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Post not found',
+        requestId
+      });
+    }
+    
+    // Check if user can view the post (can't report what you can't see)
+    if (!await hasPermission(req.user.id, postId, 'post', 'view')) {
+      logger.security.accessDenied(req.user.id, postId, 'report', {
+        reason: 'no view permission',
+        requestId
+      });
+      
+      return res.status(403).json({
+        status: 'error',
+        message: 'You do not have permission to report this post',
+        requestId
+      });
+    }
+    
+    // Check if already reported by this user
+    const existingReport = await Report.findOne({
+      reporter: req.user.id,
+      contentType: 'post',
+      content: postId,
+      status: { $in: ['pending', 'under_review'] }
+    });
+    
+    if (existingReport) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'You have already reported this post',
+        requestId
+      });
+    }
+    
+    // Create a snapshot of the content for reference
+    const contentSnapshot = {
+      content: post.content,
+      author: post.author._id,
+      authorUsername: post.author.username,
+      timestamp: new Date(),
+      hash: calculateContentHash(post.content)
+    };
+    
+    // Create report with evidence collection
+    const report = new Report({
+      reporter: req.user.id,
+      contentType: 'post',
+      content: postId,
+      reason,
+      details: details || '',
+      contentSnapshot,
+      timestamp: Date.now(),
+      status: 'pending',
+      evidence: []
+    });
+    
+    // Handle evidence file if provided
+    if (req.file) {
+      try {
+        const evidenceUpload = await cloudStorage.uploadSecureFile(req.file, {
+          userId: req.user.id,
+          accessControl: {
+            allowDownloads: false  // Only moderators should access this
+          }
+        });
+        
+        report.evidence.push({
+          type: 'file',
+          url: evidenceUpload.secureUrl,
+          fileId: evidenceUpload.secureFileId,
+          accessKey: evidenceUpload.accessKey,
+          mimeType: req.file.mimetype,
+          filename: req.file.originalname,
+          timestamp: new Date()
+        });
+      } catch (uploadError) {
+        logger.error('Evidence upload failed', {
+          error: uploadError.message,
+          userId: req.user.id,
+          postId,
+          requestId
+        });
+        // Continue without evidence
+      }
+    }
+    
+    await report.save();
+    
+    // Log report
+    logger.security.info('Post reported', {
+      userId: req.user.id,
+      postId,
+      reason,
+      reportId: report._id,
+      requestId
+    });
+    
+    // For serious abuse reports, flag the content immediately
+    const seriousReasons = ['illegal_content', 'child_safety', 'terrorism', 'self_harm'];
+    
+    if (seriousReasons.includes(reason) && !post.flagged) {
+      // Auto-flag for serious reports
+      await Post.findByIdAndUpdate(postId, {
+        flagged: true,
+        flagReason: reason,
+        flaggedAt: new Date(),
+        flaggedBy: req.user.id
+      });
+      
+      // Notify moderators of urgent reports
+      socketEvents.emitToRole('moderator', 'urgent_content_report', {
+        reportId: report._id,
+        contentType: 'post',
+        contentId: postId,
+        reason
+      });
+      
+      logger.security.critical('Serious content reported and flagged', {
+        userId: req.user.id,
+        postId,
+        reason,
+        reportId: report._id,
+        requestId
+      });
+    }
+    
+    // Notify post author if appropriate
+    if (['copyright', 'incorrect_information'].includes(reason)) {
+      Notification.create({
+        recipient: post.author._id,
+        type: 'post_reported',
+        sender: null, // Anonymous
+        data: {
+          postId,
+          reason
+        },
+        timestamp: Date.now()
+      });
+    }
+    
+    // Invalidate cache for this post
+    await cache.deletePattern(`post:${postId}:*`);
+    
+    metrics.incrementCounter('content_reports', { type: 'post', reason });
+    
+    timer.end();
+    
+    res.status(201).json({
+      status: 'success',
+      message: 'Post reported successfully',
+      reportId: report._id,
+      requestId
+    });
+  } catch (error) {
+    timer.end();
+    
+    logger.error('Report post error', {
+      error: error.message,
+      stack: error.stack,
+      userId: req.user.id,
+      postId: req.params.postId,
+      requestId
+    });
+    
+    metrics.incrementCounter('report_post_errors');
+    
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error when reporting post',
+      error: config.NODE_ENV === 'development' ? error.message : undefined,
+      requestId
+    });
+  }
+};
+
+/**
+ * Generate a secure access URL for post media
+ * @route GET /api/posts/:postId/media/:mediaId/access
+ * @access Private
+ */
+exports.getMediaAccessUrl = async (req, res) => {
+  const timer = metrics.startTimer('media_access_url');
+  const requestId = req.id || crypto.randomBytes(16).toString('hex');
+  
+  try {
+    const { postId, mediaId } = req.params;
+    const { accessKey } = req.query;
+    
+    // Validate input
+    if (!accessKey) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Access key is required',
+        requestId
+      });
+    }
+    
+    // Validate ObjectId
+    if (!mongoose.Types.ObjectId.isValid(postId)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid post ID format',
+        requestId
+      });
+    }
+    
+    // Get post
+    const post = await Post.findById(postId)
+      .select('author media visibility')
+      .lean();
+    
+    if (!post) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Post not found',
+        requestId
+      });
+    }
+    
+    // Check if user has permission to view the post
+    if (!await hasPermission(req.user.id, postId, 'post', 'view')) {
+      logger.security.accessDenied(req.user.id, postId, 'access_media', {
+        reason: 'no view permission',
+        mediaId,
+        requestId
+      });
+      
+      return res.status(403).json({
+        status: 'error',
+        message: 'You do not have permission to access this media',
+        requestId
+      });
+    }
+    
+    // Find the requested media item
+    const mediaItem = post.media.find(item => item._id.toString() === mediaId);
+    
+    if (!mediaItem) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Media not found',
+        requestId
+      });
+    }
+    
+    // Verify access key
+    if (mediaItem.accessKey !== accessKey) {
+      logger.security.warn('Invalid media access key', {
+        userId: req.user.id,
+        postId,
+        mediaId,
+        requestId
+      });
+      
+      return res.status(403).json({
+        status: 'error',
+        message: 'Invalid access key',
+        requestId
+      });
+    }
+    
+    // Generate a signed URL for secure access
+    let signedUrl;
+    try {
+      signedUrl = await cloudStorage.getSignedUrl(mediaItem.secureFileId, {
+        userId: req.user.id,
+        accessKey,
+        expiresIn: 300, // 5 minutes
+        attachment: false
+      });
+    } catch (error) {
+      logger.error('Error generating signed URL', {
+        error: error.message,
+        userId: req.user.id,
+        mediaId,
+        requestId
+      });
+      
+      return res.status(500).json({
+        status: 'error',
+        message: 'Failed to generate secure access URL',
+        requestId
+      });
+    }
+    
+    // Log media access
+    logger.dataAccess(req.user.id, 'media', 'access', {
+      postId,
+      mediaId,
+      requestId
+    });
+    
+    timer.end();
+    
+    res.json({
+      status: 'success',
+      data: {
+        url: signedUrl,
+        expiresAt: new Date(Date.now() + 300 * 1000), // 5 minutes from now
+        contentType: mediaItem.contentType
+      },
+      requestId
+    });
+  } catch (error) {
+    timer.end();
+    
+    logger.error('Media access error', {
+      error: error.message,
+      stack: error.stack,
+      userId: req.user.id,
+      postId: req.params.postId,
+      mediaId: req.params.mediaId,
+      requestId
+    });
+    
+    metrics.incrementCounter('media_access_errors');
+    
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error when accessing media',
+      error: config.NODE_ENV === 'development' ? error.message : undefined,
+      requestId
+    });
+  }
+};
+
+/**
+ * React to a post with optimized operation and security measures
+ * @route POST /api/posts/:postId/react
+ * @access Private
+ */
+exports.reactToPost = async (req, res) => {
+  const timer = metrics.startTimer('post_reaction');
+  const requestId = req.id || crypto.randomBytes(16).toString('hex');
+  
+  try {
+    const { postId } = req.params;
+    const { type } = req.body;
+    
+    // Input validation
+    if (!type) {
+      return res.status(400).json({ 
+        status: 'error',
+        message: 'Reaction type is required',
+        requestId
+      });
+    }
+    
+    if (!config.ALLOWED_REACTION_TYPES.includes(type)) {
+      logger.security.warn('Invalid reaction type', {
+        userId: req.user.id,
+        postId,
+        type,
+        requestId
+      });
+      
+      return res.status(400).json({ 
+        status: 'error',
+        message: 'Invalid reaction type',
+        requestId
+      });
+    }
+    
+    // Validate ObjectId
+    if (!mongoose.Types.ObjectId.isValid(postId)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid post ID format',
+        requestId
+      });
+    }
+    
+    // Get post
+    const post = await Post.findById(postId).select('author visibility interactionCount flagged');
     
     if (!post) {
       return res.status(404).json({ 
-        success: false,
-        error: 'Post not found'
+        status: 'error',
+        message: 'Post not found',
+        requestId
       });
     }
     
-    // Find the comment
-    const comment = post.comments.find(c => c._id.toString() === commentId);
-    
-    if (!comment) {
-      return res.status(404).json({ 
-        success: false,
-        error: 'Comment not found'
+    // Check if post is flagged
+    if (post.flagged) {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Cannot react to flagged content',
+        requestId
       });
     }
     
-    // Check ownership
-    if (comment.author.toString() !== req.user.id && post.author.toString() !== req.user.id) {
+    // Check if user has permission to view this post (and thus react)
+    if (!await hasPermission(req.user.id, postId, 'post', 'view')) {
+      logger.security.accessDenied(req.user.id, postId, 'react', {
+        reason: 'no view permission',
+        requestId
+      });
+      
       return res.status(403).json({ 
-        success: false,
-        error: 'Not authorized to delete this comment'
+        status: 'error',
+        message: 'You do not have permission to react to this post',
+        requestId
       });
     }
     
-    // Remove comment
-    post.comments = post.comments.filter(c => c._id.toString() !== commentId);
-    
-    await post.save();
-    
-    res.json({
-      success: true,
-      message: 'Comment deleted successfully'
+    // Detect unusual reaction patterns
+    const userReactionCount = await Reaction.countDocuments({
+      user: req.user.id,
+      timestamp: { $gt: new Date(Date.now() - 1000 * 60 * 5) } // Last 5 minutes
     });
+    
+    if (userReactionCount > 50) {
+      logger.security.suspiciousActivity(req.user.id, 'high_reaction_velocity', {
+        reactionCount: userReactionCount,
+        timeWindow: '5 minutes',
+        postId,
+        requestId
+      });
+      
+      // Continue but flag for review
+    }
+    
+    // Use findOneAndUpdate for better performance (atomic operation)
+    const existingReaction = await Reaction.findOne({
+      user: req.user.id,
+      post: postId
+    }).lean();
+    
+    // Start session for transaction
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    
+    try {
+      let reaction;
+      let isNewReaction = false;
+      
+      if (existingReaction) {
+        // Update existing reaction
+        reaction = await Reaction.findByIdAndUpdate(
+          existingReaction._id,
+          { 
+            type,
+            timestamp: Date.now()
+          },
+          { new: true, session }
+        );
+        
+        logger.info('Reaction updated', {
+          userId: req.user.id,
+          postId,
+          oldType: existingReaction.type,
+          newType: type,
+          requestId
+        });
+      } else {
+        // Create new reaction
+        reaction = await Reaction.create([{
+          user: req.user.id,
+          post: postId,
+          type,
+          timestamp: Date.now(),
+          clientIP: req.ip, // For fraud/abuse detection
+          userAgent: req.get('User-Agent') // For fraud/abuse detection
+        }], { session });
+        
+        reaction = reaction[0];
+        isNewReaction = true;
+        
+        // Update interaction count
+        await Post.findByIdAndUpdate(
+          postId,
+          { $inc: { interactionCount: 1 } },
+          { session }
+        );
+        
+        logger.info('New reaction added', {
+          userId: req.user.id,
+          postId,
+          type,
+          requestId
+        });
+      }
+      
+      // Send notification to post author (if not self)
+      if (post.author.toString() !== req.user.id) {
+        await Notification.create([{
+          recipient: post.author,
+          type: 'post_reaction',
+          sender: req.user.id,
+          data: {
+            postId,
+            reactionType: type
+          },
+          timestamp: Date.now()
+        }], { session });
+      }
+      
+      await session.commitTransaction();
+      
+      // Get updated reaction counts
+      const reactionCounts = await Reaction.aggregate([
+        {
+          $match: { post: new ObjectId(postId) }
+        },
+        {
+          $group: {
+            _id: '$type',
+            count: { $sum: 1 }
+          }
+        }
+      ]);
+      
+      // Format reaction counts
+      const formattedReactions = {};
+      reactionCounts.forEach(rc => {
+        formattedReactions[rc._id] = rc.count;
+      });
+      
+      // Emit socket event for notification
+      if (post.author.toString() !== req.user.id) {
+        socketEvents.emitToUser(post.author.toString(), 'post_reaction', {
+          postId,
+          reactionType: type,
+          from: { id: req.user.id }
+        });
+      }
+      
+      // Invalidate caches
+      await cache.deletePattern(`post:${postId}:*`);
+      
+      // Log data access
+      logger.dataAccess(req.user.id, 'reaction', 'create', {
+        postId,
+        type,
+        requestId
+      });
+      
+      metrics.incrementCounter('post_reactions', { type });
+      
+      timer.end();
+      
+      res.json({
+        status: 'success',
+        data: {
+          reaction: {
+            type,
+            timestamp: reaction.timestamp
+          },
+          reactionCounts: formattedReactions,
+          isNewReaction
+        },
+        requestId
+      });
+    } catch (txError) {
+      await session.abortTransaction();
+      
+      logger.error('Reaction transaction failed', {
+        error: txError.message,
+        userId: req.user.id,
+        postId,
+        requestId
+      });
+      
+      throw txError;
+    } finally {
+      session.endSession();
+    }
   } catch (error) {
-    console.error('Delete comment error:', error);
+    timer.end();
+    
+    logger.error('React to post error', { 
+      error: error.message,
+      stack: error.stack,
+      userId: req.user.id,
+      postId: req.params.postId,
+      requestId
+    });
+    
+    metrics.incrementCounter('post_reaction_errors');
+    
     res.status(500).json({ 
-      success: false,
-      error: 'Error deleting comment'
+      status: 'error',
+      message: 'Server error when reacting to post',
+      error: config.NODE_ENV === 'development' ? error.message : undefined,
+      requestId
     });
   }
 };
 
 /**
- * @route   GET /api/posts/trending
- * @desc    Get trending posts
- * @access  Private
+ * Add comment to a post with enhanced validation and security
+ * @route POST /api/posts/:postId/comments
+ * @access Private
  */
-exports.getTrendingPosts = async (req, res) => {
+exports.addComment = async (req, res) => {
+  const timer = metrics.startTimer('add_comment');
+  const requestId = req.id || crypto.randomBytes(16).toString('hex');
+  
   try {
-    const { days = 7, limit = 10 } = req.query;
+    const { postId } = req.params;
+    const { content, parentId } = req.body;
     
-    const trendingPosts = await Post.findTrending(parseInt(days), parseInt(limit));
+    // Input validation
+    if (!content || content.trim().length === 0) {
+      return res.status(400).json({ 
+        status: 'error',
+        message: 'Comment content is required',
+        requestId
+      });
+    }
     
-    res.json({
-      success: true,
-      posts: trendingPosts
+    if (content.length > config.MAX_COMMENT_LENGTH) {
+      return res.status(400).json({ 
+        status: 'error',
+        message: `Comment exceeds maximum length of ${config.MAX_COMMENT_LENGTH} characters`,
+        requestId
+      });
+    }
+    
+    // Validate ObjectIds
+    if (!mongoose.Types.ObjectId.isValid(postId)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid post ID format',
+        requestId
+      });
+    }
+    
+    if (parentId && !mongoose.Types.ObjectId.isValid(parentId)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid parent comment ID format',
+        requestId
+      });
+    }
+    
+    // Get post
+    const post = await Post.findById(postId).select('author visibility settings interactionCount flagged');
+    
+    if (!post) {
+      return res.status(404).json({ 
+        status: 'error',
+        message: 'Post not found',
+        requestId
+      });
+    }
+    
+    // Check if post is flagged
+    if (post.flagged) {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Cannot comment on flagged content',
+        requestId
+      });
+    }
+    
+    // Check if commenting is allowed
+    if (post.settings && post.settings.allowComments === false) {
+      logger.security.accessDenied(req.user.id, postId, 'comment', {
+        reason: 'comments disabled',
+        requestId
+      });
+      
+      return res.status(403).json({ 
+        status: 'error',
+        message: 'Comments are disabled for this post',
+        requestId
+      });
+    }
+    
+    // Check if user has permission to view this post (and thus comment)
+    if (!await hasPermission(req.user.id, postId, 'post', 'view')) {
+      logger.security.accessDenied(req.user.id, postId, 'comment', {
+        reason: 'no view permission',
+        requestId
+      });
+      
+      return res.status(403).json({ 
+        status: 'error',
+        message: 'You do not have permission to comment on this post',
+        requestId
+      });
+    }
+    
+    // Detect spam or excessive commenting
+    const userRecentComments = await Comment.countDocuments({
+      author: req.user.id,
+      createdAt: { $gt: new Date(Date.now() - 1000 * 60 * 5) } // Last 5 minutes
     });
+    
+    if (userRecentComments > 20) {
+      logger.security.suspiciousActivity(req.user.id, 'high_comment_velocity', {
+        commentCount: userRecentComments,
+        timeWindow: '5 minutes',
+        postId,
+        requestId
+      });
+      
+      // Rate limit instead of allowing the comment
+      return res.status(429).json({
+        status: 'error',
+        message: 'You are commenting too frequently. Please try again in a few minutes.',
+        requestId
+      });
+    }
+    
+    // If this is a reply, verify parent comment exists
+    let parentComment = null;
+    if (parentId) {
+      parentComment = await Comment.findById(parentId).select('author post flagged');
+      
+      if (!parentComment || parentComment.post?.toString() !== postId) {
+        return res.status(404).json({ 
+          status: 'error',
+          message: 'Parent comment not found',
+          requestId
+        });
+      }
+      
+      // Check if parent comment is flagged
+      if (parentComment.flagged) {
+        return res.status(403).json({
+          status: 'error',
+          message: 'Cannot reply to flagged content',
+          requestId
+        });
+      }
+    }
+    
+    // Sanitize content
+    const sanitizedContent = sanitizeContent(content);
+    
+    // Generate content hash for integrity verification
+    const contentHash = calculateContentHash(sanitizedContent);
+    
+    // Extract mentions
+    const mentions = extractMentions(sanitizedContent);
+    
+    // Find mentioned users by username
+    let mentionedUsers = [];
+    if (mentions.length > 0) {
+      mentionedUsers = await User.find({ 
+        username: { $in: mentions, $regex: new RegExp(mentions.join('|'), 'i') } 
+      }).select('_id username').lean();
+    }
+    
+    // Start transaction
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    
+    try {
+      // Create comment
+      const newComment = await Comment.create([{
+        post: postId,
+        author: req.user.id,
+        content: sanitizedContent,
+        contentHash,
+        parent: parentId || null,
+        mentions: mentionedUsers.map(user => user._id),
+        createdAt: Date.now(),
+        clientIP: req.ip, // For spam detection/enforcement
+        userAgent: req.get('User-Agent'), // For spam detection
+      }], { session });
+      
+      // Update interaction count on post
+      await Post.findByIdAndUpdate(
+        postId,
+        { $inc: { interactionCount: 1 } },
+        { session }
+      );
+      
+      // Create notifications
+      const notifications = [];
+      
+      // Notify post author (if not self)
+      if (post.author.toString() !== req.user.id) {
+        notifications.push({
+          recipient: post.author,
+          type: 'post_comment',
+          sender: req.user.id,
+          data: { 
+            postId, 
+            commentId: newComment[0]._id, 
+            preview: sanitizedContent.substring(0, 100) 
+          }
+        });
+      }
+      
+      // If this is a reply, notify parent comment author (if not self)
+      if (parentComment && parentComment.author.toString() !== req.user.id) {
+        notifications.push({
+          recipient: parentComment.author,
+          type: 'comment_reply',
+          sender: req.user.id,
+          data: { 
+            postId, 
+            commentId: newComment[0]._id, 
+            preview: sanitizedContent.substring(0, 100) 
+          }
+        });
+      }
+      
+      // Notify mentioned users (except self)
+      if (mentionedUsers.length > 0) {
+        mentionedUsers.forEach(user => {
+          if (user._id.toString() !== req.user.id) {
+            notifications.push({
+              recipient: user._id,
+              type: 'comment_mention',
+              sender: req.user.id,
+              data: { 
+                postId, 
+                commentId: newComment[0]._id, 
+                preview: sanitizedContent.substring(0, 100) 
+              }
+            });
+          }
+        });
+      }
+      
+      // Batch create notifications
+      if (notifications.length > 0) {
+        const notificationsToCreate = notifications.map(notif => ({
+          ...notif,
+          timestamp: Date.now()
+        }));
+        
+        await Notification.create(notificationsToCreate, { session });
+      }
+      
+      // Log audit
+      logger.audit('comment_create', req.user.id, {
+        postId,
+        commentId: newComment[0]._id,
+        isReply: !!parentId,
+        requestId
+      });
+      
+      await session.commitTransaction();
+      
+      logger.info('Comment creation transaction successful', {
+        userId: req.user.id,
+        postId,
+        commentId: newComment[0]._id,
+        requestId
+      });
+      
+      // Populate comment after transaction
+      const populatedComment = await Comment.findById(newComment[0]._id)
+        .populate('author', 'firstName lastName username profileImage headline')
+        .populate('mentions', 'firstName lastName username profileImage')
+        .lean();
+      
+      // Send socket events
+      notifications.forEach(notification => {
+        socketEvents.emitToUser(notification.recipient.toString(), notification.type, {
+          postId,
+          commentId: newComment[0]._id,
+          comment: populatedComment,
+          from: { id: req.user.id }
+        });
+      });
+      
+      // Invalidate caches
+      await cache.deletePattern(`post:${postId}:*`);
+      
+      // Log data access
+      logger.dataAccess(req.user.id, 'comment', 'create', {
+        postId,
+        commentId: newComment[0]._id,
+        requestId
+      });
+      
+      metrics.incrementCounter('comments_created');
+      metrics.observeCommentContentLength(sanitizedContent.length);
+      
+      timer.end();
+      
+      res.status(201).json({
+        status: 'success',
+        data: populatedComment,
+        requestId
+      });
+    } catch (txError) {
+      await session.abortTransaction();
+      
+      logger.error('Comment creation transaction failed', {
+        error: txError.message,
+        userId: req.user.id,
+        postId,
+        requestId
+      });
+      
+      throw txError;
+    } finally {
+      session.endSession();
+    }
   } catch (error) {
-    console.error('Get trending posts error:', error);
+    timer.end();
+    
+    logger.error('Add comment error', { 
+      error: error.message,
+      stack: error.stack,
+      userId: req.user.id,
+      postId: req.params.postId,
+      requestId
+    });
+    
+    metrics.incrementCounter('add_comment_errors');
+    
     res.status(500).json({ 
-      success: false,
-      error: 'Error fetching trending posts'
+      status: 'error',
+      message: 'Server error when adding comment',
+      error: config.NODE_ENV === 'development' ? error.message : undefined,
+      requestId
     });
   }
 };
 
-module.exports = exports;
+// Export rate-limited handlers for use in routes with enhanced security
+module.exports = {
+  createPost: rateLimit.moderate(exports.createPost),
+  getPosts: rateLimit.light(exports.getPosts),
+  getPost: rateLimit.light(exports.getPost),
+  updatePost: rateLimit.moderate(exports.updatePost),
+  deletePost: rateLimit.moderate(exports.deletePost),
+  reactToPost: rateLimit.heavy(exports.reactToPost),
+  removeReaction: rateLimit.moderate(exports.removeReaction),
+  addComment: rateLimit.moderate(exports.addComment),
+  getComments: rateLimit.light(exports.getComments),
+  bookmarkPost: rateLimit.moderate(exports.bookmarkPost),
+  removeBookmark: rateLimit.moderate(exports.removeBookmark),
+  reportPost: rateLimit.heavy(exports.reportPost),
+  getMediaAccessUrl: rateLimit.moderate(exports.getMediaAccessUrl)
+};

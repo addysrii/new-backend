@@ -1,1453 +1,1495 @@
-// controllers/portfolio.controller.js
-const User = require('../models/user/user.js');
-const Project = require('../models/portfolio/Project.js');
-const Achievement = require('../models/portfolio/achievement.js');
-const Streak = require('../models/portfolio/streak.js');
-const fileUploadService = require('../services/file-upload.service.js');
-const mongoose = require('mongoose');
+const Project = require('../models/Portfolio');
+const Achievement = require('../models/Portfolio');
+const Streak = require('../models/Portfolio');
+const StreakCheckIn = require('../models/Portfolio');
+const User = require('../models/User');
+const Skill = require('../models/Portfolio');
+const Recommendation = require('../models/Portfolio');
+const fs = require('fs');
+const path = require('path');
 
-/**
- * @route   GET /api/portfolio/projects
- * @desc    Get user's projects
- * @access  Private
- */
-exports.getUserProjects = async (req, res) => {
+// Helper function to handle errors
+const handleError = (err, res) => {
+  console.error(err);
+  return res.status(500).json({ error: 'Server error', details: err.message });
+};
+
+// Helper function to check ownership or collaboration permissions
+const hasProjectAccess = async (userId, projectId, requiredPermission = 'view') => {
   try {
-    const { userId } = req.query;
+    const project = await Project.findById(projectId);
+    if (!project) return false;
     
-    // If userId provided, get that user's projects, otherwise get current user's
-    const targetUserId = userId || req.user.id;
+    // Owner has all permissions
+    if (project.owner.toString() === userId.toString()) return true;
     
-    // Validate user ID
-    if (!mongoose.Types.ObjectId.isValid(targetUserId)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid user ID'
-      });
+    // Check collaborator permissions
+    const collaborator = project.collaborators.find(c => c.user.toString() === userId.toString());
+    if (!collaborator) return false;
+    
+    switch(requiredPermission) {
+      case 'view':
+        return true;
+      case 'edit':
+        return collaborator.permissions.includes('edit');
+      case 'delete':
+        return collaborator.permissions.includes('delete');
+      case 'manage':
+        return collaborator.permissions.includes('manage');
+      default:
+        return false;
     }
-    
-    // If viewing another user's projects, check permission
-    if (targetUserId !== req.user.id) {
-      const targetUser = await User.findById(targetUserId);
-      
-      if (!targetUser) {
-        return res.status(404).json({
-          success: false,
-          error: 'User not found'
-        });
-      }
-      
-      // Check privacy settings
-      if (targetUser.privacy?.profileVisibility === 'private') {
-        return res.status(403).json({
-          success: false,
-          error: 'Not authorized to view this user\'s projects'
-        });
-      }
-      
-      if (targetUser.privacy?.profileVisibility === 'connections') {
-        const currentUser = await User.findById(req.user.id);
-        if (!currentUser.connections || !currentUser.connections.includes(targetUserId)) {
-          return res.status(403).json({
-            success: false,
-            error: 'Not authorized to view this user\'s projects'
-          });
-        }
-      }
-    }
-    
-    // Get projects
-    const projects = await Project.find({ user: targetUserId })
-      .sort({ createdAt: -1 });
-    
-    res.json({
-      success: true,
-      projects
-    });
   } catch (error) {
-    console.error('Get user projects error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error fetching user projects'
-    });
+    return false;
   }
 };
 
-/**
- * @route   POST /api/portfolio/projects
- * @desc    Create a new project
- * @access  Private
- */
+// Project Management
 exports.createProject = async (req, res) => {
   try {
-    const { title, description, category, startDate, endDate, url, technologies } = req.body;
+    const { title, description, skills, category, visibility } = req.body;
     
-    // Validate required fields
-    if (!title) {
-      return res.status(400).json({
-        success: false,
-        error: 'Title is required'
-      });
+    // Process attachments if any
+    let attachments = [];
+    if (req.files && req.files.length > 0) {
+      attachments = req.files.map(file => ({
+        filename: file.filename,
+        originalname: file.originalname,
+        path: file.path,
+        mimetype: file.mimetype,
+        size: file.size
+      }));
     }
     
-    // Parse technologies
-    let techArray = [];
-    if (technologies) {
-      techArray = Array.isArray(technologies) 
-        ? technologies 
-        : (typeof technologies === 'string' ? technologies.split(',').map(t => t.trim()) : []);
-    }
-    
-    // Upload image if provided
-    let imageUrl = null;
-    if (req.file) {
-      const uploadResult = await fileUploadService.uploadFile(
-        req.file,
-        'projects',
-        {
-          transformation: [
-            { width: 800, crop: 'limit' },
-            { quality: 'auto:good' },
-            { fetch_format: 'auto' }
-          ]
-        }
-      );
-      imageUrl = uploadResult.url;
-    }
-    
-    // Create project
-    const project = await Project.create({
-      user: req.user.id,
+    const project = new Project({
       title,
-      description: description || '',
-      category: category || '',
-      startDate: startDate ? new Date(startDate) : null,
-      endDate: endDate ? new Date(endDate) : null,
-      url: url || '',
-      imageUrl,
-      technologies: techArray,
-      createdAt: new Date()
+      description,
+      skills: JSON.parse(skills || '[]'),
+      category,
+      visibility: visibility || 'private',
+      owner: req.user.id,
+      attachments,
+      createdAt: new Date(),
+      updatedAt: new Date()
     });
-    
-    res.status(201).json({
-      success: true,
-      project
-    });
-  } catch (error) {
-    console.error('Create project error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error creating project'
-    });
-  }
-};
-
-/**
- * @route   PUT /api/portfolio/projects/:id
- * @desc    Update a project
- * @access  Private
- */
-exports.updateProject = async (req, res) => {
-  try {
-    const projectId = req.params.id;
-    const { title, description, category, startDate, endDate, url, technologies } = req.body;
-    
-    // Validate project ID
-    if (!mongoose.Types.ObjectId.isValid(projectId)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid project ID'
-      });
-    }
-    
-    // Find project
-    const project = await Project.findById(projectId);
-    
-    if (!project) {
-      return res.status(404).json({
-        success: false,
-        error: 'Project not found'
-      });
-    }
-    
-    // Check ownership
-    if (project.user.toString() !== req.user.id) {
-      return res.status(403).json({
-        success: false,
-        error: 'Not authorized to update this project'
-      });
-    }
-    
-    // Parse technologies
-    let techArray = project.technologies || [];
-    if (technologies) {
-      techArray = Array.isArray(technologies) 
-        ? technologies 
-        : (typeof technologies === 'string' ? technologies.split(',').map(t => t.trim()) : techArray);
-    }
-    
-    // Upload image if provided
-    if (req.file) {
-      const uploadResult = await fileUploadService.uploadFile(
-        req.file,
-        'projects',
-        {
-          transformation: [
-            { width: 800, crop: 'limit' },
-            { quality: 'auto:good' },
-            { fetch_format: 'auto' }
-          ]
-        }
-      );
-      project.imageUrl = uploadResult.url;
-    }
-    
-    // Update fields
-    project.title = title || project.title;
-    project.description = description !== undefined ? description : project.description;
-    project.category = category || project.category;
-    project.startDate = startDate ? new Date(startDate) : project.startDate;
-    project.endDate = endDate ? new Date(endDate) : project.endDate;
-    project.url = url !== undefined ? url : project.url;
-    project.technologies = techArray;
     
     await project.save();
     
-    res.json({
-      success: true,
-      project
-    });
-  } catch (error) {
-    console.error('Update project error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error updating project'
-    });
+    // If skills were provided, update or create those skills for the user
+    if (skills && skills.length > 0) {
+      const skillList = JSON.parse(skills);
+      for (const skillName of skillList) {
+        // Find or create skill
+        let skill = await Skill.findOne({ name: skillName.toLowerCase() });
+        if (!skill) {
+          skill = new Skill({ name: skillName.toLowerCase() });
+          await skill.save();
+        }
+        
+        // Add skill to user if not already there
+        await User.findByIdAndUpdate(
+          req.user.id, 
+          { $addToSet: { skills: skill._id } }
+        );
+      }
+    }
+    
+    res.status(201).json(project);
+  } catch (err) {
+    handleError(err, res);
   }
 };
 
-/**
- * @route   DELETE /api/portfolio/projects/:id
- * @desc    Delete a project
- * @access  Private
- */
-exports.deleteProject = async (req, res) => {
+exports.getProjects = async (req, res) => {
   try {
-    const projectId = req.params.id;
+    const { category, skill, search } = req.query;
     
-    // Validate project ID
-    if (!mongoose.Types.ObjectId.isValid(projectId)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid project ID'
-      });
+    // Base query to find projects user owns or collaborates on
+    let query = {
+      $or: [
+        { owner: req.user.id },
+        { 'collaborators.user': req.user.id },
+        { visibility: 'public' }
+      ]
+    };
+    
+    // Add category filter
+    if (category) {
+      query.category = category;
     }
     
-    // Find project
-    const project = await Project.findById(projectId);
+    // Add skill filter
+    if (skill) {
+      query.skills = { $in: [skill] };
+    }
+    
+    // Add search filter (search in title or description)
+    if (search) {
+      query.$or = [
+        { title: { $regex: search, $options: 'i' } },
+        { description: { $regex: search, $options: 'i' } }
+      ];
+    }
+    
+    // Find projects and populate owner and collaborator information
+    const projects = await Project.find(query)
+      .populate('owner', 'username email profileImage')
+      .populate('collaborators.user', 'username email profileImage')
+      .sort({ updatedAt: -1 });
+    
+    res.json(projects);
+  } catch (err) {
+    handleError(err, res);
+  }
+};
+
+exports.getProject = async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    
+    const project = await Project.findById(projectId)
+      .populate('owner', 'username email profileImage')
+      .populate('collaborators.user', 'username email profileImage');
     
     if (!project) {
-      return res.status(404).json({
-        success: false,
-        error: 'Project not found'
-      });
+      return res.status(404).json({ error: 'Project not found' });
     }
     
-    // Check ownership
-    if (project.user.toString() !== req.user.id) {
-      return res.status(403).json({
-        success: false,
-        error: 'Not authorized to delete this project'
+    // Check if user has access to the project
+    if (
+      project.visibility !== 'public' && 
+      !await hasProjectAccess(req.user.id, projectId)
+    ) {
+      return res.status(403).json({ error: 'You do not have permission to view this project' });
+    }
+    
+    res.json(project);
+  } catch (err) {
+    handleError(err, res);
+  }
+};
+
+exports.updateProject = async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    const { title, description, skills, category, visibility } = req.body;
+    
+    // Check if project exists
+    const project = await Project.findById(projectId);
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+    
+    // Check if user has permission to edit
+    if (!await hasProjectAccess(req.user.id, projectId, 'edit')) {
+      return res.status(403).json({ error: 'You do not have permission to edit this project' });
+    }
+    
+    // Process attachments if any
+    let attachments = project.attachments || [];
+    if (req.files && req.files.length > 0) {
+      const newAttachments = req.files.map(file => ({
+        filename: file.filename,
+        originalname: file.originalname,
+        path: file.path,
+        mimetype: file.mimetype,
+        size: file.size
+      }));
+      
+      // If attachmentsToRemove is specified, remove those
+      const attachmentsToRemove = req.body.attachmentsToRemove ? 
+        JSON.parse(req.body.attachmentsToRemove) : [];
+      
+      if (attachmentsToRemove.length > 0) {
+        // Filter out attachments to remove
+        attachments = attachments.filter(a => !attachmentsToRemove.includes(a.filename));
+        
+        // Delete files physically
+        attachmentsToRemove.forEach(filename => {
+          const filePath = path.join(__dirname, '../uploads', filename);
+          if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+          }
+        });
+      }
+      
+      // Add new attachments
+      attachments = [...attachments, ...newAttachments];
+    }
+    
+    // Prepare update object
+    const updateData = {
+      title: title || project.title,
+      description: description || project.description,
+      category: category || project.category,
+      visibility: visibility || project.visibility,
+      attachments,
+      updatedAt: new Date()
+    };
+    
+    // Update skills if provided
+    if (skills) {
+      updateData.skills = JSON.parse(skills);
+      
+      // Update user skills
+      const skillList = JSON.parse(skills);
+      for (const skillName of skillList) {
+        // Find or create skill
+        let skill = await Skill.findOne({ name: skillName.toLowerCase() });
+        if (!skill) {
+          skill = new Skill({ name: skillName.toLowerCase() });
+          await skill.save();
+        }
+        
+        // Add skill to user if not already there
+        await User.findByIdAndUpdate(
+          req.user.id, 
+          { $addToSet: { skills: skill._id } }
+        );
+      }
+    }
+    
+    // Update project
+    const updatedProject = await Project.findByIdAndUpdate(
+      projectId,
+      updateData,
+      { new: true }
+    ).populate('owner', 'username email profileImage')
+     .populate('collaborators.user', 'username email profileImage');
+    
+    res.json(updatedProject);
+  } catch (err) {
+    handleError(err, res);
+  }
+};
+
+exports.deleteProject = async (req, res) => {
+  try {
+    const { projectId } = req.params;
+    
+    // Check if project exists
+    const project = await Project.findById(projectId);
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+    
+    // Check if user has permission to delete
+    if (
+      project.owner.toString() !== req.user.id.toString() && 
+      !await hasProjectAccess(req.user.id, projectId, 'delete')
+    ) {
+      return res.status(403).json({ error: 'You do not have permission to delete this project' });
+    }
+    
+    // Delete attachments
+    if (project.attachments && project.attachments.length > 0) {
+      project.attachments.forEach(attachment => {
+        const filePath = path.join(__dirname, '../uploads', attachment.filename);
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+        }
       });
     }
     
     // Delete project
     await Project.findByIdAndDelete(projectId);
     
-    res.json({
-      success: true,
-      message: 'Project deleted successfully'
-    });
-  } catch (error) {
-    console.error('Delete project error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error deleting project'
-    });
+    res.json({ message: 'Project deleted successfully' });
+  } catch (err) {
+    handleError(err, res);
   }
 };
 
-/**
- * @route   GET /api/portfolio/achievements
- * @desc    Get user's achievements
- * @access  Private
- */
-exports.getUserAchievements = async (req, res) => {
+// Collaborator Management
+exports.addCollaborator = async (req, res) => {
   try {
-    const { userId } = req.query;
+    const { projectId } = req.params;
+    const { email, permissions } = req.body;
     
-    // If userId provided, get that user's achievements, otherwise get current user's
-    const targetUserId = userId || req.user.id;
-    
-    // Validate user ID
-    if (!mongoose.Types.ObjectId.isValid(targetUserId)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid user ID'
-      });
+    // Check if project exists
+    const project = await Project.findById(projectId);
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found' });
     }
     
-    // If viewing another user's achievements, check permission
-    if (targetUserId !== req.user.id) {
-      const targetUser = await User.findById(targetUserId);
-      
-      if (!targetUser) {
-        return res.status(404).json({
-          success: false,
-          error: 'User not found'
-        });
-      }
-      
-      // Check privacy settings
-      if (targetUser.privacy?.profileVisibility === 'private') {
-        return res.status(403).json({
-          success: false,
-          error: 'Not authorized to view this user\'s achievements'
-        });
-      }
-      
-      if (targetUser.privacy?.profileVisibility === 'connections') {
-        const currentUser = await User.findById(req.user.id);
-        if (!currentUser.connections || !currentUser.connections.includes(targetUserId)) {
-          return res.status(403).json({
-            success: false,
-            error: 'Not authorized to view this user\'s achievements'
-          });
-        }
-      }
+    // Check if user has permission to manage collaborators
+    if (
+      project.owner.toString() !== req.user.id.toString() && 
+      !await hasProjectAccess(req.user.id, projectId, 'manage')
+    ) {
+      return res.status(403).json({ error: 'You do not have permission to manage collaborators' });
     }
     
-    // Get achievements based on visibility
-    const query = {
-      user: targetUserId
-    };
-    
-    // If not own profile, only show public or appropriate visibility
-    if (targetUserId !== req.user.id) {
-      const currentUser = await User.findById(req.user.id);
-      const isConnected = currentUser.connections && 
-        currentUser.connections.includes(targetUserId);
-      
-      query.$or = [
-        { visibility: 'public' },
-        { visibility: 'connections', $and: [{ $expr: { $eq: [isConnected, true] } }] }
-      ];
+    // Find user by email
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
     }
     
-    // Get achievements
-    const achievements = await Achievement.find(query)
-      .populate('endorsements.user', 'firstName lastName profilePicture')
-      .sort({ featured: -1, dateAchieved: -1 });
+    // Check if user is already the owner
+    if (project.owner.toString() === user._id.toString()) {
+      return res.status(400).json({ error: 'Owner cannot be added as a collaborator' });
+    }
     
-    res.json({
-      success: true,
-      achievements
+    // Check if user is already a collaborator
+    const existingCollaborator = project.collaborators.find(
+      c => c.user.toString() === user._id.toString()
+    );
+    
+    if (existingCollaborator) {
+      return res.status(400).json({ error: 'User is already a collaborator' });
+    }
+    
+    // Add collaborator
+    project.collaborators.push({
+      user: user._id,
+      permissions: permissions || ['view']
     });
-  } catch (error) {
-    console.error('Get user achievements error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error fetching user achievements'
-    });
+    
+    await project.save();
+    
+    // Populate collaborator info
+    const updatedProject = await Project.findById(projectId)
+      .populate('owner', 'username email profileImage')
+      .populate('collaborators.user', 'username email profileImage');
+    
+    res.json(updatedProject);
+  } catch (err) {
+    handleError(err, res);
   }
 };
 
-/**
- * @route   POST /api/portfolio/achievements
- * @desc    Create a new achievement
- * @access  Private
- */
+exports.removeCollaborator = async (req, res) => {
+  try {
+    const { projectId, userId } = req.params;
+    
+    // Check if project exists
+    const project = await Project.findById(projectId);
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+    
+    // Check if user has permission to manage collaborators
+    if (
+      project.owner.toString() !== req.user.id.toString() && 
+      !await hasProjectAccess(req.user.id, projectId, 'manage')
+    ) {
+      return res.status(403).json({ error: 'You do not have permission to manage collaborators' });
+    }
+    
+    // Check if collaborator exists
+    const collaboratorIndex = project.collaborators.findIndex(
+      c => c.user.toString() === userId
+    );
+    
+    if (collaboratorIndex === -1) {
+      return res.status(404).json({ error: 'Collaborator not found' });
+    }
+    
+    // Remove collaborator
+    project.collaborators.splice(collaboratorIndex, 1);
+    await project.save();
+    
+    // Populate collaborator info for the response
+    const updatedProject = await Project.findById(projectId)
+      .populate('owner', 'username email profileImage')
+      .populate('collaborators.user', 'username email profileImage');
+    
+    res.json(updatedProject);
+  } catch (err) {
+    handleError(err, res);
+  }
+};
+
+exports.updateCollaboratorPermissions = async (req, res) => {
+  try {
+    const { projectId, userId } = req.params;
+    const { permissions } = req.body;
+    
+    // Check if project exists
+    const project = await Project.findById(projectId);
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+    
+    // Check if user has permission to manage collaborators
+    if (
+      project.owner.toString() !== req.user.id.toString() && 
+      !await hasProjectAccess(req.user.id, projectId, 'manage')
+    ) {
+      return res.status(403).json({ error: 'You do not have permission to manage collaborators' });
+    }
+    
+    // Check if collaborator exists
+    const collaborator = project.collaborators.find(
+      c => c.user.toString() === userId
+    );
+    
+    if (!collaborator) {
+      return res.status(404).json({ error: 'Collaborator not found' });
+    }
+    
+    // Update permissions
+    collaborator.permissions = permissions;
+    await project.save();
+    
+    // Populate collaborator info for the response
+    const updatedProject = await Project.findById(projectId)
+      .populate('owner', 'username email profileImage')
+      .populate('collaborators.user', 'username email profileImage');
+    
+    res.json(updatedProject);
+  } catch (err) {
+    handleError(err, res);
+  }
+};
+
+// Achievement Management
 exports.createAchievement = async (req, res) => {
   try {
-    const { 
-      title, 
-      description, 
-      category,
-      dateAchieved,
-      issuer,
-      certificateUrl,
-      verificationUrl,
-      expirationDate,
-      visibility,
-      featured
-    } = req.body;
+    const { title, description, date, skills, visibility } = req.body;
     
-    // Validate required fields
-    if (!title || !dateAchieved) {
-      return res.status(400).json({
-        success: false,
-        error: 'Title and achievement date are required'
-      });
-    }
-    
-    // Upload image if provided
-    let imageUrl = null;
+    // Process achievement image if provided
+    let image = null;
     if (req.file) {
-      const uploadResult = await fileUploadService.uploadFile(
-        req.file,
-        'achievements',
-        {
-          transformation: [
-            { width: 800, crop: 'limit' },
-            { quality: 'auto:good' },
-            { fetch_format: 'auto' }
-          ]
-        }
-      );
-      imageUrl = uploadResult.url;
+      image = {
+        filename: req.file.filename,
+        originalname: req.file.originalname,
+        path: req.file.path,
+        mimetype: req.file.mimetype,
+        size: req.file.size
+      };
     }
     
-    // Create achievement
-    const achievement = await Achievement.create({
-      user: req.user.id,
-      title,
-      description: description || '',
-      category: category || '',
-      dateAchieved: new Date(dateAchieved),
-      issuer: issuer || '',
-      certificateUrl: certificateUrl || '',
-      verificationUrl: verificationUrl || '',
-      expirationDate: expirationDate ? new Date(expirationDate) : null,
-      image: imageUrl,
-      visibility: visibility || 'public',
-      featured: featured === true,
-      createdAt: new Date()
-    });
-    
-    res.status(201).json({
-      success: true,
-      achievement
-    });
-  } catch (error) {
-    console.error('Create achievement error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error creating achievement'
-    });
-  }
-};
-
-/**
- * @route   PUT /api/portfolio/achievements/:id
- * @desc    Update an achievement
- * @access  Private
- */
-exports.updateAchievement = async (req, res) => {
-  try {
-    const achievementId = req.params.id;
-    const {
+    const achievement = new Achievement({
       title,
       description,
-      category,
-      dateAchieved,
-      issuer,
-      certificateUrl,
-      verificationUrl,
-      expirationDate,
-      visibility,
-      featured
-    } = req.body;
-    
-    // Validate achievement ID
-    if (!mongoose.Types.ObjectId.isValid(achievementId)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid achievement ID'
-      });
-    }
-    
-    // Find achievement
-    const achievement = await Achievement.findById(achievementId);
-    
-    if (!achievement) {
-      return res.status(404).json({
-        success: false,
-        error: 'Achievement not found'
-      });
-    }
-    
-    // Check ownership
-    if (achievement.user.toString() !== req.user.id) {
-      return res.status(403).json({
-        success: false,
-        error: 'Not authorized to update this achievement'
-      });
-    }
-    
-    // Upload image if provided
-    if (req.file) {
-      const uploadResult = await fileUploadService.uploadFile(
-        req.file,
-        'achievements',
-        {
-          transformation: [
-            { width: 800, crop: 'limit' },
-            { quality: 'auto:good' },
-            { fetch_format: 'auto' }
-          ]
-        }
-      );
-      achievement.image = uploadResult.url;
-    }
-    
-    // Update fields
-    if (title) achievement.title = title;
-    if (description !== undefined) achievement.description = description;
-    if (category) achievement.category = category;
-    if (dateAchieved) achievement.dateAchieved = new Date(dateAchieved);
-    if (issuer !== undefined) achievement.issuer = issuer;
-    if (certificateUrl !== undefined) achievement.certificateUrl = certificateUrl;
-    if (verificationUrl !== undefined) achievement.verificationUrl = verificationUrl;
-    if (expirationDate) achievement.expirationDate = new Date(expirationDate);
-    if (visibility) achievement.visibility = visibility;
-    if (featured !== undefined) achievement.featured = featured;
-    
-    achievement.updatedAt = new Date();
+      date: new Date(date),
+      skills: JSON.parse(skills || '[]'),
+      visibility: visibility || 'private',
+      owner: req.user.id,
+      image,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    });
     
     await achievement.save();
     
-    res.json({
-      success: true,
-      achievement
-    });
-  } catch (error) {
-    console.error('Update achievement error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error updating achievement'
-    });
+    // If skills were provided, update or create those skills for the user
+    if (skills && skills.length > 0) {
+      const skillList = JSON.parse(skills);
+      for (const skillName of skillList) {
+        // Find or create skill
+        let skill = await Skill.findOne({ name: skillName.toLowerCase() });
+        if (!skill) {
+          skill = new Skill({ name: skillName.toLowerCase() });
+          await skill.save();
+        }
+        
+        // Add skill to user if not already there
+        await User.findByIdAndUpdate(
+          req.user.id, 
+          { $addToSet: { skills: skill._id } }
+        );
+      }
+    }
+    
+    res.status(201).json(achievement);
+  } catch (err) {
+    handleError(err, res);
   }
 };
 
-/**
- * @route   DELETE /api/portfolio/achievements/:id
- * @desc    Delete an achievement
- * @access  Private
- */
-exports.deleteAchievement = async (req, res) => {
+exports.getAchievements = async (req, res) => {
   try {
-    const achievementId = req.params.id;
+    const { userId } = req.query;
     
-    // Validate achievement ID
-    if (!mongoose.Types.ObjectId.isValid(achievementId)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid achievement ID'
-      });
+    let query = {};
+    
+    if (userId) {
+      // If requesting a specific user's achievements
+      query.owner = userId;
+      // Only return public achievements or if the owner is requesting
+      if (userId !== req.user.id) {
+        query.visibility = 'public';
+      }
+    } else {
+      // If not specified, return user's own achievements
+      query.owner = req.user.id;
     }
     
-    // Find achievement
-    const achievement = await Achievement.findById(achievementId);
+    const achievements = await Achievement.find(query)
+      .populate('owner', 'username email profileImage')
+      .populate('endorsements.user', 'username email profileImage')
+      .sort({ date: -1 });
+    
+    res.json(achievements);
+  } catch (err) {
+    handleError(err, res);
+  }
+};
+
+exports.getAchievement = async (req, res) => {
+  try {
+    const { achievementId } = req.params;
+    
+    const achievement = await Achievement.findById(achievementId)
+      .populate('owner', 'username email profileImage')
+      .populate('endorsements.user', 'username email profileImage');
     
     if (!achievement) {
-      return res.status(404).json({
-        success: false,
-        error: 'Achievement not found'
-      });
+      return res.status(404).json({ error: 'Achievement not found' });
     }
     
-    // Check ownership
-    if (achievement.user.toString() !== req.user.id) {
-      return res.status(403).json({
-        success: false,
-        error: 'Not authorized to delete this achievement'
-      });
+    // Check if user has access to the achievement
+    if (
+      achievement.visibility !== 'public' && 
+      achievement.owner.toString() !== req.user.id.toString()
+    ) {
+      return res.status(403).json({ error: 'You do not have permission to view this achievement' });
+    }
+    
+    res.json(achievement);
+  } catch (err) {
+    handleError(err, res);
+  }
+};
+
+exports.updateAchievement = async (req, res) => {
+  try {
+    const { achievementId } = req.params;
+    const { title, description, date, skills, visibility } = req.body;
+    
+    // Check if achievement exists
+    const achievement = await Achievement.findById(achievementId);
+    if (!achievement) {
+      return res.status(404).json({ error: 'Achievement not found' });
+    }
+    
+    // Check if user has permission to edit
+    if (achievement.owner.toString() !== req.user.id.toString()) {
+      return res.status(403).json({ error: 'You do not have permission to edit this achievement' });
+    }
+    
+    // Process image if provided
+    let image = achievement.image;
+    if (req.file) {
+      // Delete old image if exists
+      if (achievement.image) {
+        const filePath = path.join(__dirname, '../uploads', achievement.image.filename);
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+        }
+      }
+      
+      // Set new image
+      image = {
+        filename: req.file.filename,
+        originalname: req.file.originalname,
+        path: req.file.path,
+        mimetype: req.file.mimetype,
+        size: req.file.size
+      };
+    }
+    
+    // Prepare update object
+    const updateData = {
+      title: title || achievement.title,
+      description: description || achievement.description,
+      date: date ? new Date(date) : achievement.date,
+      visibility: visibility || achievement.visibility,
+      image,
+      updatedAt: new Date()
+    };
+    
+    // Update skills if provided
+    if (skills) {
+      updateData.skills = JSON.parse(skills);
+      
+      // Update user skills
+      const skillList = JSON.parse(skills);
+      for (const skillName of skillList) {
+        // Find or create skill
+        let skill = await Skill.findOne({ name: skillName.toLowerCase() });
+        if (!skill) {
+          skill = new Skill({ name: skillName.toLowerCase() });
+          await skill.save();
+        }
+        
+        // Add skill to user if not already there
+        await User.findByIdAndUpdate(
+          req.user.id, 
+          { $addToSet: { skills: skill._id } }
+        );
+      }
+    }
+    
+    // Update achievement
+    const updatedAchievement = await Achievement.findByIdAndUpdate(
+      achievementId,
+      updateData,
+      { new: true }
+    ).populate('owner', 'username email profileImage')
+     .populate('endorsements.user', 'username email profileImage');
+    
+    res.json(updatedAchievement);
+  } catch (err) {
+    handleError(err, res);
+  }
+};
+
+exports.deleteAchievement = async (req, res) => {
+  try {
+    const { achievementId } = req.params;
+    
+    // Check if achievement exists
+    const achievement = await Achievement.findById(achievementId);
+    if (!achievement) {
+      return res.status(404).json({ error: 'Achievement not found' });
+    }
+    
+    // Check if user has permission to delete
+    if (achievement.owner.toString() !== req.user.id.toString()) {
+      return res.status(403).json({ error: 'You do not have permission to delete this achievement' });
+    }
+    
+    // Delete image if exists
+    if (achievement.image) {
+      const filePath = path.join(__dirname, '../uploads', achievement.image.filename);
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
     }
     
     // Delete achievement
     await Achievement.findByIdAndDelete(achievementId);
     
-    res.json({
-      success: true,
-      message: 'Achievement deleted successfully'
-    });
-  } catch (error) {
-    console.error('Delete achievement error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error deleting achievement'
-    });
+    res.json({ message: 'Achievement deleted successfully' });
+  } catch (err) {
+    handleError(err, res);
   }
 };
 
-/**
- * @route   POST /api/portfolio/achievements/:id/endorse
- * @desc    Endorse an achievement
- * @access  Private
- */
 exports.endorseAchievement = async (req, res) => {
   try {
-    const achievementId = req.params.id;
+    const { achievementId } = req.params;
+    const { comment } = req.body;
     
-    // Validate achievement ID
-    if (!mongoose.Types.ObjectId.isValid(achievementId)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid achievement ID'
-      });
-    }
-    
-    // Find achievement
+    // Check if achievement exists
     const achievement = await Achievement.findById(achievementId);
-    
     if (!achievement) {
-      return res.status(404).json({
-        success: false,
-        error: 'Achievement not found'
-      });
+      return res.status(404).json({ error: 'Achievement not found' });
     }
     
-    // Cannot endorse own achievement
-    if (achievement.user.toString() === req.user.id) {
-      return res.status(400).json({
-        success: false,
-        error: 'Cannot endorse your own achievement'
-      });
+    // Check if achievement is public
+    if (achievement.visibility !== 'public') {
+      return res.status(403).json({ error: 'Cannot endorse a private achievement' });
     }
     
-    // Check if already endorsed
-    const alreadyEndorsed = achievement.endorsements.some(
-      endorsement => endorsement.user.toString() === req.user.id
+    // Check if user is trying to endorse their own achievement
+    if (achievement.owner.toString() === req.user.id.toString()) {
+      return res.status(400).json({ error: 'You cannot endorse your own achievement' });
+    }
+    
+    // Check if user has already endorsed
+    const existingEndorsement = achievement.endorsements.find(
+      e => e.user.toString() === req.user.id.toString()
     );
     
-    if (alreadyEndorsed) {
-      // Remove endorsement (toggle)
-      achievement.endorsements = achievement.endorsements.filter(
-        endorsement => endorsement.user.toString() !== req.user.id
-      );
-      
-      await achievement.save();
-      
-      return res.json({
-        success: true,
-        message: 'Endorsement removed',
-        endorsementCount: achievement.endorsements.length
+    if (existingEndorsement) {
+      // Update existing endorsement
+      existingEndorsement.comment = comment;
+      existingEndorsement.updatedAt = new Date();
+    } else {
+      // Add new endorsement
+      achievement.endorsements.push({
+        user: req.user.id,
+        comment,
+        createdAt: new Date(),
+        updatedAt: new Date()
       });
     }
-    
-    // Add endorsement
-    achievement.endorsements.push({
-      user: req.user.id,
-      date: new Date()
-    });
     
     await achievement.save();
     
-    // Notify user
-    const notificationService = require('../services/notification.service');
-    const user = await User.findById(req.user.id)
-      .select('firstName lastName');
-      
-    await notificationService.createNotification({
-      recipient: achievement.user,
-      sender: req.user.id,
-      type: 'endorsement',
-      contentType: 'achievement',
-      contentId: achievement._id,
-      text: `${user.firstName} ${user.lastName} endorsed your achievement "${achievement.title}"`,
-      actionUrl: `/portfolio/achievements/${achievement._id}`
-    });
+    // Populate endorsement info for the response
+    const updatedAchievement = await Achievement.findById(achievementId)
+      .populate('owner', 'username email profileImage')
+      .populate('endorsements.user', 'username email profileImage');
     
-    res.json({
-      success: true,
-      message: 'Achievement endorsed',
-      endorsementCount: achievement.endorsements.length
-    });
-  } catch (error) {
-    console.error('Endorse achievement error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error endorsing achievement'
-    });
+    res.json(updatedAchievement);
+  } catch (err) {
+    handleError(err, res);
   }
 };
 
-/**
- * @route   GET /api/portfolio/streaks
- * @desc    Get user's streaks
- * @access  Private
- */
-exports.getUserStreaks = async (req, res) => {
-  try {
-    const { userId } = req.query;
-    
-    // If userId provided, get that user's streaks, otherwise get current user's
-    const targetUserId = userId || req.user.id;
-    
-    // Validate user ID
-    if (!mongoose.Types.ObjectId.isValid(targetUserId)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid user ID'
-      });
-    }
-    
-    // If viewing another user's streaks, check permission
-    if (targetUserId !== req.user.id) {
-      const targetUser = await User.findById(targetUserId);
-      
-      if (!targetUser) {
-        return res.status(404).json({
-          success: false,
-          error: 'User not found'
-        });
-      }
-      
-      // Check privacy settings
-      const streaks = await Streak.find({
-        user: targetUserId,
-        visibility: 'public'
-      })
-        .populate('supporters', 'firstName lastName profilePicture')
-        .sort({ featured: -1, currentStreak: -1 });
-      
-      return res.json({
-        success: true,
-        streaks
-      });
-    }
-    
-    // Get own streaks (all visibility levels)
-    const streaks = await Streak.find({ user: req.user.id })
-      .populate('supporters', 'firstName lastName profilePicture')
-      .sort({ featured: -1, currentStreak: -1 });
-    
-    res.json({
-      success: true,
-      streaks
-    });
-  } catch (error) {
-    console.error('Get user streaks error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error fetching user streaks'
-    });
-  }
-};
-
-/**
- * @route   POST /api/portfolio/streaks
- * @desc    Create a new streak
- * @access  Private
- */
+// Streak Management
 exports.createStreak = async (req, res) => {
   try {
-    const {
+    const { title, description, goal, frequency, startDate, endDate, visibility } = req.body;
+    
+    const streak = new Streak({
       title,
       description,
-      category,
-      target,
-      customFrequency,
-      activity,
-      startDate,
-      reminderTime,
-      visibility
-    } = req.body;
-    
-    // Validate required fields
-    if (!title || !activity) {
-      return res.status(400).json({
-        success: false,
-        error: 'Title and activity are required'
-      });
-    }
-    
-    // Parse custom frequency
-    let parsedCustomFrequency = null;
-    if (target === 'custom' && customFrequency) {
-      try {
-        parsedCustomFrequency = typeof customFrequency === 'string'
-          ? JSON.parse(customFrequency)
-          : customFrequency;
-      } catch (error) {
-        console.error('Error parsing custom frequency:', error);
-      }
-    }
-    
-    // Create streak
-    const streak = await Streak.create({
-      user: req.user.id,
-      title,
-      description: description || '',
-      category: category || '',
-      target: target || 'daily',
-      customFrequency: parsedCustomFrequency,
-      activity,
-      startDate: startDate ? new Date(startDate) : new Date(),
-      reminderTime: reminderTime ? new Date(reminderTime) : null,
-      visibility: visibility || 'public',
-      currentStreak: 0,
-      longestStreak: 0,
-      totalCompletions: 0,
+      goal,
+      frequency,
+      startDate: new Date(startDate),
+      endDate: endDate ? new Date(endDate) : null,
+      visibility: visibility || 'private',
+      owner: req.user.id,
+      supporters: [],
       checkIns: [],
-      createdAt: new Date()
+      createdAt: new Date(),
+      updatedAt: new Date()
     });
-    
-    res.status(201).json({
-      success: true,
-      streak
-    });
-  } catch (error) {
-    console.error('Create streak error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error creating streak'
-    });
-  }
-};
-
-/**
- * @route   PUT /api/portfolio/streaks/:id
- * @desc    Update a streak
- * @access  Private
- */
-exports.updateStreak = async (req, res) => {
-  try {
-    const streakId = req.params.id;
-    const {
-      title,
-      description,
-      category,
-      target,
-      customFrequency,
-      activity,
-      reminderTime,
-      visibility
-    } = req.body;
-    
-    // Validate streak ID
-    if (!mongoose.Types.ObjectId.isValid(streakId)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid streak ID'
-      });
-    }
-    
-    // Find streak
-    const streak = await Streak.findById(streakId);
-    
-    if (!streak) {
-      return res.status(404).json({
-        success: false,
-        error: 'Streak not found'
-      });
-    }
-    
-    // Check ownership
-    if (streak.user.toString() !== req.user.id) {
-      return res.status(403).json({
-        success: false,
-        error: 'Not authorized to update this streak'
-      });
-    }
-    
-    // Parse custom frequency
-    let parsedCustomFrequency = streak.customFrequency;
-    if (target === 'custom' && customFrequency) {
-      try {
-        parsedCustomFrequency = typeof customFrequency === 'string'
-          ? JSON.parse(customFrequency)
-          : customFrequency;
-      } catch (error) {
-        console.error('Error parsing custom frequency:', error);
-      }
-    }
-    
-    // Update fields
-    if (title) streak.title = title;
-    if (description !== undefined) streak.description = description;
-    if (category) streak.category = category;
-    if (target) streak.target = target;
-    if (target === 'custom') streak.customFrequency = parsedCustomFrequency;
-    if (activity) streak.activity = activity;
-    if (reminderTime) streak.reminderTime = new Date(reminderTime);
-    if (visibility) streak.visibility = visibility;
-    
-    streak.updatedAt = new Date();
     
     await streak.save();
     
-    res.json({
-      success: true,
-      streak
-    });
-  } catch (error) {
-    console.error('Update streak error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error updating streak'
-    });
+    res.status(201).json(streak);
+  } catch (err) {
+    handleError(err, res);
   }
 };
 
-/**
- * @route   DELETE /api/portfolio/streaks/:id
- * @desc    Delete a streak
- * @access  Private
- */
-exports.deleteStreak = async (req, res) => {
+exports.getStreaks = async (req, res) => {
   try {
-    const streakId = req.params.id;
+    const { userId, status } = req.query;
     
-    // Validate streak ID
-    if (!mongoose.Types.ObjectId.isValid(streakId)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid streak ID'
-      });
+    let query = {};
+    
+    if (userId) {
+      // If requesting a specific user's streaks
+      query.owner = userId;
+      // Only return public streaks or if the owner is requesting
+      if (userId !== req.user.id) {
+        query.visibility = 'public';
+      }
+    } else {
+      // If not specified, return user's own streaks
+      query.owner = req.user.id;
     }
     
-    // Find streak
-    const streak = await Streak.findById(streakId);
+    // Filter by status if specified
+    if (status) {
+      const now = new Date();
+      
+      if (status === 'active') {
+        // Active streaks: either no end date or end date is in the future
+        query.$or = [
+          { endDate: { $exists: false } },
+          { endDate: null },
+          { endDate: { $gt: now } }
+        ];
+      } else if (status === 'completed') {
+        // Completed streaks: end date is in the past
+        query.endDate = { $lt: now };
+      }
+    }
+    
+    const streaks = await Streak.find(query)
+      .populate('owner', 'username email profileImage')
+      .populate('supporters.user', 'username email profileImage')
+      .sort({ updatedAt: -1 });
+    
+    // For each streak, get the most recent check-ins
+    const streaksWithCheckIns = await Promise.all(streaks.map(async (streak) => {
+      const checkIns = await StreakCheckIn.find({ streak: streak._id })
+        .sort({ date: -1 })
+        .limit(5);
+      
+      return {
+        ...streak.toObject(),
+        recentCheckIns: checkIns
+      };
+    }));
+    
+    res.json(streaksWithCheckIns);
+  } catch (err) {
+    handleError(err, res);
+  }
+};
+
+exports.getStreak = async (req, res) => {
+  try {
+    const { streakId } = req.params;
+    
+    const streak = await Streak.findById(streakId)
+      .populate('owner', 'username email profileImage')
+      .populate('supporters.user', 'username email profileImage');
     
     if (!streak) {
-      return res.status(404).json({
-        success: false,
-        error: 'Streak not found'
-      });
+      return res.status(404).json({ error: 'Streak not found' });
     }
     
-    // Check ownership
-    if (streak.user.toString() !== req.user.id) {
-      return res.status(403).json({
-        success: false,
-        error: 'Not authorized to delete this streak'
-      });
+    // Check if user has access to the streak
+    if (
+      streak.visibility !== 'public' && 
+      streak.owner.toString() !== req.user.id.toString()
+    ) {
+      return res.status(403).json({ error: 'You do not have permission to view this streak' });
+    }
+    
+    // Get all check-ins for this streak
+    const checkIns = await StreakCheckIn.find({ streak: streakId })
+      .sort({ date: -1 });
+    
+    const streakWithCheckIns = {
+      ...streak.toObject(),
+      checkIns
+    };
+    
+    res.json(streakWithCheckIns);
+  } catch (err) {
+    handleError(err, res);
+  }
+};
+
+exports.updateStreak = async (req, res) => {
+  try {
+    const { streakId } = req.params;
+    const { title, description, goal, frequency, startDate, endDate, visibility, status } = req.body;
+    
+    // Check if streak exists
+    const streak = await Streak.findById(streakId);
+    if (!streak) {
+      return res.status(404).json({ error: 'Streak not found' });
+    }
+    
+    // Check if user has permission to edit
+    if (streak.owner.toString() !== req.user.id.toString()) {
+      return res.status(403).json({ error: 'You do not have permission to edit this streak' });
+    }
+    
+    // Prepare update object
+    const updateData = {
+      title: title || streak.title,
+      description: description || streak.description,
+      goal: goal || streak.goal,
+      frequency: frequency || streak.frequency,
+      visibility: visibility || streak.visibility,
+      updatedAt: new Date()
+    };
+    
+    if (startDate) {
+      updateData.startDate = new Date(startDate);
+    }
+    
+    if (endDate === null || endDate) {
+      updateData.endDate = endDate ? new Date(endDate) : null;
+    }
+    
+    if (status === 'completed' && !updateData.endDate) {
+      updateData.endDate = new Date();
+    }
+    
+    // Update streak
+    const updatedStreak = await Streak.findByIdAndUpdate(
+      streakId,
+      updateData,
+      { new: true }
+    ).populate('owner', 'username email profileImage')
+     .populate('supporters.user', 'username email profileImage');
+    
+    // Get all check-ins for this streak
+    const checkIns = await StreakCheckIn.find({ streak: streakId })
+      .sort({ date: -1 });
+    
+    const streakWithCheckIns = {
+      ...updatedStreak.toObject(),
+      checkIns
+    };
+    
+    res.json(streakWithCheckIns);
+  } catch (err) {
+    handleError(err, res);
+  }
+};
+
+exports.deleteStreak = async (req, res) => {
+  try {
+    const { streakId } = req.params;
+    
+    // Check if streak exists
+    const streak = await Streak.findById(streakId);
+    if (!streak) {
+      return res.status(404).json({ error: 'Streak not found' });
+    }
+    
+    // Check if user has permission to delete
+    if (streak.owner.toString() !== req.user.id.toString()) {
+      return res.status(403).json({ error: 'You do not have permission to delete this streak' });
+    }
+    
+    // Delete all check-ins for this streak
+    const checkIns = await StreakCheckIn.find({ streak: streakId });
+    for (const checkIn of checkIns) {
+      // Delete evidence file if exists
+      if (checkIn.evidence && checkIn.evidence.filename) {
+        const filePath = path.join(__dirname, '../uploads', checkIn.evidence.filename);
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+        }
+      }
+      
+      // Delete check-in
+      await StreakCheckIn.findByIdAndDelete(checkIn._id);
     }
     
     // Delete streak
     await Streak.findByIdAndDelete(streakId);
     
-    res.json({
-      success: true,
-      message: 'Streak deleted successfully'
-    });
-  } catch (error) {
-    console.error('Delete streak error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error deleting streak'
-    });
+    res.json({ message: 'Streak deleted successfully' });
+  } catch (err) {
+    handleError(err, res);
   }
 };
 
-/**
- * @route   POST /api/portfolio/streaks/:id/check-in
- * @desc    Check in to a streak
- * @access  Private
- */
 exports.checkInToStreak = async (req, res) => {
   try {
-    const streakId = req.params.id;
-    const { notes, evidence } = req.body;
+    const { streakId } = req.params;
+    const { notes, date } = req.body;
     
-    // Validate streak ID
-    if (!mongoose.Types.ObjectId.isValid(streakId)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid streak ID'
-      });
-    }
-    
-    // Find streak
+    // Check if streak exists
     const streak = await Streak.findById(streakId);
-    
     if (!streak) {
-      return res.status(404).json({
-        success: false,
-        error: 'Streak not found'
-      });
+      return res.status(404).json({ error: 'Streak not found' });
     }
     
-    // Check ownership
-    if (streak.user.toString() !== req.user.id) {
-      return res.status(403).json({
-        success: false,
-        error: 'Not authorized for this streak'
-      });
+    // Check if user has permission to check in
+    if (streak.owner.toString() !== req.user.id.toString()) {
+      return res.status(403).json({ error: 'You can only check in to your own streaks' });
     }
     
-    // Check if already checked in today
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    
-    const todayCheckIn = streak.checkIns && streak.checkIns.find(checkIn => {
-      const checkInDate = new Date(checkIn.date);
-      checkInDate.setHours(0, 0, 0, 0);
-      return checkInDate.getTime() === today.getTime();
-    });
-    
-    if (todayCheckIn) {
-      return res.status(400).json({
-        success: false,
-        error: 'Already checked in today'
-      });
+    // Check if streak is active
+    const now = new Date();
+    if (streak.endDate && new Date(streak.endDate) < now) {
+      return res.status(400).json({ error: 'Cannot check in to a completed streak' });
     }
     
-    // Upload evidence if provided
-    let evidenceUrl = evidence;
+    // Process evidence if provided
+    let evidence = null;
     if (req.file) {
-      const uploadResult = await fileUploadService.uploadFile(
-        req.file,
-        'streak_evidence',
-        {
-          resource_type: 'auto'
-        }
-      );
-      evidenceUrl = uploadResult.url;
+      evidence = {
+        filename: req.file.filename,
+        originalname: req.file.originalname,
+        path: req.file.path,
+        mimetype: req.file.mimetype,
+        size: req.file.size
+      };
     }
     
     // Create check-in
-    const checkIn = {
-      date: new Date(),
-      completed: true,
-      notes: notes || '',
-      evidence: evidenceUrl || ''
-    };
+    const checkInDate = date ? new Date(date) : new Date();
     
-    // Add to check-ins
-    if (!streak.checkIns) {
-      streak.checkIns = [];
-    }
-    
-    streak.checkIns.push(checkIn);
-    
-    // Update streak metrics
-    const helper = require('../utils/helpers');
-    
-    // Calculate current streak
-    let currentStreak = 1; // Today's check-in
-    let i = streak.checkIns.length - 2; // Start from the previous check-in
-    
-    // Sort check-ins by date (newest first)
-    const sortedCheckIns = [...streak.checkIns].sort((a, b) => 
-      new Date(b.date) - new Date(a.date)
-    );
-    
-    // Calculate current streak
-    if (sortedCheckIns.length > 1) {
-      const yesterday = new Date(today);
-      yesterday.setDate(yesterday.getDate() - 1);
-      
-      const yesterdayCheckIn = sortedCheckIns.find(checkIn => {
-        const checkInDate = new Date(checkIn.date);
-        checkInDate.setHours(0, 0, 0, 0);
-        return checkInDate.getTime() === yesterday.getTime();
-      });
-      
-      if (yesterdayCheckIn) {
-        // Consecutive day, increment current streak
-        currentStreak = streak.currentStreak + 1;
-      } else {
-        // Streak broken, reset to 1
-        currentStreak = 1;
+    // Check if a check-in already exists for this date
+    const existingCheckIn = await StreakCheckIn.findOne({
+      streak: streakId,
+      date: {
+        $gte: new Date(checkInDate.setHours(0, 0, 0, 0)),
+        $lt: new Date(checkInDate.setHours(23, 59, 59, 999))
       }
-    }
-    
-    // Update streak metrics
-    streak.currentStreak = currentStreak;
-    streak.longestStreak = Math.max(streak.longestStreak || 0, currentStreak);
-    streak.totalCompletions = (streak.totalCompletions || 0) + 1;
-    
-    await streak.save();
-    
-    res.json({
-      success: true,
-      message: 'Check-in recorded',
-      currentStreak,
-      longestStreak: streak.longestStreak,
-      totalCompletions: streak.totalCompletions
     });
-  } catch (error) {
-    console.error('Streak check-in error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error checking in to streak'
-    });
-  }
-};
-
-/**
- * @route   POST /api/portfolio/streaks/:id/support
- * @desc    Support a streak
- * @access  Private
- */
-exports.supportStreak = async (req, res) => {
-  try {
-    const streakId = req.params.id;
     
-    // Validate streak ID
-    if (!mongoose.Types.ObjectId.isValid(streakId)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid streak ID'
-      });
-    }
+    let checkIn;
     
-    // Find streak
-    const streak = await Streak.findById(streakId);
-    
-    if (!streak) {
-      return res.status(404).json({
-        success: false,
-        error: 'Streak not found'
-      });
-    }
-    
-    // Cannot support own streak
-    if (streak.user.toString() === req.user.id) {
-      return res.status(400).json({
-        success: false,
-        error: 'Cannot support your own streak'
-      });
-    }
-    
-    // Check if already supporting
-    const isSupporting = streak.supporters && streak.supporters.includes(req.user.id);
-    
-    if (isSupporting) {
-      // Remove support (toggle)
-      streak.supporters = streak.supporters.filter(id => id.toString() !== req.user.id);
+    if (existingCheckIn) {
+      // Update existing check-in
+      if (evidence && existingCheckIn.evidence) {
+        // Delete old evidence file if exists
+        const filePath = path.join(__dirname, '../uploads', existingCheckIn.evidence.filename);
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+        }
+      }
       
+      checkIn = await StreakCheckIn.findByIdAndUpdate(
+        existingCheckIn._id,
+        {
+          notes: notes || existingCheckIn.notes,
+          evidence: evidence || existingCheckIn.evidence,
+          updatedAt: new Date()
+        },
+        { new: true }
+      );
+    } else {
+      // Create new check-in
+      checkIn = new StreakCheckIn({
+        streak: streakId,
+        user: req.user.id,
+        notes,
+        evidence,
+        date: checkInDate,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      });
+      
+      await checkIn.save();
+      
+      // Update streak's last check-in date
+      streak.lastCheckIn = checkInDate;
       await streak.save();
       
-      return res.json({
-        success: true,
-        message: 'Support removed',
-        supportCount: streak.supporters.length
+      // NEW CODE: Check for consecutive streak and award MKP points
+      await checkStreakRewards(streak._id, req.user.id);
+    }
+    
+    // Update streak (touch updatedAt)
+    await Streak.findByIdAndUpdate(
+      streakId,
+      { updatedAt: new Date() }
+    );
+    
+    res.status(201).json(checkIn);
+  } catch (err) {
+    handleError(err, res);
+  }
+};
+
+exports.supportStreak = async (req, res) => {
+  try {
+    const { streakId } = req.params;
+    const { message } = req.body;
+    
+    // Check if streak exists
+    const streak = await Streak.findById(streakId);
+    if (!streak) {
+      return res.status(404).json({ error: 'Streak not found' });
+    }
+    
+    // Check if streak is public
+    if (streak.visibility !== 'public') {
+      return res.status(403).json({ error: 'Cannot support a private streak' });
+    }
+    
+    // Check if user is trying to support their own streak
+    if (streak.owner.toString() === req.user.id.toString()) {
+      return res.status(400).json({ error: 'You cannot support your own streak' });
+    }
+    
+    // Check if user has already supported
+    const existingSupport = streak.supporters.find(
+      s => s.user.toString() === req.user.id.toString()
+    );
+    
+    if (existingSupport) {
+      // Update existing support
+      existingSupport.message = message;
+      existingSupport.updatedAt = new Date();
+    } else {
+      // Add new support
+      streak.supporters.push({
+        user: req.user.id,
+        message,
+        createdAt: new Date(),
+        updatedAt: new Date()
       });
     }
-    
-    // Add support
-    if (!streak.supporters) {
-      streak.supporters = [];
-    }
-    
-    streak.supporters.push(req.user.id);
     
     await streak.save();
     
-    // Notify streak owner
-    const notificationService = require('../services/notification.service');
-    const user = await User.findById(req.user.id)
-      .select('firstName lastName');
-      
-    await notificationService.createNotification({
-      recipient: streak.user,
-      sender: req.user.id,
-      type: 'streak_support',
-      contentType: 'streak',
-      contentId: streak._id,
-      text: `${user.firstName} ${user.lastName} is supporting your streak "${streak.title}"`,
-      actionUrl: `/portfolio/streaks/${streak._id}`
-    });
+    // Populate supporter info for the response
+    const updatedStreak = await Streak.findById(streakId)
+      .populate('owner', 'username email profileImage')
+      .populate('supporters.user', 'username email profileImage');
     
-    res.json({
-      success: true,
-      message: 'Streak supported',
-      supportCount: streak.supporters.length
-    });
-  } catch (error) {
-    console.error('Support streak error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error supporting streak'
-    });
+    res.json(updatedStreak);
+  } catch (err) {
+    handleError(err, res);
   }
 };
 
-/**
- * @route   PUT /api/portfolio/experience
- * @desc    Update work experience
- * @access  Private
- */
-exports.updateWorkExperience = async (req, res) => {
-  try {
-    const { experiences } = req.body;
-    
-    if (!experiences || !Array.isArray(experiences)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid experiences data'
-      });
-    }
-    
-    // Find user
-    const user = await User.findById(req.user.id);
-    
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        error: 'User not found'
-      });
-    }
-    
-    // Initialize portfolio if doesn't exist
-    if (!user.portfolio) {
-      user.portfolio = {};
-    }
-    
-    // Set work experience
-    user.portfolio.workExperience = experiences;
-    
-    await user.save();
-    
-    res.json({
-      success: true,
-      workExperience: user.portfolio.workExperience
-    });
-  } catch (error) {
-    console.error('Update work experience error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error updating work experience'
-    });
-  }
-};
-
-/**
- * @route   PUT /api/portfolio/education
- * @desc    Update education
- * @access  Private
- */
-exports.updateEducation = async (req, res) => {
-  try {
-    const { education } = req.body;
-    
-    if (!education || !Array.isArray(education)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid education data'
-      });
-    }
-    
-    // Find user
-    const user = await User.findById(req.user.id);
-    
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        error: 'User not found'
-      });
-    }
-    
-    // Initialize portfolio if doesn't exist
-    if (!user.portfolio) {
-      user.portfolio = {};
-    }
-    
-    // Set education
-    user.portfolio.education = education;
-    
-    await user.save();
-    
-    res.json({
-      success: true,
-      education: user.portfolio.education
-    });
-  } catch (error) {
-    console.error('Update education error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error updating education'
-    });
-  }
-};
-
-/**
- * @route   PUT /api/portfolio/skills
- * @desc    Update skills
- * @access  Private
- */
-exports.updateSkills = async (req, res) => {
-  try {
-    const { skills } = req.body;
-    
-    if (!skills || !Array.isArray(skills)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid skills data'
-      });
-    }
-    
-    // Find user
-    const user = await User.findById(req.user.id);
-    
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        error: 'User not found'
-      });
-    }
-    
-    // Set skills
-    user.skills = skills.map(skill => {
-      // If skill is a string, convert to object
-      if (typeof skill === 'string') {
-        return {
-          name: skill,
-          endorsements: 0
-        };
-      }
-      
-      // If existing skill object, preserve endorsement count
-      const existingSkill = user.skills?.find(s => s.name === skill.name);
-      
-      return {
-        name: skill.name,
-        endorsements: existingSkill ? existingSkill.endorsements : (skill.endorsements || 0)
-      };
-    });
-    
-    await user.save();
-    
-    res.json({
-      success: true,
-      skills: user.skills
-    });
-  } catch (error) {
-    console.error('Update skills error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error updating skills'
-    });
-  }
-};
-
-/**
- * @route   POST /api/portfolio/skills/:skillId/endorse
- * @desc    Endorse a skill
- * @access  Private
- */
+// Skills Management
 exports.endorseSkill = async (req, res) => {
   try {
-    const { userId } = req.body;
-    const { skillId } = req.params;
+    const { userId } = req.params;
+    const { skillName, endorsement } = req.body;
     
-    if (!userId) {
-      return res.status(400).json({
-        success: false,
-        error: 'User ID is required'
-      });
+    // Check if user exists
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
     }
     
-    // Validate user ID
-    if (!mongoose.Types.ObjectId.isValid(userId)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid user ID'
-      });
-    }
-    
-    // Find target user
-    const targetUser = await User.findById(userId);
-    
-    if (!targetUser) {
-      return res.status(404).json({
-        success: false,
-        error: 'User not found'
-      });
-    }
-    
-    // Cannot endorse own skills
-    if (userId === req.user.id) {
-      return res.status(400).json({
-        success: false,
-        error: 'Cannot endorse your own skills'
-      });
+    // Check if user is trying to endorse their own skill
+    if (userId === req.user.id.toString()) {
+      return res.status(400).json({ error: 'You cannot endorse your own skills' });
     }
     
     // Find the skill
-    if (!targetUser.skills) {
-      return res.status(404).json({
-        success: false,
-        error: 'No skills found'
+    const skill = await Skill.findOne({ name: skillName.toLowerCase() });
+    if (!skill) {
+      return res.status(404).json({ error: 'Skill not found' });
+    }
+    
+    // Check if the user has the skill
+    const userHasSkill = user.skills.some(s => s.toString() === skill._id.toString());
+    if (!userHasSkill) {
+      return res.status(400).json({ error: 'User does not have this skill' });
+    }
+    
+    // Check if endorsement already exists
+    const existingEndorsementIndex = user.skillEndorsements.findIndex(
+      e => e.skill.toString() === skill._id.toString() && e.endorser.toString() === req.user.id.toString()
+    );
+    
+    if (existingEndorsementIndex !== -1) {
+      // Update existing endorsement
+      user.skillEndorsements[existingEndorsementIndex].comment = endorsement;
+      user.skillEndorsements[existingEndorsementIndex].updatedAt = new Date();
+    } else {
+      // Add new endorsement
+      user.skillEndorsements.push({
+        skill: skill._id,
+        endorser: req.user.id,
+        comment: endorsement,
+        createdAt: new Date(),
+        updatedAt: new Date()
       });
     }
     
-    const skillIndex = targetUser.skills.findIndex(s => s._id.toString() === skillId);
+    await user.save();
     
-    if (skillIndex === -1) {
-      return res.status(404).json({
-        success: false,
-        error: 'Skill not found'
-      });
-    }
-    
-    // Check if already endorsed
-    const skillEndorsers = targetUser.skillEndorsers || {};
-    const endorsers = skillEndorsers[skillId] || [];
-    const hasEndorsed = endorsers.includes(req.user.id);
-    
-    // Initialize if doesn't exist
-    if (!targetUser.skillEndorsers) {
-      targetUser.skillEndorsers = {};
-    }
-    
-    if (!targetUser.skillEndorsers[skillId]) {
-      targetUser.skillEndorsers[skillId] = [];
-    }
-    
-    if (hasEndorsed) {
-      // Remove endorsement
-      targetUser.skillEndorsers[skillId] = targetUser.skillEndorsers[skillId].filter(
-        id => id.toString() !== req.user.id
-      );
-      
-      targetUser.skills[skillIndex].endorsements = Math.max(0, targetUser.skills[skillIndex].endorsements - 1);
-      
-      await targetUser.save();
-      
-      return res.json({
-        success: true,
-        message: 'Endorsement removed',
-        endorsements: targetUser.skills[skillIndex].endorsements
-      });
-    }
-    
-    // Add endorsement
-    targetUser.skillEndorsers[skillId].push(req.user.id);
-    targetUser.skills[skillIndex].endorsements = (targetUser.skills[skillIndex].endorsements || 0) + 1;
-    
-    await targetUser.save();
-    
-    // Notify user
-    const notificationService = require('../services/notification.service');
-    const user = await User.findById(req.user.id)
-      .select('firstName lastName');
-      
-    await notificationService.createNotification({
-      recipient: userId,
-      sender: req.user.id,
-      type: 'endorsement',
-      contentType: 'skill',
-      contentId: skillId,
-      text: `${user.firstName} ${user.lastName} endorsed your ${targetUser.skills[skillIndex].name} skill`,
-      actionUrl: `/profile/${userId}`
-    });
-    
-    res.json({
-      success: true,
-      message: 'Skill endorsed',
-      endorsements: targetUser.skills[skillIndex].endorsements
-    });
-  } catch (error) {
-    console.error('Endorse skill error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error endorsing skill'
-    });
+    res.json({ message: 'Skill endorsed successfully' });
+  } catch (err) {
+    handleError(err, res);
   }
 };
 
-module.exports = exports;
+exports.getUserSkills = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    // Get user with populated skills and endorsements
+    const user = await User.findById(userId)
+      .populate('skills')
+      .populate({
+        path: 'skillEndorsements.endorser',
+        select: 'username email profileImage'
+      })
+      .populate({
+        path: 'skillEndorsements.skill',
+        select: 'name'
+      });
+    
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    // Group endorsements by skill
+    const skillsWithEndorsements = user.skills.map(skill => {
+      const endorsements = user.skillEndorsements.filter(
+        e => e.skill._id.toString() === skill._id.toString()
+      );
+      
+      return {
+        _id: skill._id,
+        name: skill.name,
+        endorsements
+      };
+    });
+    
+    res.json(skillsWithEndorsements);
+  } catch (err) {
+    handleError(err, res);
+  }
+};
+
+exports.addSkill = async (req, res) => {
+  try {
+    const { name } = req.body;
+    
+    // Find or create skill
+    let skill = await Skill.findOne({ name: name.toLowerCase() });
+    if (!skill) {
+      skill = new Skill({ name: name.toLowerCase() });
+      await skill.save();
+    }
+    
+    // Add skill to user if not already there
+    const user = await User.findByIdAndUpdate(
+      req.user.id, 
+      { $addToSet: { skills: skill._id } },
+      { new: true }
+    ).populate('skills');
+    
+    res.json(user.skills);
+  } catch (err) {
+    handleError(err, res);
+  }
+};
+
+exports.removeSkill = async (req, res) => {
+  try {
+    const { skillName } = req.params;
+    
+    // Find skill
+    const skill = await Skill.findOne({ name: skillName.toLowerCase() });
+    if (!skill) {
+      return res.status(404).json({ error: 'Skill not found' });
+    }
+    
+    // Remove skill from user
+    await User.findByIdAndUpdate(
+      req.user.id, 
+      { $pull: { skills: skill._id } }
+    );
+    
+    // Also remove any endorsements for this skill
+    await User.findByIdAndUpdate(
+      req.user.id,
+      { $pull: { skillEndorsements: { skill: skill._id } } }
+    );
+    
+    // Get updated user skills
+    const user = await User.findById(req.user.id).populate('skills');
+    
+    res.json(user.skills);
+  } catch (err) {
+    handleError(err, res);
+  }
+};
+
+// Recommendations
+exports.createRecommendation = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { text, relationship } = req.body;
+    
+    // Check if target user exists
+    const targetUser = await User.findById(userId);
+    if (!targetUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    // Check if user is trying to recommend themselves
+    if (userId === req.user.id.toString()) {
+      return res.status(400).json({ error: 'You cannot recommend yourself' });
+    }
+    
+    // Check if recommendation already exists
+    const existingRecommendation = await Recommendation.findOne({
+      from: req.user.id,
+      to: userId
+    });
+    
+    if (existingRecommendation) {
+      return res.status(400).json({ error: 'You have already recommended this user' });
+    }
+    
+    // Create recommendation
+    const recommendation = new Recommendation({
+      from: req.user.id,
+      to: userId,
+      text,
+      relationship,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    });
+    
+    await recommendation.save();
+    
+    // Populate user info for the response
+    const populatedRecommendation = await Recommendation.findById(recommendation._id)
+      .populate('from', 'username email profileImage')
+      .populate('to', 'username email profileImage');
+    
+    res.status(201).json(populatedRecommendation);
+  } catch (err) {
+    handleError(err, res);
+  }
+};
+
+exports.getReceivedRecommendations = async (req, res) => {
+  try {
+    const userId = req.query.userId || req.user.id;
+    
+    // Check if requesting other user's recommendations
+    if (userId !== req.user.id.toString()) {
+      // Only allow viewing public profiles' recommendations
+      const user = await User.findById(userId);
+      if (!user || user.profileVisibility !== 'public') {
+        return res.status(403).json({ error: 'Cannot view recommendations for a private profile' });
+      }
+    }
+    
+    const recommendations = await Recommendation.find({ to: userId })
+      .populate('from', 'username email profileImage')
+      .sort({ createdAt: -1 });
+    
+    res.json(recommendations);
+  } catch (err) {
+    handleError(err, res);
+  }
+};
+
+exports.getGivenRecommendations = async (req, res) => {
+  try {
+    const recommendations = await Recommendation.find({ from: req.user.id })
+      .populate('to', 'username email profileImage')
+      .sort({ createdAt: -1 });
+    
+    res.json(recommendations);
+  } catch (err) {
+    handleError(err, res);
+  }
+};
+
+exports.updateRecommendation = async (req, res) => {
+  try {
+    const { recommendationId } = req.params;
+    const { text, relationship } = req.body;
+    
+    // Check if recommendation exists
+    const recommendation = await Recommendation.findById(recommendationId);
+    if (!recommendation) {
+      return res.status(404).json({ error: 'Recommendation not found' });
+    }
+    
+    // Check if user has permission to edit
+    if (recommendation.from.toString() !== req.user.id.toString()) {
+      return res.status(403).json({ error: 'You do not have permission to edit this recommendation' });
+    }
+    
+    // Update recommendation
+    const updatedRecommendation = await Recommendation.findByIdAndUpdate(
+      recommendationId,
+      {
+        text: text || recommendation.text,
+        relationship: relationship || recommendation.relationship,
+        updatedAt: new Date()
+      },
+      { new: true }
+    ).populate('from', 'username email profileImage')
+     .populate('to', 'username email profileImage');
+    
+    res.json(updatedRecommendation);
+  } catch (err) {
+    handleError(err, res);
+  }
+};
+
+exports.deleteRecommendation = async (req, res) => {
+  try {
+    const { recommendationId } = req.params;
+    
+    // Check if recommendation exists
+    const recommendation = await Recommendation.findById(recommendationId);
+    if (!recommendation) {
+      return res.status(404).json({ error: 'Recommendation not found' });
+    }
+    
+    // Check if user has permission to delete
+    if (recommendation.from.toString() !== req.user.id.toString()) {
+      return res.status(403).json({ error: 'You do not have permission to delete this recommendation' });
+    }
+    
+    // Delete recommendation
+    await Recommendation.findByIdAndDelete(recommendationId);
+    
+    res.json({ message: 'Recommendation deleted successfully' });
+  } catch (err) {
+    handleError(err, res);
+  }
+};
+const checkStreakRewards = async (streakId, userId) => {
+  try {
+    // Get all check-ins for this streak, sorted by date
+    const checkIns = await StreakCheckIn.find({ streak: streakId })
+      .sort({ date: 1 });
+    
+    if (checkIns.length < 7) {
+      // Not enough check-ins yet to qualify for rewards
+      return;
+    }
+    
+    // Analyze check-ins to find consecutive days
+    const consecutiveDays = getConsecutiveDays(checkIns);
+    
+    // If we have at least 7 consecutive days
+    if (consecutiveDays >= 7) {
+      // Calculate rewards: 20 MKP points for each day after the 7th day
+      const rewardDays = consecutiveDays - 7 + 1; // +1 to include the current day
+      const points = Math.max(0, rewardDays) * 20;
+      
+      if (points > 0) {
+        // Award points to user's MK wallet
+        await updateMKWallet(userId, points);
+      }
+    }
+  } catch (error) {
+    console.error('Error checking streak rewards:', error);
+  }
+};
+
+/**
+ * Calculate the number of consecutive days in check-ins
+ * @param {Array} checkIns - Array of check-ins sorted by date
+ * @returns {number} - Number of consecutive days
+ */
+const getConsecutiveDays = (checkIns) => {
+  if (checkIns.length === 0) return 0;
+  
+  let consecutiveDays = 1;
+  let maxConsecutiveDays = 1;
+  
+  for (let i = 1; i < checkIns.length; i++) {
+    const currentDate = new Date(checkIns[i].date);
+    const previousDate = new Date(checkIns[i-1].date);
+    
+    // Check if dates are consecutive (1 day apart)
+    const diffTime = Math.abs(currentDate - previousDate);
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    
+    if (diffDays === 1) {
+      consecutiveDays++;
+      maxConsecutiveDays = Math.max(maxConsecutiveDays, consecutiveDays);
+    } else {
+      // Reset counter for non-consecutive days
+      consecutiveDays = 1;
+    }
+  }
+  
+  return maxConsecutiveDays;
+};
+
+/**
+ * Update user's MK wallet with earned points
+ * @param {string} userId - The user's ID
+ * @param {number} points - Points to add to wallet
+ */
+const updateMKWallet = async (userId, points) => {
+  try {
+    // Find the user
+    const user = await User.findById(userId);
+    if (!user) {
+      throw new Error('User not found');
+    }
+    
+    // Initialize mkWallet if it doesn't exist
+    if (!user.mkWallet) {
+      user.mkWallet = 0;
+    }
+    
+    // Add points
+    user.mkWallet += points;
+    
+    // Save user
+    await user.save();
+    
+    // Optional: Create a transaction record or notification
+    console.log(`Added ${points} MKP points to user ${userId} for streak achievement`);
+    
+    // Could also add to a transaction history collection if needed
+    // const transaction = new MKTransaction({
+    //   user: userId,
+    //   amount: points,
+    //   type: 'streak_reward',
+    //   description: `Awarded for ${consecutiveDays} day streak`,
+    //   createdAt: new Date()
+    // });
+    // await transaction.save();
+    
+  } catch (error) {
+    console.error('Error updating MK wallet:', error);
+  }
+};

@@ -1,92 +1,35 @@
 // middleware/auth.middleware.js
 const jwt = require('jsonwebtoken');
 const User = require('../models/user/user.js');
-
+  
+const JWT_SECRET = process.env.JWT_SECRET
 /**
  * Verify JWT token and authenticate user
  */
-exports.authenticateToken = async (req, res, next) => {
-  try {
-    // Get token from header
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
-    
-    if (!token) {
-      return res.status(401).json({
-        success: false,
-        error: 'Authentication required'
-      });
-    }
-    
-    // Verify token
-    jwt.verify(token, process.env.JWT_SECRET || 'your-jwt-secret-key', async (err, decoded) => {
-      if (err) {
-        // Token expired or invalid
-        if (err.name === 'TokenExpiredError') {
-          return res.status(401).json({
-            success: false,
-            error: 'Token expired'
-          });
-        }
-        
-        return res.status(401).json({
-          success: false,
-          error: 'Invalid token'
-        });
-      }
-      
-      // Check if user exists
-      const user = await User.findById(decoded.id);
-      
-      if (!user) {
-        return res.status(401).json({
-          success: false,
-          error: 'User not found'
-        });
-      }
-      
-      // Check if token is in active sessions
-      if (user.security && user.security.activeLoginSessions) {
-        const activeSession = user.security.activeLoginSessions.find(
-          session => session.token === token
-        );
-        
-        if (!activeSession) {
-          return res.status(401).json({
-            success: false,
-            error: 'Session expired or revoked'
-          });
-        }
-        
-        // Check if session is expired
-        if (activeSession.expiresAt < new Date()) {
-          return res.status(401).json({
-            success: false,
-            error: 'Session expired'
-          });
-        }
-        
-        // Update last active time
-        activeSession.lastActive = new Date();
-        await user.save();
-      }
-      
-      // Add user to request object
-      req.user = {
-        id: user._id,
-        email: user.email
-      };
-      
-      next();
-    });
-  } catch (error) {
-    console.error('Authentication error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Authentication error'
-    });
+exports.authenticateToken = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) {
+    return res.status(401).json({ error: 'Authentication token required' });
   }
+
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) {
+      return res.status(403).json({ error: 'Invalid or expired token' });
+    }
+    req.user = user;
+    next();
+  });
+  const isAdmin = (req, res, next) => {
+    if (!req.user.isAdmin) {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+    next();
+  };
+  
 };
+
 
 /**
  * Check if user is resource owner

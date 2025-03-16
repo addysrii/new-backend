@@ -1,300 +1,287 @@
-// controllers/story.controller.js
-const Story = require('../models/content/story.js');
-const Highlight = require('../models/content/highlight.js');
-const User = require('../models/user/user.js');
-const fileUploadService = require('../services/file-upload.service.js');
-const notificationService = require('../services/notification.service.js');
-const mongoose = require('mongoose');
+const { Story, Highlight } = require('../models/Story');
+const User = require('../models/User');
+const fs = require('fs');
+const path = require('path');
 
-/**
- * @route   POST /api/stories
- * @desc    Create a new story
- * @access  Private
- */
+// Helper function to handle errors
+const handleError = (err, res) => {
+  console.error(err);
+  return res.status(500).json({ error: 'Server error', details: err.message });
+};
+
+// Story Management
 exports.createStory = async (req, res) => {
   try {
-    const { content, location, mentions, backgroundStyle, privacy, stickers, linkUrl } = req.body;
+    const { caption, location, mentions, hashtags, visibility } = req.body;
     
-    // Check for media file
+    // Check if media is provided
     if (!req.file) {
-      return res.status(400).json({
-        success: false,
-        error: 'Media file is required for story'
-      });
+      return res.status(400).json({ error: 'Media content is required for a story' });
     }
     
-    // Determine media type from mimetype
-    const mediaType = req.file.mimetype.startsWith('image/') ? 'image' : 'video';
+    // Process media file
+    const media = {
+      filename: req.file.filename,
+      originalname: req.file.originalname,
+      path: req.file.path,
+      mimetype: req.file.mimetype,
+      size: req.file.size
+    };
     
-    // Upload media to cloud storage
-    const uploadResult = await fileUploadService.uploadFile(
-      req.file,
-      'stories',
-      {
-        transformation: mediaType === 'image' 
-          ? [{ width: 1080, crop: 'limit' }, { quality: 'auto:good' }]
-          : [{ quality: 'auto:good' }]
-      }
-    );
-    
-    // Parse location data
-    let locationData = null;
-    if (location) {
-      try {
-        locationData = typeof location === 'string' ? JSON.parse(location) : location;
-      } catch (error) {
-        console.error('Error parsing location data:', error);
-      }
-    }
-    
-    // Parse mentions data
-    let mentionsData = [];
+    // Process mentions if provided
+    let parsedMentions = [];
     if (mentions) {
-      try {
-        mentionsData = typeof mentions === 'string' ? JSON.parse(mentions) : mentions;
-      } catch (error) {
-        console.error('Error parsing mentions data:', error);
-      }
+      parsedMentions = JSON.parse(mentions).map(mention => ({
+        user: mention.userId,
+        position: mention.position
+      }));
     }
     
-    // Parse background style data
-    let backgroundStyleData = null;
-    if (backgroundStyle) {
-      try {
-        backgroundStyleData = typeof backgroundStyle === 'string' ? JSON.parse(backgroundStyle) : backgroundStyle;
-      } catch (error) {
-        console.error('Error parsing background style data:', error);
-      }
+    // Process hashtags if provided
+    let parsedHashtags = [];
+    if (hashtags) {
+      parsedHashtags = JSON.parse(hashtags);
     }
     
-    // Parse stickers data
-    let stickersData = [];
-    if (stickers) {
-      try {
-        stickersData = typeof stickers === 'string' ? JSON.parse(stickers) : stickers;
-      } catch (error) {
-        console.error('Error parsing stickers data:', error);
-      }
+    // Process location if provided
+    let storyLocation = null;
+    if (location) {
+      const parsedLocation = JSON.parse(location);
+      storyLocation = {
+        type: 'Point',
+        coordinates: [parsedLocation.longitude, parsedLocation.latitude],
+        name: parsedLocation.name
+      };
     }
     
-    // Create story
-    const story = await Story.create({
-      author: req.user.id,
-      content: content || '',
-      mediaUrl: uploadResult.url,
-      mediaType,
-      location: locationData,
-      backgroundStyle: backgroundStyleData,
-      mentions: mentionsData,
-      stickers: stickersData,
-      linkUrl,
-      privacy: privacy || 'public',
-      createdAt: new Date()
+    // Create the story
+    const story = new Story({
+      owner: req.user.id,
+      media,
+      caption,
+      location: storyLocation,
+      mentions: parsedMentions,
+      hashtags: parsedHashtags,
+      visibility: visibility || 'public',
+      createdAt: new Date(),
+      updatedAt: new Date()
     });
     
-    // Notify mentioned users
-    if (mentionsData.length > 0) {
-      const user = await User.findById(req.user.id)
-        .select('firstName lastName');
-      
-      for (const mention of mentionsData) {
-        // Create notification
-        await notificationService.createNotification({
-          recipient: mention.user,
-          sender: req.user.id,
-          type: 'mention',
-          contentType: 'story',
-          contentId: story._id,
-          text: `${user.firstName} ${user.lastName} mentioned you in a story`,
-          actionUrl: `/stories/${story._id}`
-        });
-      }
+    await story.save();
+    
+    // Create notifications for mentioned users
+    if (parsedMentions.length > 0) {
+      // Assuming you have a notification service or model
+      // This would be implemented in your notification controller
     }
     
-    // Populate author data
-    await story.populate('author', 'firstName lastName profilePicture');
-    
-    res.status(201).json({
-      success: true,
-      story
-    });
-  } catch (error) {
-    console.error('Create story error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error creating story'
-    });
+    res.status(201).json(story);
+  } catch (err) {
+    handleError(err, res);
   }
 };
 
-/**
- * @route   GET /api/stories
- * @desc    Get stories feed
- * @access  Private
- */
 exports.getStories = async (req, res) => {
   try {
-    const user = await User.findById(req.user.id)
-      .select('following connections');
+    const { userId } = req.query;
     
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        error: 'User not found'
-      });
-    }
+    // Get the current user's connections and close friends
+    const currentUser = await User.findById(req.user.id).select('connections closeFriends');
     
-    // Combine following and connections for story feed
-    const followingIds = user.following || [];
-    const connectionIds = user.connections || [];
-    
-    const userIds = [
-      ...new Set([
-        ...followingIds.map(id => id.toString()),
-        ...connectionIds.map(id => id.toString()),
-        req.user.id
-      ])
-    ];
-    
-    // Get active stories (not expired)
-    // Stories expire after 24 hours (handled by TTL index in model)
-    const stories = await Story.find({
-      author: { $in: userIds },
-      createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } // Last 24 hours
-    })
-      .populate('author', 'firstName lastName profilePicture')
-      .sort({ createdAt: -1 });
-    
-    // Group stories by author
-    const storiesMap = {};
-    
-    stories.forEach(story => {
-      const authorId = story.author._id.toString();
+    // If userId is provided, get stories for that specific user
+    if (userId) {
+      // Check if the user is viewing their own stories
+      const isOwnStories = userId === req.user.id;
       
-      if (!storiesMap[authorId]) {
-        storiesMap[authorId] = {
-          user: {
-            _id: story.author._id,
-            firstName: story.author.firstName,
-            lastName: story.author.lastName,
-            profilePicture: story.author.profilePicture
-          },
-          stories: []
-        };
+      // Check if the user is a connection
+      const isConnection = currentUser.connections.some(
+        conn => conn.user.toString() === userId
+      );
+      
+      // Check if the user is a close friend
+      const isCloseFriend = currentUser.closeFriends.some(
+        friend => friend.toString() === userId
+      );
+      
+      // Build the query based on the relationships
+      let query = { owner: userId };
+      
+      if (!isOwnStories) {
+        // Only include stories the user has permission to see
+        if (isCloseFriend) {
+          // Close friends can see all stories
+          query.visibility = { $in: ['public', 'connections', 'close_friends'] };
+        } else if (isConnection) {
+          // Connections can see public and connection stories
+          query.visibility = { $in: ['public', 'connections'] };
+        } else {
+          // Others can only see public stories
+          query.visibility = 'public';
+        }
       }
       
-      // Check if user has viewed this story
-      const hasViewed = story.viewers?.some(v => v.user.toString() === req.user.id);
+      const stories = await Story.find(query)
+        .populate('owner', 'username email profileImage')
+        .sort({ createdAt: -1 });
       
-      storiesMap[authorId].stories.push({
-        ...story.toObject(),
-        hasViewed
-      });
-    });
+      return res.json(stories);
+    }
     
-    // Convert map to array
-    const storyFeed = Object.values(storiesMap);
+    // If no userId is provided, get stories from connections and close friends
+    const connectionIds = currentUser.connections.map(conn => conn.user);
     
-    // Sort by latest story and whether stories have been viewed
-    storyFeed.sort((a, b) => {
-      // Check if any stories are unviewed
-      const aHasUnviewed = a.stories.some(s => !s.hasViewed);
-      const bHasUnviewed = b.stories.some(s => !s.hasViewed);
-      
-      // Show users with unviewed stories first
-      if (aHasUnviewed && !bHasUnviewed) return -1;
-      if (!aHasUnviewed && bHasUnviewed) return 1;
-      
-      // Otherwise sort by latest story
-      const aLatest = Math.max(...a.stories.map(s => new Date(s.createdAt).getTime()));
-      const bLatest = Math.max(...b.stories.map(s => new Date(s.createdAt).getTime()));
-      
-      return bLatest - aLatest;
-    });
+    // Get all stories from connections (public and connections visibility)
+    const connectionStories = await Story.find({
+      owner: { $in: connectionIds },
+      visibility: { $in: ['public', 'connections'] }
+    }).populate('owner', 'username email profileImage');
     
-    res.json({
-      success: true,
-      stories: storyFeed
-    });
-  } catch (error) {
-    console.error('Get stories error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error fetching stories'
-    });
+    // Get all stories from close friends (all visibilities)
+    const closeFriendStories = await Story.find({
+      owner: { $in: currentUser.closeFriends }
+    }).populate('owner', 'username email profileImage');
+    
+    // Combine and sort the stories
+    const allStories = [...connectionStories, ...closeFriendStories]
+      .sort((a, b) => b.createdAt - a.createdAt);
+    
+    // Remove duplicates
+    const uniqueStories = [];
+    const storyIds = new Set();
+    
+    for (const story of allStories) {
+      if (!storyIds.has(story._id.toString())) {
+        storyIds.add(story._id.toString());
+        uniqueStories.push(story);
+      }
+    }
+    
+    res.json(uniqueStories);
+  } catch (err) {
+    handleError(err, res);
   }
 };
 
-/**
- * @route   GET /api/stories/:id
- * @desc    Get story by ID
- * @access  Private
- */
-exports.getStoryById = async (req, res) => {
+exports.getStory = async (req, res) => {
   try {
-    const storyId = req.params.id;
-    
-    // Validate story ID
-    if (!mongoose.Types.ObjectId.isValid(storyId)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid story ID'
-      });
-    }
+    const { storyId } = req.params;
     
     // Find story
     const story = await Story.findById(storyId)
-      .populate('author', 'firstName lastName profilePicture')
-      .populate('mentions.user', 'firstName lastName profilePicture')
-      .populate('viewers.user', 'firstName lastName profilePicture')
-      .populate('reactions.user', 'firstName lastName profilePicture')
-      .populate('replies.user', 'firstName lastName profilePicture');
+      .populate('owner', 'username email profileImage')
+      .populate('reactions.user', 'username email profileImage')
+      .populate('replies.user', 'username email profileImage');
     
     if (!story) {
-      return res.status(404).json({
-        success: false,
-        error: 'Story not found'
-      });
+      return res.status(404).json({ error: 'Story not found' });
     }
     
-    // Check privacy settings
-    if (story.author._id.toString() !== req.user.id) {
-      const user = await User.findById(req.user.id);
-      
-      if (story.privacy === 'close-friends') {
-        // Check if user is in close friends
-        const author = await User.findById(story.author._id);
-        if (!author.closeFriends || !author.closeFriends.includes(req.user.id)) {
-          return res.status(403).json({
-            success: false,
-            error: 'Not authorized to view this story'
-          });
+    // Check if story is expired
+    if (story.isExpired) {
+      return res.status(404).json({ error: 'Story has expired' });
+    }
+    
+    // Check if user has permission to view
+    const isOwner = story.owner._id.toString() === req.user.id;
+    
+    if (!isOwner) {
+      // Check visibility permissions
+      if (story.visibility === 'close_friends') {
+        // Check if user is in the owner's close friends
+        const storyOwner = await User.findById(story.owner._id)
+          .select('closeFriends');
+        
+        const isCloseFriend = storyOwner.closeFriends.some(
+          friend => friend.toString() === req.user.id
+        );
+        
+        if (!isCloseFriend) {
+          return res.status(403).json({ error: 'You do not have permission to view this story' });
         }
-      } else if (story.privacy === 'connections') {
-        // Check if user is connected
-        if (!user.connections || !user.connections.includes(story.author._id.toString())) {
-          return res.status(403).json({
-            success: false,
-            error: 'Not authorized to view this story'
-          });
-        }
-      } else if (story.privacy === 'followers') {
-        // Check if user is a follower
-        const author = await User.findById(story.author._id);
-        if (!author.followers || !author.followers.includes(req.user.id)) {
-          return res.status(403).json({
-            success: false,
-            error: 'Not authorized to view this story'
-          });
+      } else if (story.visibility === 'connections') {
+        // Check if user is in the owner's connections
+        const storyOwner = await User.findById(story.owner._id)
+          .select('connections');
+        
+        const isConnection = storyOwner.connections.some(
+          conn => conn.user.toString() === req.user.id
+        );
+        
+        if (!isConnection) {
+          return res.status(403).json({ error: 'You do not have permission to view this story' });
         }
       }
     }
     
-    // Check if story is already viewed by user
-    const isViewed = story.viewers && story.viewers.some(v => v.user._id.toString() === req.user.id);
+    res.json(story);
+  } catch (err) {
+    handleError(err, res);
+  }
+};
+
+exports.deleteStory = async (req, res) => {
+  try {
+    const { storyId } = req.params;
     
-    // Add to viewers if not already viewed
-    if (!isViewed) {
+    // Find story
+    const story = await Story.findById(storyId);
+    
+    if (!story) {
+      return res.status(404).json({ error: 'Story not found' });
+    }
+    
+    // Check if user has permission to delete
+    if (story.owner.toString() !== req.user.id) {
+      return res.status(403).json({ error: 'You do not have permission to delete this story' });
+    }
+    
+    // Delete media file
+    if (story.media && story.media.filename) {
+      const filePath = path.join(__dirname, '../uploads', story.media.filename);
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+    }
+    
+    // Remove the story from all highlights
+    await Highlight.updateMany(
+      { stories: storyId },
+      { $pull: { stories: storyId } }
+    );
+    
+    // Delete the story
+    await Story.findByIdAndDelete(storyId);
+    
+    res.json({ message: 'Story deleted successfully' });
+  } catch (err) {
+    handleError(err, res);
+  }
+};
+
+// Story Interactions
+exports.viewStory = async (req, res) => {
+  try {
+    const { storyId } = req.params;
+    
+    // Find story
+    const story = await Story.findById(storyId);
+    
+    if (!story) {
+      return res.status(404).json({ error: 'Story not found' });
+    }
+    
+    // Check if story is expired
+    if (story.isExpired) {
+      return res.status(404).json({ error: 'Story has expired' });
+    }
+    
+    // Check if user has already viewed the story
+    const alreadyViewed = story.viewers.some(
+      viewer => viewer.user.toString() === req.user.id
+    );
+    
+    // Add user to viewers if they haven't viewed already
+    if (!alreadyViewed) {
       story.viewers.push({
         user: req.user.id,
         viewedAt: new Date()
@@ -303,437 +290,187 @@ exports.getStoryById = async (req, res) => {
       await story.save();
     }
     
-    res.json({
-      success: true,
-      story
-    });
-  } catch (error) {
-    console.error('Get story error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error fetching story'
-    });
+    res.json({ message: 'Story viewed successfully' });
+  } catch (err) {
+    handleError(err, res);
   }
 };
 
-/**
- * @route   POST /api/stories/:id/view
- * @desc    Mark story as viewed
- * @access  Private
- */
-exports.viewStory = async (req, res) => {
-  try {
-    const storyId = req.params.id;
-    
-    // Validate story ID
-    if (!mongoose.Types.ObjectId.isValid(storyId)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid story ID'
-      });
-    }
-    
-    // Find story
-    const story = await Story.findById(storyId);
-    
-    if (!story) {
-      return res.status(404).json({
-        success: false,
-        error: 'Story not found'
-      });
-    }
-    
-    // Check if already viewed
-    const isViewed = story.viewers && story.viewers.some(v => v.user.toString() === req.user.id);
-    
-    if (isViewed) {
-      return res.json({
-        success: true,
-        message: 'Story already viewed'
-      });
-    }
-    
-    // Add to viewers
-    story.viewers.push({
-      user: req.user.id,
-      viewedAt: new Date()
-    });
-    
-    await story.save();
-    
-    res.json({
-      success: true,
-      message: 'Story marked as viewed'
-    });
-  } catch (error) {
-    console.error('View story error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error marking story as viewed'
-    });
-  }
-};
-
-/**
- * @route   POST /api/stories/:id/react
- * @desc    React to a story
- * @access  Private
- */
 exports.reactToStory = async (req, res) => {
   try {
-    const storyId = req.params.id;
-    const { reaction } = req.body;
+    const { storyId } = req.params;
+    const { type } = req.body;
     
-    // Validate story ID
-    if (!mongoose.Types.ObjectId.isValid(storyId)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid story ID'
-      });
-    }
-    
-    // Validate reaction
-    if (!reaction || !['heart', 'laugh', 'wow', 'sad', 'angry', 'fire', 'clap', 'question'].includes(reaction)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid reaction'
-      });
+    // Validate reaction type
+    const validReactions = ['like', 'love', 'haha', 'wow', 'sad', 'angry'];
+    if (!validReactions.includes(type)) {
+      return res.status(400).json({ error: 'Invalid reaction type' });
     }
     
     // Find story
     const story = await Story.findById(storyId);
     
     if (!story) {
-      return res.status(404).json({
-        success: false,
-        error: 'Story not found'
-      });
+      return res.status(404).json({ error: 'Story not found' });
     }
     
-    // Check if already reacted
-    const existingReaction = story.reactions && 
-      story.reactions.findIndex(r => r.user.toString() === req.user.id);
+    // Check if story is expired
+    if (story.isExpired) {
+      return res.status(404).json({ error: 'Story has expired' });
+    }
     
-    if (existingReaction !== -1) {
+    // Check if user has already reacted
+    const existingReactionIndex = story.reactions.findIndex(
+      reaction => reaction.user.toString() === req.user.id
+    );
+    
+    if (existingReactionIndex !== -1) {
       // Update existing reaction
-      story.reactions[existingReaction].reaction = reaction;
-      story.reactions[existingReaction].createdAt = new Date();
+      story.reactions[existingReactionIndex].type = type;
+      story.reactions[existingReactionIndex].createdAt = new Date();
     } else {
       // Add new reaction
-      if (!story.reactions) {
-        story.reactions = [];
-      }
-      
       story.reactions.push({
         user: req.user.id,
-        reaction,
+        type,
         createdAt: new Date()
       });
-      
-      // Notify story author if not self
-      if (story.author.toString() !== req.user.id) {
-        const user = await User.findById(req.user.id)
-          .select('firstName lastName');
-        
-        await notificationService.createNotification({
-          recipient: story.author,
-          sender: req.user.id,
-          type: 'reaction',
-          contentType: 'story',
-          contentId: story._id,
-          text: `${user.firstName} ${user.lastName} reacted to your story with ${reaction}`,
-          actionUrl: `/stories/${story._id}`
-        });
-      }
     }
     
     await story.save();
     
-    res.json({
-      success: true,
-      message: 'Reaction added',
-      reaction
-    });
-  } catch (error) {
-    console.error('React to story error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error reacting to story'
-    });
+    // Create a notification for the story owner
+    // This would be implemented in your notification controller
+    
+    res.json({ message: 'Reaction added successfully' });
+  } catch (err) {
+    handleError(err, res);
   }
 };
 
-/**
- * @route   POST /api/stories/:id/reply
- * @desc    Reply to a story
- * @access  Private
- */
 exports.replyToStory = async (req, res) => {
   try {
-    const storyId = req.params.id;
-    const { message } = req.body;
+    const { storyId } = req.params;
+    const { text } = req.body;
     
-    // Validate story ID
-    if (!mongoose.Types.ObjectId.isValid(storyId)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid story ID'
-      });
-    }
-    
-    // Validate message
-    if (!message) {
-      return res.status(400).json({
-        success: false,
-        error: 'Message is required'
-      });
+    // Validate reply text
+    if (!text || text.trim() === '') {
+      return res.status(400).json({ error: 'Reply text is required' });
     }
     
     // Find story
     const story = await Story.findById(storyId);
     
     if (!story) {
-      return res.status(404).json({
-        success: false,
-        error: 'Story not found'
-      });
+      return res.status(404).json({ error: 'Story not found' });
+    }
+    
+    // Check if story is expired
+    if (story.isExpired) {
+      return res.status(404).json({ error: 'Story has expired' });
     }
     
     // Add reply
-    if (!story.replies) {
-      story.replies = [];
-    }
-    
     story.replies.push({
       user: req.user.id,
-      message,
+      text,
       createdAt: new Date()
     });
     
     await story.save();
     
-    // Notify story author if not self
-    if (story.author.toString() !== req.user.id) {
-      const user = await User.findById(req.user.id)
-        .select('firstName lastName');
-      
-      await notificationService.createNotification({
-        recipient: story.author,
-        sender: req.user.id,
-        type: 'reply',
-        contentType: 'story',
-        contentId: story._id,
-        text: `${user.firstName} ${user.lastName} replied to your story`,
-        actionUrl: `/stories/${story._id}`
-      });
-    }
+    // Create a notification for the story owner
+    // This would be implemented in your notification controller
     
-    res.json({
-      success: true,
-      message: 'Reply added'
-    });
-  } catch (error) {
-    console.error('Reply to story error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error replying to story'
-    });
+    res.json({ message: 'Reply added successfully' });
+  } catch (err) {
+    handleError(err, res);
   }
 };
 
-/**
- * @route   POST /api/stories/highlights
- * @desc    Create highlight from stories
- * @access  Private
- */
+// Highlights
 exports.createHighlight = async (req, res) => {
   try {
     const { title, storyIds } = req.body;
     
-    // Validate input
-    if (!title) {
-      return res.status(400).json({
-        success: false,
-        error: 'Title is required'
-      });
+    // Validate title
+    if (!title || title.trim() === '') {
+      return res.status(400).json({ error: 'Highlight title is required' });
     }
     
-    if (!storyIds || !Array.isArray(storyIds) || storyIds.length === 0) {
-      return res.status(400).json({
-        success: false,
-        error: 'At least one story ID is required'
-      });
+    // Validate stories
+    if (!storyIds || storyIds.length === 0) {
+      return res.status(400).json({ error: 'At least one story must be added to the highlight' });
     }
     
-    // Validate story IDs
-    const validStoryIds = storyIds.filter(id => mongoose.Types.ObjectId.isValid(id));
-    
-    if (validStoryIds.length === 0) {
-      return res.status(400).json({
-        success: false,
-        error: 'No valid story IDs provided'
-      });
-    }
-    
-    // Get stories that belong to user
+    // Verify the stories exist and belong to the user
     const stories = await Story.find({
-      _id: { $in: validStoryIds },
-      author: req.user.id
+      _id: { $in: storyIds },
+      owner: req.user.id
     });
     
     if (stories.length === 0) {
-      return res.status(404).json({
-        success: false,
-        error: 'No valid stories found'
-      });
+      return res.status(404).json({ error: 'No valid stories found' });
     }
     
-    // Create highlight
-    const highlight = await Highlight.create({
-      author: req.user.id,
+    // Create the highlight
+    const highlight = new Highlight({
+      owner: req.user.id,
       title,
-      stories: stories.map(story => ({
-        content: story.content,
-        mediaUrl: story.mediaUrl,
-        mediaType: story.mediaType,
-        createdAt: story.createdAt
-      })),
-      createdAt: new Date()
+      stories: stories.map(story => story._id),
+      createdAt: new Date(),
+      updatedAt: new Date()
     });
     
-    res.status(201).json({
-      success: true,
-      highlight
-    });
-  } catch (error) {
-    console.error('Create highlight error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error creating highlight'
-    });
+    // If the first story has media, use it as the cover image
+    if (stories[0].media && stories[0].media.filename) {
+      highlight.coverImage = stories[0].media.filename;
+    }
+    
+    await highlight.save();
+    
+    res.status(201).json(highlight);
+  } catch (err) {
+    handleError(err, res);
   }
 };
 
-/**
- * @route   GET /api/stories/highlights/:userId
- * @desc    Get user's highlights
- * @access  Private
- */
 exports.getUserHighlights = async (req, res) => {
   try {
-    const userId = req.params.userId;
+    const { userId } = req.params;
     
-    // Validate user ID
-    if (!mongoose.Types.ObjectId.isValid(userId)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid user ID'
-      });
-    }
-    
-    // Find user
+    // Check if the user exists
     const user = await User.findById(userId);
-    
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        error: 'User not found'
-      });
+      return res.status(404).json({ error: 'User not found' });
     }
     
     // Get highlights
-    const highlights = await Highlight.find({ author: userId })
-      .populate('author', 'firstName lastName profilePicture')
+    const highlights = await Highlight.find({ owner: userId })
+      .populate('owner', 'username email profileImage')
       .sort({ createdAt: -1 });
     
-    res.json({
-      success: true,
-      highlights
-    });
-  } catch (error) {
-    console.error('Get user highlights error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error fetching user highlights'
-    });
+    res.json(highlights);
+  } catch (err) {
+    handleError(err, res);
   }
 };
 
-/**
- * @route   GET /api/stories/highlights/:id
- * @desc    Get highlight by ID
- * @access  Private
- */
-exports.getHighlightById = async (req, res) => {
-  try {
-    const highlightId = req.params.id;
-    
-    // Validate highlight ID
-    if (!mongoose.Types.ObjectId.isValid(highlightId)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid highlight ID'
-      });
-    }
-    
-    // Find highlight
-    const highlight = await Highlight.findById(highlightId)
-      .populate('author', 'firstName lastName profilePicture');
-    
-    if (!highlight) {
-      return res.status(404).json({
-        success: false,
-        error: 'Highlight not found'
-      });
-    }
-    
-    res.json({
-      success: true,
-      highlight
-    });
-  } catch (error) {
-    console.error('Get highlight error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error fetching highlight'
-    });
-  }
-};
-
-/**
- * @route   PUT /api/stories/highlights/:id
- * @desc    Update highlight
- * @access  Private
- */
 exports.updateHighlight = async (req, res) => {
   try {
-    const highlightId = req.params.id;
-    const { title, storyIds } = req.body;
-    
-    // Validate highlight ID
-    if (!mongoose.Types.ObjectId.isValid(highlightId)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid highlight ID'
-      });
-    }
+    const { highlightId } = req.params;
+    const { title, coverStoryId } = req.body;
     
     // Find highlight
     const highlight = await Highlight.findById(highlightId);
     
     if (!highlight) {
-      return res.status(404).json({
-        success: false,
-        error: 'Highlight not found'
-      });
+      return res.status(404).json({ error: 'Highlight not found' });
     }
     
-    // Check ownership
-    if (highlight.author.toString() !== req.user.id) {
-      return res.status(403).json({
-        success: false,
-        error: 'Not authorized to update this highlight'
-      });
+    // Check if user has permission to update
+    if (highlight.owner.toString() !== req.user.id) {
+      return res.status(403).json({ error: 'You do not have permission to update this highlight' });
     }
     
     // Update title if provided
@@ -741,188 +478,219 @@ exports.updateHighlight = async (req, res) => {
       highlight.title = title;
     }
     
-    // Update stories if provided
-    if (storyIds && Array.isArray(storyIds) && storyIds.length > 0) {
-      const validStoryIds = storyIds.filter(id => mongoose.Types.ObjectId.isValid(id));
-      
-      if (validStoryIds.length === 0) {
-        return res.status(400).json({
-          success: false,
-          error: 'No valid story IDs provided'
-        });
-      }
-      
-      // Get stories that belong to user
-      const stories = await Story.find({
-        _id: { $in: validStoryIds },
-        author: req.user.id
+    // Update cover image if a story ID is provided
+    if (coverStoryId) {
+      // Check if the story exists and belongs to user
+      const story = await Story.findOne({
+        _id: coverStoryId,
+        owner: req.user.id
       });
       
-      if (stories.length === 0) {
-        return res.status(404).json({
-          success: false,
-          error: 'No valid stories found'
-        });
+      if (!story) {
+        return res.status(404).json({ error: 'Story not found' });
       }
       
-      // Replace stories
-      highlight.stories = stories.map(story => ({
-        content: story.content,
-        mediaUrl: story.mediaUrl,
-        mediaType: story.mediaType,
-        createdAt: story.createdAt
-      }));
+      // Check if the story is in the highlight
+      if (!highlight.stories.includes(story._id)) {
+        return res.status(400).json({ error: 'Story is not in this highlight' });
+      }
+      
+      // Use this story's media as the cover image
+      if (story.media && story.media.filename) {
+        highlight.coverImage = story.media.filename;
+      }
     }
     
+    highlight.updatedAt = new Date();
     await highlight.save();
     
-    res.json({
-      success: true,
-      highlight
-    });
-  } catch (error) {
-    console.error('Update highlight error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error updating highlight'
-    });
+    res.json(highlight);
+  } catch (err) {
+    handleError(err, res);
   }
 };
 
-/**
- * @route   DELETE /api/stories/highlights/:id
- * @desc    Delete highlight
- * @access  Private
- */
 exports.deleteHighlight = async (req, res) => {
   try {
-    const highlightId = req.params.id;
-    
-    // Validate highlight ID
-    if (!mongoose.Types.ObjectId.isValid(highlightId)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid highlight ID'
-      });
-    }
+    const { highlightId } = req.params;
     
     // Find highlight
     const highlight = await Highlight.findById(highlightId);
     
     if (!highlight) {
-      return res.status(404).json({
-        success: false,
-        error: 'Highlight not found'
-      });
+      return res.status(404).json({ error: 'Highlight not found' });
     }
     
-    // Check ownership
-    if (highlight.author.toString() !== req.user.id) {
-      return res.status(403).json({
-        success: false,
-        error: 'Not authorized to delete this highlight'
-      });
+    // Check if user has permission to delete
+    if (highlight.owner.toString() !== req.user.id) {
+      return res.status(403).json({ error: 'You do not have permission to delete this highlight' });
     }
     
-    // Delete highlight
+    // Delete the highlight
     await Highlight.findByIdAndDelete(highlightId);
     
-    res.json({
-      success: true,
-      message: 'Highlight deleted successfully'
-    });
-  } catch (error) {
-    console.error('Delete highlight error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error deleting highlight'
-    });
+    res.json({ message: 'Highlight deleted successfully' });
+  } catch (err) {
+    handleError(err, res);
   }
 };
 
-/**
- * @route   GET /api/stories/user/:userId
- * @desc    Get user's active stories
- * @access  Private
- */
-exports.getUserStories = async (req, res) => {
+exports.addStoryToHighlight = async (req, res) => {
   try {
-    const userId = req.params.userId;
+    const { highlightId, storyId } = req.params;
     
-    // Validate user ID
-    if (!mongoose.Types.ObjectId.isValid(userId)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid user ID'
-      });
+    // Find highlight
+    const highlight = await Highlight.findById(highlightId);
+    
+    if (!highlight) {
+      return res.status(404).json({ error: 'Highlight not found' });
     }
     
-    // Find user
-    const user = await User.findById(userId);
-    
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        error: 'User not found'
-      });
+    // Check if user has permission to update
+    if (highlight.owner.toString() !== req.user.id) {
+      return res.status(403).json({ error: 'You do not have permission to update this highlight' });
     }
     
-    // Check if current user has permission to view stories
-    if (userId !== req.user.id) {
-      // Check privacy settings
-      const privacySetting = user.privacy?.storyVisibility || 'followers';
-      
-      if (privacySetting === 'connections') {
-        const currentUser = await User.findById(req.user.id);
-        if (!currentUser.connections || !currentUser.connections.includes(userId)) {
-          return res.status(403).json({
-            success: false,
-            error: 'Not authorized to view this user\'s stories'
-          });
-        }
-      } else if (privacySetting === 'followers') {
-        if (!user.followers || !user.followers.includes(req.user.id)) {
-          return res.status(403).json({
-            success: false,
-            error: 'Not authorized to view this user\'s stories'
-          });
-        }
-      } else if (privacySetting === 'close-friends') {
-        if (!user.closeFriends || !user.closeFriends.includes(req.user.id)) {
-          return res.status(403).json({
-            success: false,
-            error: 'Not authorized to view this user\'s stories'
-          });
+    // Find story
+    const story = await Story.findById(storyId);
+    
+    if (!story) {
+      return res.status(404).json({ error: 'Story not found' });
+    }
+    
+    // Check if the story belongs to the user
+    if (story.owner.toString() !== req.user.id) {
+      return res.status(403).json({ error: 'You do not have permission to add this story to highlights' });
+    }
+    
+    // Check if story is already in the highlight
+    if (highlight.stories.includes(storyId)) {
+      return res.status(400).json({ error: 'Story is already in this highlight' });
+    }
+    
+    // Add story to highlight
+    highlight.stories.push(storyId);
+    highlight.updatedAt = new Date();
+    
+    // If this is the first story and the highlight has no cover image, use this story's media
+    if (highlight.stories.length === 1 && !highlight.coverImage && story.media && story.media.filename) {
+      highlight.coverImage = story.media.filename;
+    }
+    
+    await highlight.save();
+    
+    res.json(highlight);
+  } catch (err) {
+    handleError(err, res);
+  }
+};
+
+exports.removeStoryFromHighlight = async (req, res) => {
+  try {
+    const { highlightId, storyId } = req.params;
+    
+    // Find highlight
+    const highlight = await Highlight.findById(highlightId);
+    
+    if (!highlight) {
+      return res.status(404).json({ error: 'Highlight not found' });
+    }
+    
+    // Check if user has permission to update
+    if (highlight.owner.toString() !== req.user.id) {
+      return res.status(403).json({ error: 'You do not have permission to update this highlight' });
+    }
+    
+    // Check if story is in the highlight
+    if (!highlight.stories.includes(storyId)) {
+      return res.status(400).json({ error: 'Story is not in this highlight' });
+    }
+    
+    // Remove story from highlight
+    highlight.stories = highlight.stories.filter(id => id.toString() !== storyId);
+    
+    // If the removed story was the cover image, update to use another story if available
+    if (highlight.stories.length > 0 && highlight.coverImage) {
+      const story = await Story.findById(storyId);
+      if (story && story.media && story.media.filename === highlight.coverImage) {
+        // Find another story to use as cover
+        const newCoverStory = await Story.findById(highlight.stories[0]);
+        if (newCoverStory && newCoverStory.media && newCoverStory.media.filename) {
+          highlight.coverImage = newCoverStory.media.filename;
+        } else {
+          highlight.coverImage = null;
         }
       }
+    } else if (highlight.stories.length === 0) {
+      // No stories left, remove cover image
+      highlight.coverImage = null;
     }
     
-    // Get active stories
-    const stories = await Story.find({
-      author: userId,
-      createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } // Last 24 hours
-    })
-      .populate('author', 'firstName lastName profilePicture')
-      .sort({ createdAt: -1 });
+    highlight.updatedAt = new Date();
+    await highlight.save();
     
-    // Add viewed status
-    const storiesWithViewStatus = stories.map(story => {
-      const storyObj = story.toObject();
-      storyObj.hasViewed = story.viewers?.some(v => v.user.toString() === req.user.id) || false;
-      return storyObj;
-    });
-    
-    res.json({
-      success: true,
-      stories: storiesWithViewStatus
-    });
-  } catch (error) {
-    console.error('Get user stories error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error fetching user stories'
-    });
+    res.json(highlight);
+  } catch (err) {
+    handleError(err, res);
   }
 };
 
-module.exports = exports;
+// Close friends
+exports.getCloseFriends = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id)
+      .populate('closeFriends', 'username email profileImage')
+      .select('closeFriends');
+    
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    res.json(user.closeFriends);
+  } catch (err) {
+    handleError(err, res);
+  }
+};
+
+exports.addCloseFriend = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    // Check if the target user exists
+    const targetUser = await User.findById(userId);
+    if (!targetUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    // Check if the user is trying to add themselves
+    if (userId === req.user.id) {
+      return res.status(400).json({ error: 'You cannot add yourself as a close friend' });
+    }
+    
+    // Add the user to close friends
+    await User.findByIdAndUpdate(
+      req.user.id,
+      { $addToSet: { closeFriends: userId } }
+    );
+    
+    res.json({ message: 'User added to close friends' });
+  } catch (err) {
+    handleError(err, res);
+  }
+};
+
+exports.removeCloseFriend = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    // Remove the user from close friends
+    await User.findByIdAndUpdate(
+      req.user.id,
+      { $pull: { closeFriends: userId } }
+    );
+    
+    res.json({ message: 'User removed from close friends' });
+  } catch (err) {
+    handleError(err, res);
+  }
+};

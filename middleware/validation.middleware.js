@@ -1,6 +1,7 @@
 // middleware/validation.middleware.js
 const { validationResult } = require('express-validator');
-
+const { validationResult } = require('express-validator');
+const logger = require('../utils/logger');
 /**
  * Validation result middleware
  * Checks for validation errors and returns appropriate response
@@ -238,4 +239,43 @@ exports.profileValidationRules = () => {
       .notEmpty()
       .withMessage('Degree is required')
   ];
+};
+const { validationResult } = require('express-validator');
+const logger = require('../utils/logger');
+
+/**
+ * Validation middleware factory
+ * @param {Array} validations - Array of express-validator validations
+ * @returns {Function} - Express middleware function
+ */
+exports.validate = (validations) => {
+  return async (req, res, next) => {
+    // Execute all validations
+    for (const validation of validations) {
+      const result = await validation.run(req);
+      if (result.errors.length) break;
+    }
+
+    // Check for validation errors
+    const errors = validationResult(req);
+    if (errors.isEmpty()) {
+      return next();
+    }
+
+    // Log validation errors
+    logger.warn('Validation failed', {
+      path: req.path,
+      method: req.method,
+      userId: req.user?.id,
+      errors: errors.array(),
+      requestId: req.id
+    });
+
+    return res.status(400).json({
+      status: 'error',
+      errors: errors.array(),
+      message: 'Validation failed',
+      requestId: req.id
+    });
+  };
 };

@@ -1,662 +1,1985 @@
-const ChatRoom = require('../models/messaging/chatroom.js')
-const Message = require('../models/messaging/Message.js');
-const User = require('../models/user/user.js');
+const Chat = require('../models/Chat');
+const Message = require('../models/Chat');
+const User = require('../models/User');
+const Notification = require('../models/Notification');
+const Poll = require('../models/Chat');
+const Call = require('../models/Chat');
+const AuditLog = require('../models/Chat');
+const { validationResult } = require('express-validator');
+const socketEvents = require('../utils/socketEvents');
+const SignalProtocol = require('../utils/signalProtocol');
+const cloudStorage = require('../utils/cloudStorage');
+const securityScanner = require('../utils/securityScanner');
+const logger = require('../utils/logger');
+const mongoose = require('mongoose');
+const ObjectId = mongoose.Types.ObjectId;
+const crypto = require('crypto');
+const speakeasy = require('speakeasy');
+const { v4: uuidv4 } = require('uuid');
 
-// Create a new chat
-const createChat = async (req, res) => {
+// Audit logging middleware
+const logAuditEvent = async (userId, action, details, success = true, severity = 'info') => {
   try {
-    const { participantId, type = 'direct', name = '', description = '' } = req.body;
+    await AuditLog.create({
+      user: userId,
+      action,
+      details,
+      success,
+      severity,
+      ip: details.ip || 'unknown',
+      userAgent: details.userAgent || 'unknown',
+      timestamp: Date.now()
+    });
+  } catch (error) {
+    logger.error(`Failed to log audit event: ${error.message}`, { userId, action });
+  }
+};
 
-    // If direct chat, check for existing chat first
-    if (type === 'direct') {
-      const existingChat = await ChatRoom.findOne({
+// Verify 2FA requirement for sensitive operations
+const verify2FAIfRequired = async (req, res, operation) => {
+  try {
+    const user = await User.findById(req.user.id);
+    
+    // Check if the user has 2FA enabled and if this operation requires 2FA
+    if (user.security?.twoFactorEnabled && 
+        user.security.twoFactorRequiredFor.includes(operation)) {
+      
+      const { twoFactorCode } = req.body;
+      
+      // If no 2FA code provided for a protected operation
+      if (!twoFactorCode) {
+        return {
+          success: false,
+          statusCode: 403,
+          message: `This operation requires 2FA verification`
+        };
+      }
+      
+      // Verify the TOTP code
+      const verified = speakeasy.totp.verify({
+        secret: user.security.twoFactorSecret,
+        encoding: 'base32',
+        token: twoFactorCode,
+        window: 1 // Allow 30 seconds of leeway
+      });
+      
+      if (!verified) {
+        // Log failed 2FA attempt
+        await logAuditEvent(
+          req.user.id, 
+          '2fa_verification_failed', 
+          { 
+            operation,
+            ip: req.ip,
+            userAgent: req.headers['user-agent']
+          }, 
+          false, 
+          'warning'
+        );
+        
+        return {
+          success: false,
+          statusCode: 403,
+          message: 'Invalid 2FA code'
+        };
+      }
+      
+      // Log successful 2FA verification
+      await logAuditEvent(
+        req.user.id, 
+        '2fa_verification_succeeded', 
+        { 
+          operation,
+          ip: req.ip,
+          userAgent: req.headers['user-agent']
+        }
+      );
+    }
+    
+    return { success: true };
+  } catch (error) {
+    logger.error(`2FA verification error: ${error.message}`);
+    return {
+      success: false,
+      statusCode: 500,
+      message: 'Error during 2FA verification'
+    };
+  }
+};
+
+/**
+ * Create a new chat
+ * @route POST /api/chats
+ * @access Private
+ */
+exports.createChat = async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+    
+    const { participants, name, type, isEncrypted, messageExpirationTime } = req.body;
+    
+    // Validate participants
+    if (!participants || !Array.isArray(participants) || participants.length < 1) {
+      return res.status(400).json({ error: 'At least one participant is required' });
+    }
+    
+    // Ensure current user is not in participants list (they'll be added separately)
+    const filteredParticipants = participants.filter(id => id !== req.user.id);
+    
+    // For direct chats, check if chat already exists
+    if (type === 'direct' && filteredParticipants.length === 1) {
+      const existingChat = await Chat.findOne({
         type: 'direct',
         participants: { 
-          $all: [req.user.id, participantId],
+          $all: [req.user.id, filteredParticipants[0]],
           $size: 2
         }
-      }).populate('participants', 'firstName lastName profilePicture');
-
+      });
+      
       if (existingChat) {
-        return res.json(existingChat);
+        // Chat already exists, return it
+        const populatedChat = await Chat.findById(existingChat._id)
+          .populate('participants', 'firstName lastName username profileImage lastActive')
+          .populate({
+            path: 'lastMessage',
+            select: 'content type sender timestamp status',
+            populate: {
+              path: 'sender',
+              select: 'firstName lastName username profileImage'
+            }
+          });
+        
+        return res.json(populatedChat);
       }
     }
-
-    // Create new chat
-    const chatRoom = await ChatRoom.create({
-      type,
-      name,
-      description,
-      participants: type === 'direct' ? [req.user.id, participantId] : [req.user.id],
-      admin: req.user.id
+    
+    // Create new chat with enhanced security features
+    const newChat = new Chat({
+      name: name || null,
+      type: type || 'direct',
+      participants: [req.user.id, ...filteredParticipants],
+      creator: req.user.id,
+      createdAt: Date.now(),
+      encryption: {
+        enabled: isEncrypted || false,
+        protocol: isEncrypted ? 'signal' : null,
+        keys: {}
+      },
+      security: {
+        messageRetention: {
+          enabled: !!messageExpirationTime,
+          expirationTime: messageExpirationTime || null // Time in seconds
+        },
+        mediaAccessControl: {
+          allowDownloads: true,
+          allowScreenshots: true,
+          allowForwarding: true
+        }
+      }
     });
-
-    // Populate participants for response
-    await chatRoom.populate('participants', 'firstName lastName profilePicture');
-
-    res.status(201).json(chatRoom);
+    
+    // For group chats, add admin
+    if (type === 'group') {
+      newChat.admins = [req.user.id];
+    }
+    
+    await newChat.save();
+    
+    // Populate and return
+    const populatedChat = await Chat.findById(newChat._id)
+      .populate('participants', 'firstName lastName username profileImage lastActive')
+      .populate('admins', 'firstName lastName username profileImage');
+    
+    // Notify participants via socket
+    filteredParticipants.forEach(userId => {
+      socketEvents.emitToUser(userId, 'new_chat', {
+        chat: populatedChat
+      });
+    });
+    
+    // Log chat creation
+    await logAuditEvent(
+      req.user.id,
+      'chat_created',
+      {
+        chatId: newChat._id,
+        chatType: type,
+        isEncrypted,
+        hasRetention: !!messageExpirationTime,
+        participantCount: filteredParticipants.length + 1,
+        ip: req.ip,
+        userAgent: req.headers['user-agent']
+      }
+    );
+    
+    res.status(201).json(populatedChat);
   } catch (error) {
-    console.error('Create chat error:', error);
-    res.status(500).json({ error: 'Error creating chat', details: error.message });
+    logger.error(`Create chat error: ${error.message}`, { userId: req.user.id });
+    res.status(500).json({ error: 'Server error during chat creation' });
   }
 };
 
-// Get all chats for a user
-const getChats = async (req, res) => {
+/**
+ * Send a message in a chat
+ * @route POST /api/chats/:chatId/messages
+ * @access Private
+ */
+exports.sendMessage = async (req, res) => {
   try {
-    const chats = await ChatRoom.find({
-      participants: req.user.id
-    })
-    .populate('participants', 'firstName lastName profilePicture online lastActive')
-    .populate('lastMessage')
-    .sort('-lastActivity')
-    .exec();
-
-    res.json(chats);
-  } catch (error) {
-    console.error('Get chats error:', error);
-    res.status(500).json({ error: 'Error fetching chats' });
-  }
-};
-
-// Get a single chat by ID
-const getChatById = async (req, res) => {
-  try {
-    const chat = await ChatRoom.findById(req.params.chatId)
-      .populate('participants', 'firstName lastName profilePicture online lastActive')
-      .populate('lastMessage')
-      .exec();
-      
+    const { chatId } = req.params;
+    const { content, type = 'text', replyTo, metadata, selfDestruct, retentionPeriod } = req.body;
+    
+    // Validate input
+    if (!content && !req.file && type !== 'activity') {
+      return res.status(400).json({ error: 'Message content or media is required' });
+    }
+    
+    // Get chat
+    const chat = await Chat.findById(chatId);
+    
     if (!chat) {
       return res.status(404).json({ error: 'Chat not found' });
     }
     
-    // Verify user is a participant
-    if (!chat.participants.some(p => p._id.toString() === req.user.id)) {
-      return res.status(403).json({ error: 'Not authorized to access this chat' });
+    // Check if user is a participant
+    if (!chat.participants.includes(req.user.id)) {
+      return res.status(403).json({ error: 'You are not a participant in this chat' });
     }
     
-    res.json(chat);
-  } catch (error) {
-    console.error('Get chat error:', error);
-    res.status(500).json({ error: 'Error fetching chat' });
-  }
-};
-
-// Send a message in a chat
-const sendMessage = async (req, res) => {
-  try {
-    const { content, messageType = 'text', replyTo } = req.body;
-    const chatId = req.params.chatId;
-    
-    // Validate chat exists
-    const chatRoom = await ChatRoom.findById(chatId);
-    if (!chatRoom) {
-      return res.status(404).json({ error: 'Chat room not found' });
-    }
-
-    // Verify user is a participant in this chat
-    if (!chatRoom.participants.some(participant => participant.toString() === req.user.id)) {
-      return res.status(403).json({ error: 'Not authorized to send messages in this chat' });
-    }
-
-    // Determine recipient (for direct chats)
-    const recipient = chatRoom.type === 'direct' 
-      ? chatRoom.participants.find(participant => participant.toString() !== req.user.id)
-      : chatRoom.participants[0]; // Default to first participant for group chats
-    
-    // Create message object
-    const messageData = {
-      sender: req.user.id,
-      chatRoom: chatId,
-      recipient,
-      content: content || '',
-      messageType
-    };
-    
-    // Add reply reference if provided
-    if (replyTo) {
-      // Verify reply message exists
-      const replyMessage = await Message.findById(replyTo);
-      if (!replyMessage) {
-        return res.status(404).json({ error: 'Reply message not found' });
+    // Handle file upload with security scanning
+    let media = null;
+    if (req.file) {
+      try {
+        // Scan file for malware and inappropriate content
+        const scanResult = await securityScanner.scanFile(req.file.path);
+        
+        if (!scanResult.safe) {
+          // Log security event
+          await logAuditEvent(
+            req.user.id,
+            'unsafe_file_blocked',
+            {
+              chatId,
+              fileType: req.file.mimetype,
+              fileName: req.file.originalname,
+              threatDetails: scanResult.threats,
+              ip: req.ip,
+              userAgent: req.headers['user-agent']
+            },
+            false,
+            'warning'
+          );
+          
+          return res.status(400).json({ 
+            error: 'File appears to be unsafe and was blocked',
+            details: scanResult.safeForPublic ? scanResult.threats : 'Security threat detected'
+          });
+        }
+        
+        // Upload to secure cloud storage with access controls
+        const uploadResult = await cloudStorage.uploadSecureFile(req.file, {
+          userId: req.user.id,
+          chatId,
+          accessControl: chat.security?.mediaAccessControl || { allowDownloads: true }
+        });
+        
+        media = {
+          url: uploadResult.url,
+          type: req.file.mimetype.split('/')[0], // image, video, etc.
+          filename: req.file.originalname,
+          size: req.file.size,
+          contentHash: uploadResult.contentHash, // For integrity verification
+          accessKey: uploadResult.accessKey, // For controlled access
+        };
+      } catch (error) {
+        logger.error(`File processing error: ${error.message}`, { userId: req.user.id, chatId });
+        return res.status(500).json({ error: 'Failed to process uploaded file' });
       }
-      
-      messageData.replyTo = replyTo;
     }
     
-    // Create the message
-    const message = await Message.create(messageData);
-
-    // Populate sender and recipient details
-    await message.populate('sender', 'firstName lastName profilePicture');
-    await message.populate('recipient', 'firstName lastName profilePicture');
+    // Handle end-to-end encryption using Signal Protocol
+    let encryptedContent = content;
+    let encryptionMetadata = null;
     
-    // If replying to a message, populate that message too
+    if (chat.encryption && chat.encryption.enabled && content) {
+      try {
+        // Get recipients' public keys
+        const recipients = chat.participants.filter(p => p.toString() !== req.user.id);
+        
+        const keys = {};
+        for (const recipientId of recipients) {
+          const recipient = await User.findById(recipientId).select('encryption.publicKeys');
+          if (recipient.encryption?.publicKeys) {
+            keys[recipientId] = recipient.encryption.publicKeys;
+          }
+        }
+        
+        // Encrypt message using Signal Protocol
+        const encryptionResult = await SignalProtocol.encryptMessage(
+          content,
+          req.user.id,
+          recipients,
+          keys
+        );
+        
+        encryptedContent = encryptionResult.encryptedContent;
+        encryptionMetadata = encryptionResult.metadata;
+      } catch (error) {
+        logger.error(`Message encryption error: ${error.message}`, { userId: req.user.id, chatId });
+        return res.status(500).json({ error: 'Failed to encrypt message' });
+      }
+    }
+    
+    // Determine message expiration time
+    const expirationTime = selfDestruct 
+      ? new Date(Date.now() + (selfDestruct * 1000)) // Convert seconds to milliseconds
+      : retentionPeriod 
+        ? new Date(Date.now() + (retentionPeriod * 1000))
+        : chat.security?.messageRetention?.enabled && chat.security.messageRetention.expirationTime
+          ? new Date(Date.now() + (chat.security.messageRetention.expirationTime * 1000))
+          : null;
+    
+    // Create new message with enhanced security features
+    const newMessage = new Message({
+      chat: chatId,
+      sender: req.user.id,
+      content: encryptedContent,
+      type,
+      media,
+      timestamp: Date.now(),
+      status: 'sent',
+      readBy: [{ user: req.user.id, timestamp: Date.now() }],
+      security: {
+        expirationTime,
+        forwardingAllowed: media ? chat.security?.mediaAccessControl?.allowForwarding : true,
+        screenshotsAllowed: media ? chat.security?.mediaAccessControl?.allowScreenshots : true
+      }
+    });
+    
+    // Add reply reference if applicable
     if (replyTo) {
-      await message.populate({
+      newMessage.replyTo = replyTo;
+    }
+    
+    // Add encryption metadata if applicable
+    if (encryptionMetadata) {
+      newMessage.encryption = {
+        enabled: true,
+        protocol: 'signal',
+        metadata: encryptionMetadata
+      };
+    }
+    
+    // Add custom metadata if provided
+    if (metadata) {
+      newMessage.metadata = metadata;
+    }
+    
+    await newMessage.save();
+    
+    // Update chat's last message and timestamp
+    await Chat.findByIdAndUpdate(chatId, {
+      lastMessage: newMessage._id,
+      updatedAt: Date.now()
+    });
+    
+    // Populate sender info
+    const populatedMessage = await Message.findById(newMessage._id)
+      .populate('sender', 'firstName lastName username profileImage')
+      .populate({
         path: 'replyTo',
-        select: 'content sender messageType mediaUrl',
+        select: 'content sender type media',
         populate: {
           path: 'sender',
-          select: 'firstName lastName profilePicture'
+          select: 'firstName lastName username profileImage'
         }
       });
-    }
-
-    // Update chat room's last message and activity
-    await ChatRoom.findByIdAndUpdate(chatId, {
-      lastMessage: message._id,
-      lastActivity: new Date()
+    
+    // Notify other participants via socket
+    chat.participants.forEach(participant => {
+      if (participant.toString() !== req.user.id) {
+        socketEvents.emitToUser(participant.toString(), 'new_message', {
+          chatId,
+          message: populatedMessage
+        });
+        
+        // Create notification if user is not active in this chat
+        Notification.create({
+          recipient: participant,
+          type: 'new_message',
+          sender: req.user.id,
+          data: {
+            chatId,
+            messageId: newMessage._id,
+            preview: type === 'text' 
+              ? content.substring(0, 50) 
+              : type === 'image' 
+                ? 'Sent an image'
+                : type === 'video'
+                  ? 'Sent a video'
+                  : 'Sent an attachment'
+          },
+          timestamp: Date.now()
+        });
+      }
     });
-
-    res.status(201).json(message);
+    
+    // Log message sent (without content for privacy)
+    await logAuditEvent(
+      req.user.id,
+      'message_sent',
+      {
+        chatId,
+        messageId: newMessage._id,
+        messageType: type,
+        hasMedia: !!media,
+        isEncrypted: !!encryptionMetadata,
+        hasSelfDestruct: !!selfDestruct,
+        ip: req.ip,
+        userAgent: req.headers['user-agent']
+      }
+    );
+    
+    res.status(201).json(populatedMessage);
   } catch (error) {
-    console.error('Send message error:', error);
-    res.status(500).json({ error: 'Error sending message' });
+    logger.error(`Send message error: ${error.message}`, { userId: req.user.id });
+    res.status(500).json({ error: 'Server error when sending message' });
   }
 };
 
-// Get messages for a chat
-const getMessages = async (req, res) => {
+/**
+ * Get messages in a chat
+ * @route GET /api/chats/:chatId/messages
+ * @access Private
+ */
+exports.getMessages = async (req, res) => {
   try {
-    const { limit = 50, before, after, lastMessageId } = req.query;
+    const { chatId } = req.params;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const before = req.query.before ? new Date(req.query.before) : null;
     
-    // Verify chat exists and user is a participant
-    const chat = await ChatRoom.findById(req.params.chatId);
+    // Get chat
+    const chat = await Chat.findById(chatId);
+    
     if (!chat) {
       return res.status(404).json({ error: 'Chat not found' });
     }
     
-    if (!chat.participants.some(p => p.toString() === req.user.id)) {
-      return res.status(403).json({ error: 'Not authorized to access this chat' });
+    // Check if user is a participant
+    if (!chat.participants.includes(req.user.id)) {
+      return res.status(403).json({ error: 'You are not a participant in this chat' });
     }
     
     // Build query
-    let query = {
-      chatRoom: req.params.chatId,
+    const query = { 
+      chat: chatId,
+      // Exclude messages that have expired
+      $or: [
+        { 'security.expirationTime': { $exists: false } },
+        { 'security.expirationTime': null },
+        { 'security.expirationTime': { $gt: new Date() } }
+      ],
+      // Exclude messages deleted for this user
       deletedFor: { $ne: req.user.id }
     };
-
+    
     if (before) {
-      query.createdAt = { $lt: new Date(before) };
+      query.timestamp = { $lt: before };
     }
     
-    if (after) {
-      query.createdAt = { $gt: new Date(after) };
-    }
-
-    if (lastMessageId) {
-      const lastMessage = await Message.findById(lastMessageId);
-      if (lastMessage) {
-        query.createdAt = { $gt: lastMessage.createdAt };
-      }
-    }
-
+    // Get messages
     const messages = await Message.find(query)
-      .populate('sender', 'firstName lastName profilePicture')
-      .populate('recipient', 'firstName lastName profilePicture')
-      .populate('replyTo')
-      .sort('createdAt')
-      .limit(parseInt(limit));
-
-    const hasMore = messages.length === parseInt(limit);
-    const nextCursor = hasMore ? messages[messages.length - 1]._id : null;
-
-    res.json({
-      messages,
-      hasMore,
-      nextCursor
-    });
-  } catch (error) {
-    console.error('Get messages error:', error);
-    res.status(500).json({ error: 'Error fetching messages' });
-  }
-};
-
-// Delete a message
-const deleteMessage = async (req, res) => {
-  try {
-    const { chatId, messageId } = req.params;
+      .populate('sender', 'firstName lastName username profileImage')
+      .populate({
+        path: 'replyTo',
+        select: 'content sender type media',
+        populate: {
+          path: 'sender',
+          select: 'firstName lastName username profileImage'
+        }
+      })
+      .sort({ timestamp: -1 })
+      .limit(limit);
     
-    // Check if message exists
-    const message = await Message.findById(messageId);
-    if (!message) {
-      return res.status(404).json({ error: 'Message not found' });
-    }
+    // Mark messages as delivered if not sent by current user
+    const messageIdsToUpdate = messages
+      .filter(msg => msg.sender._id.toString() !== req.user.id && msg.status === 'sent')
+      .map(msg => msg._id);
     
-    // Check if user is the sender or has permission to delete
-    if (message.sender.toString() !== req.user.id) {
-      // Check if user is chat admin if it's a group chat
-      const chatRoom = await ChatRoom.findById(chatId);
-      if (!chatRoom || (chatRoom.type === 'group' && chatRoom.admin.toString() !== req.user.id)) {
-        return res.status(403).json({ error: 'Not authorized to delete this message' });
-      }
-    }
-    
-    // Soft delete by marking message as deleted for the user
-    await Message.findByIdAndUpdate(messageId, {
-      $addToSet: { deletedFor: req.user.id }
-    });
-    
-    res.json({ success: true, messageId });
-  } catch (error) {
-    console.error('Delete message error:', error);
-    res.status(500).json({ error: 'Error deleting message' });
-  }
-};
-
-// React to a message
-const reactToMessage = async (req, res) => {
-  try {
-    const { chatId, messageId } = req.params;
-    const { reaction } = req.body;
-    
-    if (!reaction) {
-      return res.status(400).json({ error: 'Reaction is required' });
-    }
-    
-    const message = await Message.findById(messageId);
-    if (!message) {
-      return res.status(404).json({ error: 'Message not found' });
-    }
-    
-    // Check if user has already reacted with this reaction
-    const existingReactionIndex = message.reactions.findIndex(
-      r => r.user.toString() === req.user.id && r.reaction === reaction
-    );
-    
-    if (existingReactionIndex !== -1) {
-      // Remove existing reaction (toggle behavior)
-      message.reactions.splice(existingReactionIndex, 1);
-    } else {
-      // Remove any existing reaction by this user
-      message.reactions = message.reactions.filter(
-        r => r.user.toString() !== req.user.id
+    if (messageIdsToUpdate.length > 0) {
+      await Message.updateMany(
+        { _id: { $in: messageIdsToUpdate } },
+        { 
+          status: 'delivered',
+          $addToSet: { 
+            deliveredTo: { 
+              user: req.user.id, 
+              timestamp: Date.now() 
+            } 
+          }
+        }
       );
+    }
+    
+    // Process messages - decrypt and handle expiring messages
+    const processedMessages = await Promise.all(messages.map(async (msg) => {
+      const msgObj = msg.toObject();
       
-      // Add the new reaction
-      message.reactions.push({
-        user: req.user.id,
-        reaction
-      });
-    }
-    
-    await message.save();
-    
-    res.json({
-      success: true,
-      messageId,
-      userId: req.user.id,
-      reactions: message.reactions
-    });
-  } catch (error) {
-    console.error('React to message error:', error);
-    res.status(500).json({ error: 'Error adding reaction to message' });
-  }
-};
-
-// Create a poll in a chat
-const createPoll = async (req, res) => {
-  try {
-    const { question, options, multipleChoice, expiresIn } = req.body;
-    const chatId = req.params.chatId;
-    
-    if (!question || !options || !Array.isArray(options) || options.length < 2) {
-      return res.status(400).json({ error: 'Invalid poll data' });
-    }
-    
-    const chatRoom = await ChatRoom.findById(chatId);
-    
-    if (!chatRoom) {
-      return res.status(404).json({ error: 'Chat room not found' });
-    }
-    
-    // Check if user is a participant
-      const isParticipant = chatRoom.participants.some(
-      participant => participant.toString() === req.user.id
-    );
-    
-    if (!isParticipant) {
-      return res.status(403).json({ error: 'Not authorized to create poll' });
-    }
-    
-    // Create poll
-    const pollOptions = options.map(option => ({
-      text: option,
-      votes: []
+      // Calculate time remaining for expiring messages
+      if (msgObj.security && msgObj.security.expirationTime) {
+        const expirationTime = new Date(msgObj.security.expirationTime).getTime();
+        const currentTime = Date.now();
+        msgObj.security.timeRemaining = Math.max(0, Math.floor((expirationTime - currentTime) / 1000));
+      }
+      
+      // If message is encrypted and has content
+      if (
+        chat.encryption && 
+        chat.encryption.enabled && 
+        msgObj.encryption && 
+        msgObj.encryption.enabled &&
+        msgObj.content
+      ) {
+        try {
+          // Decrypt using Signal Protocol
+          const decryptionResult = await SignalProtocol.decryptMessage(
+            msgObj.content,
+            req.user.id,
+            msgObj.sender._id.toString(),
+            msgObj.encryption.metadata
+          );
+          
+          msgObj.content = decryptionResult.decryptedContent;
+        } catch (e) {
+          logger.error(`Message decryption error: ${e.message}`, {
+            userId: req.user.id,
+            messageId: msgObj._id
+          });
+          msgObj.content = '[Encrypted message - Unable to decrypt]';
+        }
+      }
+      
+      // Handle secure media URLs
+      if (msgObj.media && msgObj.media.accessKey) {
+        msgObj.media.secureUrl = await cloudStorage.getSignedUrl(msgObj.media.url, {
+          userId: req.user.id,
+          accessKey: msgObj.media.accessKey,
+          expiresIn: 3600 // URL valid for 1 hour
+        });
+      }
+      
+      return msgObj;
     }));
     
-    // Calculate expiration time (default: 24 hours)
-    const expirationHours = expiresIn ? parseInt(expiresIn) : 24;
-    const expiresAt = new Date();
-    expiresAt.setHours(expiresAt.getHours() + expirationHours);
-    
-    const poll = {
-      creator: req.user.id,
-      question,
-      options: pollOptions,
-      multipleChoice: multipleChoice === true,
-      expiresAt,
-      createdAt: new Date()
-    };
-    
-    chatRoom.polls.push(poll);
-    await chatRoom.save();
-    
-    // Send message about poll creation
-    const message = await Message.create({
-      sender: req.user.id,
-      recipient: chatRoom.participants[0],
-      chatRoom: chatRoom._id,
-      content: `Created poll: ${question}`,
-      messageType: 'poll',
-      metadata: {
-        pollId: chatRoom.polls[chatRoom.polls.length - 1]._id
+    // Log message retrieval
+    await logAuditEvent(
+      req.user.id,
+      'messages_retrieved',
+      {
+        chatId,
+        messageCount: messages.length,
+        ip: req.ip,
+        userAgent: req.headers['user-agent']
       }
-    });
-    
-    // Update chat room last message
-    chatRoom.lastMessage = message._id;
-    chatRoom.lastActivity = new Date();
-    await chatRoom.save();
-    
-    res.status(201).json(chatRoom.polls[chatRoom.polls.length - 1]);
-  } catch (error) {
-    console.error('Create poll error:', error);
-    res.status(500).json({ error: 'Error creating poll' });
-  }
-};
-
-// Vote in a poll
-const votePoll = async (req, res) => {
-  try {
-    const { chatId, pollId } = req.params;
-    const { optionIndex } = req.body;
-    
-    if (optionIndex === undefined) {
-      return res.status(400).json({ error: 'Option index is required' });
-    }
-    
-    const chatRoom = await ChatRoom.findById(chatId);
-    if (!chatRoom) {
-      return res.status(404).json({ error: 'Chat room not found' });
-    }
-    
-    // Find the poll
-    const pollIndex = chatRoom.polls.findIndex(
-      poll => poll._id.toString() === pollId
     );
     
-    if (pollIndex === -1) {
-      return res.status(404).json({ error: 'Poll not found' });
-    }
-    
-    const poll = chatRoom.polls[pollIndex];
-    
-    // Check if poll has expired
-    if (poll.expiresAt < new Date() || poll.closed) {
-      return res.status(400).json({ error: 'Poll has expired or is closed' });
-    }
-    
-    // Check if option index is valid
-    if (optionIndex < 0 || optionIndex >= poll.options.length) {
-      return res.status(400).json({ error: 'Invalid option index' });
-    }
-    
-    // If not multiple choice, remove any existing votes by this user
-    if (!poll.multipleChoice) {
-      poll.options.forEach(option => {
-        option.votes = option.votes.filter(vote => vote.toString() !== req.user.id);
-      });
-    }
-    
-    // Check if user already voted for this option
-    const optionVotes = poll.options[optionIndex].votes;
-    const alreadyVoted = optionVotes.some(vote => vote.toString() === req.user.id);
-    
-    if (alreadyVoted) {
-      // Remove vote (toggle)
-      poll.options[optionIndex].votes = optionVotes.filter(
-        vote => vote.toString() !== req.user.id
-      );
-    } else {
-      // Add vote
-      poll.options[optionIndex].votes.push(req.user.id);
-    }
-    
-    await chatRoom.save();
-    
     res.json({
-      success: true,
-      poll: chatRoom.polls[pollIndex]
+      messages: processedMessages,
+      hasMore: messages.length === limit
     });
   } catch (error) {
-    console.error('Vote poll error:', error);
-    res.status(500).json({ error: 'Error voting in poll' });
+    logger.error(`Get messages error: ${error.message}`, { userId: req.user.id, chatId: req.params.chatId });
+    res.status(500).json({ error: 'Server error when retrieving messages' });
   }
 };
 
-// Initialize call in a chat
-const initializeCall = async (req, res) => {
+/**
+ * Delete a message
+ * @route DELETE /api/chats/:chatId/messages/:messageId
+ * @access Private
+ */
+exports.deleteMessage = async (req, res) => {
   try {
-    const { callType } = req.body;
-    const chatId = req.params.chatId;
+    const { chatId, messageId } = req.params;
+    const { deleteForEveryone } = req.query;
     
-    if (!['audio', 'video'].includes(callType)) {
-      return res.status(400).json({ error: 'Invalid call type' });
+    // Get message
+    const message = await Message.findById(messageId);
+    
+    if (!message) {
+      return res.status(404).json({ error: 'Message not found' });
     }
     
-    const chatRoom = await ChatRoom.findById(chatId);
-    
-    if (!chatRoom) {
-      return res.status(404).json({ error: 'Chat room not found' });
+    // Check if message belongs to chat
+    if (message.chat.toString() !== chatId) {
+      return res.status(400).json({ error: 'Message does not belong to this chat' });
     }
     
-    // Check if user is a participant
-    const isParticipant = chatRoom.participants.some(
-      participant => participant.toString() === req.user.id
-    );
+    // Get chat for permission check
+    const chat = await Chat.findById(chatId);
     
-    if (!isParticipant) {
-      return res.status(403).json({ error: 'Not authorized to initiate call' });
-    }
-    
-    // Create call history entry
-    const callHistory = {
-      initiator: req.user.id,
-      callType,
-      startTime: new Date(),
-      participants: [{
-        user: req.user.id,
-        joinedAt: new Date()
-      }],
-      status: 'missed' // Default status until someone joins
-    };
-    
-    chatRoom.callHistory.push(callHistory);
-    await chatRoom.save();
-    
-    // Create system message about call
-    await Message.create({
-      sender: req.user.id,
-      recipient: chatRoom.participants.find(id => id.toString() !== req.user.id),
-      chatRoom: chatRoom._id,
-      content: `${callType === 'audio' ? 'Audio' : 'Video'} call started`,
-      messageType: 'call',
-      metadata: {
-        callId: chatRoom.callHistory[chatRoom.callHistory.length - 1]._id,
-        callType
-      }
-    });
-    
-    res.json({
-      callId: chatRoom.callHistory[chatRoom.callHistory.length - 1]._id,
-      startTime: callHistory.startTime
-    });
-  } catch (error) {
-    console.error('Initiate call error:', error);
-    res.status(500).json({ error: 'Error initiating call' });
-  }
-};
-
-// Accept call
-const acceptCall = async (req, res) => {
-  try {
-    const { chatId, callId } = req.params;
-    
-    // Find chat room containing this call
-    const chatRoom = await ChatRoom.findById(chatId);
-    
-    if (!chatRoom) {
+    if (!chat) {
       return res.status(404).json({ error: 'Chat not found' });
     }
     
-    // Find the specific call in the history
-    const callIndex = chatRoom.callHistory.findIndex(
-      call => call._id.toString() === callId
-    );
+    // Check if user can delete this message
+    const isAdmin = chat.admins && chat.admins.some(admin => admin.toString() === req.user.id);
+    const isMessageSender = message.sender.toString() === req.user.id;
     
-    if (callIndex === -1) {
-      return res.status(404).json({ error: 'Call not found' });
-    }
-    
-    // Check if user is a participant in the chat
-    const isParticipant = chatRoom.participants.some(
-      participant => participant.toString() === req.user.id
-    );
-    
-    if (!isParticipant) {
-      return res.status(403).json({ error: 'Not authorized to accept this call' });
-    }
-    
-    // Check if user is already in the call
-    const isInCall = chatRoom.callHistory[callIndex].participants.some(
-      participant => participant.user.toString() === req.user.id
-    );
-    
-    if (!isInCall) {
-      // Add user to call participants
-      chatRoom.callHistory[callIndex].participants.push({
-        user: req.user.id,
-        joinedAt: new Date()
+    // For deleting for everyone, verify 2FA if required
+    if (deleteForEveryone === 'true') {
+      // Only admins or message sender (within time limit) can delete for everyone
+      const isWithinTimeLimit = Date.now() - new Date(message.timestamp).getTime() < 30 * 60 * 1000; // 30 minutes
+      
+      if (!isAdmin && (!isMessageSender || !isWithinTimeLimit)) {
+        return res.status(403).json({ 
+          error: 'You can only delete your own messages within 30 minutes of sending' 
+        });
+      }
+      
+      // Check if 2FA verification is needed for admins deleting others' messages
+      if (isAdmin && !isMessageSender) {
+        const verificationResult = await verify2FAIfRequired(req, res, 'delete_others_messages');
+        if (!verificationResult.success) {
+          return res.status(verificationResult.statusCode).json({ error: verificationResult.message });
+        }
+      }
+      
+      // If message has media, delete from storage
+      if (message.media && message.media.url) {
+        try {
+          await cloudStorage.deleteFile(message.media.url);
+        } catch (err) {
+          logger.error(`Failed to delete media file: ${err.message}`, {
+            userId: req.user.id,
+            messageId
+          });
+          // Continue with message deletion even if file deletion fails
+        }
+      }
+      
+      // Delete message for everyone
+      await Message.findByIdAndDelete(messageId);
+      
+      // If this was the last message, update chat's lastMessage
+      if (chat.lastMessage && chat.lastMessage.toString() === messageId) {
+        const newLastMessage = await Message.findOne({ chat: chatId })
+          .sort({ timestamp: -1 })
+          .select('_id');
+        
+        await Chat.findByIdAndUpdate(chatId, {
+          lastMessage: newLastMessage ? newLastMessage._id : null
+        });
+      }
+      
+      // Notify other participants
+      chat.participants.forEach(participant => {
+        if (participant.toString() !== req.user.id) {
+          socketEvents.emitToUser(participant.toString(), 'message_deleted', {
+            chatId,
+            messageId,
+            deletedBy: req.user.id
+          });
+        }
       });
       
-      // Update call status
-      chatRoom.callHistory[callIndex].status = 'completed';
+      // Log message deletion
+      await logAuditEvent(
+        req.user.id,
+        'message_deleted_for_everyone',
+        {
+          chatId,
+          messageId,
+          deletedAsAdmin: isAdmin && !isMessageSender,
+          ip: req.ip,
+          userAgent: req.headers['user-agent']
+        },
+        true,
+        isAdmin && !isMessageSender ? 'warning' : 'info'
+      );
+    } else {
+      // Delete only for current user
+      await Message.findByIdAndUpdate(messageId, {
+        $addToSet: { deletedFor: req.user.id }
+      });
+      
+      // Log message deletion for self
+      await logAuditEvent(
+        req.user.id,
+        'message_deleted_for_self',
+        {
+          chatId,
+          messageId,
+          ip: req.ip,
+          userAgent: req.headers['user-agent']
+        }
+      );
     }
     
-    await chatRoom.save();
-    
-    res.json({
-      success: true,
-      callId,
-      acceptedBy: req.user.id
-    });
+    res.json({ message: 'Message deleted successfully' });
   } catch (error) {
-    console.error('Accept call error:', error);
-    res.status(500).json({ error: 'Error accepting call' });
+    logger.error(`Delete message error: ${error.message}`, { 
+      userId: req.user.id, 
+      chatId: req.params.chatId,
+      messageId: req.params.messageId
+    });
+    res.status(500).json({ error: 'Server error when deleting message' });
   }
 };
 
-// End call
-const endCall = async (req, res) => {
+/**
+ * Set up end-to-end encryption for a chat
+ * @route POST /api/chats/:chatId/encrypt
+ * @access Private
+ */
+exports.setupChatEncryption = async (req, res) => {
   try {
-    const { chatId, callId } = req.params;
+    const { chatId } = req.params;
+    const { publicKey } = req.body;
     
-    // Find chat room containing this call
-    const chatRoom = await ChatRoom.findById(chatId);
-    
-    if (!chatRoom) {
-      return res.status(404).json({ error: 'Call not found' });
+    if (!publicKey) {
+      return res.status(400).json({ error: 'Public key is required' });
     }
     
-    // Find the specific call in the history
-    const callIndex = chatRoom.callHistory.findIndex(
-      call => call._id.toString() === callId
-    );
+    // Get chat
+    const chat = await Chat.findById(chatId);
     
-    if (callIndex === -1) {
-      return res.status(404).json({ error: 'Call not found' });
+    if (!chat) {
+      return res.status(404).json({ error: 'Chat not found' });
     }
     
-    // Check if user is a participant in the call
-    const isInCall = chatRoom.callHistory[callIndex].participants.some(
-      participant => participant.user.toString() === req.user.id
-    );
-    
-    if (!isInCall) {
-      return res.status(403).json({ error: 'Not authorized to end this call' });
+    // Check if user is a participant
+    if (!chat.participants.includes(req.user.id)) {
+      return res.status(403).json({ error: 'You are not a participant in this chat' });
     }
     
-    // Set end time and calculate duration
-    const endTime = new Date();
-    const startTime = chatRoom.callHistory[callIndex].startTime;
-    const durationMs = endTime - startTime;
-    const durationSeconds = Math.floor(durationMs / 1000);
-    
-    // Update call record
-    chatRoom.callHistory[callIndex].endTime = endTime;
-    chatRoom.callHistory[callIndex].duration = durationSeconds;
-    
-    // Update user's left time
-    const participantIndex = chatRoom.callHistory[callIndex].participants.findIndex(
-      participant => participant.user.toString() === req.user.id
-    );
-    
-    if (participantIndex !== -1) {
-      chatRoom.callHistory[callIndex].participants[participantIndex].leftAt = endTime;
+    // For group chats, check if user is admin
+    if (chat.type === 'group' && !chat.admins.includes(req.user.id) && !chat.encryption.enabled) {
+      return res.status(403).json({ error: 'Only admins can enable encryption for group chats' });
     }
     
-    // If all participants have left, mark call as ended
-    const allLeft = chatRoom.callHistory[callIndex].participants.every(
-      participant => participant.leftAt
-    );
+    // Update chat and user's encryption key
+    const updateOperation = {};
     
-    if (allLeft) {
-      chatRoom.callHistory[callIndex].status = 'completed';
+    // If encryption is not already enabled, enable it
+    if (!chat.encryption || !chat.encryption.enabled) {
+      updateOperation['encryption.enabled'] = true;
+      updateOperation['encryption.protocol'] = 'signal';
     }
     
-    await chatRoom.save();
+    // Add/update user's key
+    updateOperation[`encryption.keys.${req.user.id}`] = publicKey;
     
-    // Create system message about call ending
-    await Message.create({
-      sender: req.user.id,
-      recipient: chatRoom.participants.find(id => id.toString() !== req.user.id),
-      chatRoom: chatRoom._id,
-      content: `Call ended (${Math.floor(durationSeconds / 60)}:${String(durationSeconds % 60).padStart(2, '0')})`,
-      messageType: 'call',
-      metadata: {
-        callId,
-        callType: chatRoom.callHistory[callIndex].callType,
-        status: 'ended',
-        duration: durationSeconds
+    await Chat.findByIdAndUpdate(chatId, updateOperation);
+    
+    // Also store user's public key in their profile for future chats
+    await User.findByIdAndUpdate(req.user.id, {
+      'encryption.publicKeys.signal': publicKey
+    });
+    
+    // Get updated chat
+    const updatedChat = await Chat.findById(chatId)
+      .populate('participants', 'firstName lastName username profileImage')
+      .populate('admins', 'firstName lastName username profileImage');
+    
+    // Notify other participants
+    chat.participants.forEach(participant => {
+      if (participant.toString() !== req.user.id) {
+        socketEvents.emitToUser(participant.toString(), 'chat_encryption_updated', {
+          chatId,
+          enabled: true,
+          updatedBy: req.user.id
+        });
       }
     });
     
+    // Log encryption setup
+    await logAuditEvent(
+      req.user.id,
+      'chat_encryption_setup',
+      {
+        chatId,
+        encryptionProtocol: 'signal',
+        ip: req.ip,
+        userAgent: req.headers['user-agent']
+      }
+    );
+    
     res.json({
-      success: true,
-      callId,
-      endedBy: req.user.id,
-      duration: durationSeconds
+      message: 'Chat encryption successfully configured',
+      chat: updatedChat
     });
   } catch (error) {
-    console.error('End call error:', error);
-    res.status(500).json({ error: 'Error ending call' });
+    logger.error(`Setup chat encryption error: ${error.message}`, { 
+      userId: req.user.id, 
+      chatId: req.params.chatId 
+    });
+    res.status(500).json({ error: 'Server error when setting up encryption' });
   }
 };
 
-module.exports = {
-  createChat,
-  getChats,
-  getChatById,
-  sendMessage,
-  getMessages,
-  deleteMessage,
-  reactToMessage,
-  createPoll,
-  votePoll,
-  initializeCall,
-  acceptCall,
-  endCall
+/**
+ * Configure message expiration for a chat
+ * @route PUT /api/chats/:chatId/retention
+ * @access Private
+ */
+exports.setMessageRetention = async (req, res) => {
+  try {
+    const { chatId } = req.params;
+    const { enabled, expirationTime } = req.body;
+    
+    // Get chat
+    const chat = await Chat.findById(chatId);
+    
+    if (!chat) {
+      return res.status(404).json({ error: 'Chat not found' });
+    }
+    
+    // Check if user is a participant
+    if (!chat.participants.includes(req.user.id)) {
+      return res.status(403).json({ error: 'You are not a participant in this chat' });
+    }
+    
+    // For group chats, check if user is admin
+    if (chat.type === 'group' && !chat.admins.includes(req.user.id)) {
+      return res.status(403).json({ error: 'Only admins can configure message retention for group chats' });
+    }
+    
+    // Update retention settings
+    await Chat.findByIdAndUpdate(chatId, {
+      'security.messageRetention.enabled': enabled,
+      'security.messageRetention.expirationTime': expirationTime || null
+    });
+    
+    // Get updated chat
+    const updatedChat = await Chat.findById(chatId)
+      .populate('participants', 'firstName lastName username profileImage')
+      .populate('admins', 'firstName lastName username profileImage');
+    
+    // Notify other participants
+    chat.participants.forEach(participant => {
+      if (participant.toString() !== req.user.id) {
+        socketEvents.emitToUser(participant.toString(), 'chat_retention_updated', {
+          chatId,
+          enabled,
+          expirationTime,
+          updatedBy: req.user.id
+        });
+      }
+    });
+    
+    // Log retention configuration
+    await logAuditEvent(
+      req.user.id,
+      'message_retention_configured',
+      {
+        chatId,
+        enabled,
+        expirationTime,
+        ip: req.ip,
+        userAgent: req.headers['user-agent']
+      }
+    );
+    
+    res.json({
+      message: 'Message retention settings updated',
+      chat: updatedChat
+    });
+  } catch (error) {
+    logger.error(`Set message retention error: ${error.message}`, { 
+      userId: req.user.id, 
+      chatId: req.params.chatId 
+    });
+    res.status(500).json({ error: 'Server error when configuring message retention' });
+  }
 };
+
+/**
+ * Configure media access controls for a chat
+ * @route PUT /api/chats/:chatId/media-controls
+ * @access Private
+ */
+exports.setMediaAccessControls = async (req, res) => {
+  try {
+    const { chatId } = req.params;
+    const { allowDownloads, allowScreenshots, allowForwarding } = req.body;
+    
+    // Get chat
+    const chat = await Chat.findById(chatId);
+    
+    if (!chat) {
+      return res.status(404).json({ error: 'Chat not found' });
+    }
+    
+    // Check if user is a participant
+    if (!chat.participants.includes(req.user.id)) {
+      return res.status(403).json({ error: 'You are not a participant in this chat' });
+    }
+    
+    // For group chats, check if user is admin
+    if (chat.type === 'group' && !chat.admins.includes(req.user.id)) {
+      return res.status(403).json({ error: 'Only admins can configure media access controls for group chats' });
+    }
+    
+    // Update media access control settings
+    await Chat.findByIdAndUpdate(chatId, {
+      'security.mediaAccessControl.allowDownloads': allowDownloads !== undefined ? allowDownloads : true,
+      'security.mediaAccessControl.allowScreenshots': allowScreenshots !== undefined ? allowScreenshots : true,
+      'security.mediaAccessControl.allowForwarding': allowForwarding !== undefined ? allowForwarding : true
+    });
+    
+    // Get updated chat
+    const updatedChat = await Chat.findById(chatId)
+      .populate('participants', 'firstName lastName username profileImage')
+      .populate('admins', 'firstName lastName username profileImage');
+    
+    // Notify other participants
+    chat.participants.forEach(participant => {
+      if (participant.toString() !== req.user.id) {
+        socketEvents.emitToUser(participant.toString(), 'chat_media_controls_updated', {
+          chatId,
+          mediaAccessControl: {
+            allowDownloads,
+            allowScreenshots,
+            allowForwarding
+          },
+          updatedBy: req.user.id
+        });
+      }
+    });
+    
+    // Log media access control configuration
+    await logAuditEvent(
+      req.user.id,
+      'media_access_controls_configured',
+      {
+        chatId,
+        allowDownloads,
+        allowScreenshots,
+        allowForwarding,
+        ip: req.ip,
+        userAgent: req.headers['user-agent']
+      }
+    );
+    
+    res.json({
+      message: 'Media access control settings updated',
+      chat: updatedChat
+    });
+  } catch (error) {
+    logger.error(`Set media access controls error: ${error.message}`, { 
+      userId: req.user.id, 
+      chatId: req.params.chatId 
+    });
+    res.status(500).json({ error: 'Server error when configuring media access controls' });
+  }
+};
+
+/**
+ * Get chat audit log
+ * @route GET /api/chats/:chatId/audit-log
+ * @access Private
+ */
+exports.getChatAuditLog = async (req, res) => {
+  try {
+    const { chatId } = req.params;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const skip = (page - 1) * limit;
+    
+    // Get chat
+    const chat = await Chat.findById(chatId);
+    
+    if (!chat) {
+      return res.status(404).json({ error: 'Chat not found' });
+    }
+    
+    // Check if user is a participant
+    if (!chat.participants.includes(req.user.id)) {
+      return res.status(403).json({ error: 'You are not a participant in this chat' });
+    }
+    
+    // For group chats, audit logs are only available to admins
+    if (chat.type === 'group' && !chat.admins.includes(req.user.id)) {
+      return res.status(403).json({ error: 'Only admins can view audit logs for group chats' });
+    }
+    
+    // Check if 2FA verification is needed
+    const verificationResult = await verify2FAIfRequired(req, res, 'view_audit_logs');
+    if (!verificationResult.success) {
+      return res.status(verificationResult.statusCode).json({ error: verificationResult.message });
+    }
+    
+    // Build query for relevant audit events
+    const query = {
+      $or: [
+        { action: 'chat_created', 'details.chatId': chatId },
+        { action: 'chat_updated', 'details.chatId': chatId },
+        { action: 'chat_deleted', 'details.chatId': chatId },
+        { action: 'message_deleted_for_everyone', 'details.chatId': chatId },
+        { action: 'chat_encryption_setup', 'details.chatId': chatId },
+        { action: 'message_retention_configured', 'details.chatId': chatId },
+        { action: 'media_access_controls_configured', 'details.chatId': chatId },
+        { action: 'member_added', 'details.chatId': chatId },
+        { action: 'member_removed', 'details.chatId': chatId },
+        { action: 'admin_added', 'details.chatId': chatId },
+        { action: 'admin_removed', 'details.chatId': chatId },
+        { action: 'security_setting_changed', 'details.chatId': chatId }
+      ]
+    };
+    
+    // Get audit logs
+    const auditLogs = await AuditLog.find(query)
+      .populate('user', 'firstName lastName username profileImage')
+      .sort({ timestamp: -1 })
+      .skip(skip)
+      .limit(limit);
+    
+    // Get total count
+    const total = await AuditLog.countDocuments(query);
+    
+    // Log audit log access
+    await logAuditEvent(
+      req.user.id,
+      'audit_log_accessed',
+      {
+        chatId,
+        ip: req.ip,
+        userAgent: req.headers['user-agent']
+      }
+    );
+    
+    res.json({
+      auditLogs,
+      pagination: {
+        total,
+        page,
+        pages: Math.ceil(total / limit)
+      }
+    });
+  } catch (error) {
+    logger.error(`Get chat audit log error: ${error.message}`, { 
+      userId: req.user.id, 
+      chatId: req.params.chatId 
+    });
+    res.status(500).json({ error: 'Server error when retrieving audit log' });
+  }
+};
+
+/**
+ * Create a self-destructing message
+ * @route POST /api/chats/:chatId/self-destruct
+ * @access Private
+ */
+exports.createSelfDestructMessage = async (req, res) => {
+  try {
+    const { chatId } = req.params;
+    const { content, expirationTime } = req.body;
+    
+    if (!content) {
+      return res.status(400).json({ error: 'Message content is required' });
+    }
+    
+    if (!expirationTime || !Number.isInteger(expirationTime) || expirationTime < 5 || expirationTime > 86400) {
+      return res.status(400).json({ error: 'Valid expiration time (5-86400 seconds) is required' });
+    }
+    
+    // Get chat
+    const chat = await Chat.findById(chatId);
+    
+    if (!chat) {
+      return res.status(404).json({ error: 'Chat not found' });
+    }
+    
+    // Check if user is a participant
+    if (!chat.participants.includes(req.user.id)) {
+      return res.status(403).json({ error: 'You are not a participant in this chat' });
+    }
+    
+    // Handle encryption if enabled
+    let encryptedContent = content;
+    let encryptionMetadata = null;
+    
+    if (chat.encryption && chat.encryption.enabled) {
+      try {
+        // Get recipients' public keys
+        const recipients = chat.participants.filter(p => p.toString() !== req.user.id);
+        
+        const keys = {};
+        for (const recipientId of recipients) {
+          const recipient = await User.findById(recipientId).select('encryption.publicKeys');
+          if (recipient.encryption?.publicKeys) {
+            keys[recipientId] = recipient.encryption.publicKeys;
+          }
+        }
+        
+        // Encrypt message using Signal Protocol
+        const encryptionResult = await SignalProtocol.encryptMessage(
+          content,
+          req.user.id,
+          recipients,
+          keys
+        );
+        
+        encryptedContent = encryptionResult.encryptedContent;
+        encryptionMetadata = encryptionResult.metadata;
+      } catch (error) {
+        logger.error(`Self-destruct message encryption error: ${error.message}`, { 
+          userId: req.user.id, 
+          chatId 
+        });
+        return res.status(500).json({ error: 'Failed to encrypt message' });
+      }
+    }
+    
+    // Create new self-destructing message
+    const expirationDate = new Date(Date.now() + (expirationTime * 1000));
+    
+    const selfDestructMessage = new Message({
+      chat: chatId,
+      sender: req.user.id,
+      content: encryptedContent,
+      type: 'self-destruct',
+      timestamp: Date.now(),
+      status: 'sent',
+      readBy: [{ user: req.user.id, timestamp: Date.now() }],
+      security: {
+        expirationTime: expirationDate,
+        selfDestruct: true,
+        screenshotsAllowed: false,
+        forwardingAllowed: false
+      }
+    });
+    
+    // Add encryption metadata if applicable
+    if (encryptionMetadata) {
+      selfDestructMessage.encryption = {
+        enabled: true,
+        protocol: 'signal',
+        metadata: encryptionMetadata
+      };
+    }
+    
+    await selfDestructMessage.save();
+    
+    // Update chat's last message and timestamp
+    await Chat.findByIdAndUpdate(chatId, {
+      lastMessage: selfDestructMessage._id,
+      updatedAt: Date.now()
+    });
+    
+    // Populate sender info
+    const populatedMessage = await Message.findById(selfDestructMessage._id)
+      .populate('sender', 'firstName lastName username profileImage');
+    
+    // Notify other participants via socket
+    chat.participants.forEach(participant => {
+      if (participant.toString() !== req.user.id) {
+        socketEvents.emitToUser(participant.toString(), 'new_message', {
+          chatId,
+          message: populatedMessage,
+          selfDestruct: true,
+          expiresIn: expirationTime
+        });
+        
+        // Create notification
+        Notification.create({
+          recipient: participant,
+          type: 'new_message',
+          sender: req.user.id,
+          data: {
+            chatId,
+            messageId: selfDestructMessage._id,
+            preview: 'Sent a self-destructing message'
+          },
+          timestamp: Date.now()
+        });
+      }
+    });
+    
+    // Log self-destruct message creation (without content)
+    await logAuditEvent(
+      req.user.id,
+      'self_destruct_message_sent',
+      {
+        chatId,
+        messageId: selfDestructMessage._id,
+        expirationTime,
+        ip: req.ip,
+        userAgent: req.headers['user-agent']
+      }
+    );
+    
+    res.status(201).json({
+      message: populatedMessage,
+      expiresIn: expirationTime
+    });
+  } catch (error) {
+    logger.error(`Create self-destruct message error: ${error.message}`, { 
+      userId: req.user.id, 
+      chatId: req.params.chatId 
+    });
+    res.status(500).json({ error: 'Server error when creating self-destruct message' });
+  }
+};
+
+/**
+ * Report security issue in chat
+ * @route POST /api/chats/:chatId/report
+ * @access Private
+ */
+exports.reportSecurityIssue = async (req, res) => {
+  try {
+    const { chatId } = req.params;
+    const { type, messageId, description } = req.body;
+    
+    if (!type) {
+      return res.status(400).json({ error: 'Report type is required' });
+    }
+    
+    // Get chat
+    const chat = await Chat.findById(chatId);
+    
+    if (!chat) {
+      return res.status(404).json({ error: 'Chat not found' });
+    }
+    
+    // Check if user is a participant
+    if (!chat.participants.includes(req.user.id)) {
+      return res.status(403).json({ error: 'You are not a participant in this chat' });
+    }
+    
+    // If reporting a specific message, verify it exists
+    let message = null;
+    if (messageId) {
+      message = await Message.findOne({ 
+        _id: messageId,
+        chat: chatId
+      });
+      
+      if (!message) {
+        return res.status(404).json({ error: 'Message not found' });
+      }
+    }
+    
+    // Create security report
+    const securityReport = {
+      type,
+      reporter: req.user.id,
+      chat: chatId,
+      message: messageId || null,
+      description: description || null,
+      status: 'pending',
+      timestamp: Date.now(),
+      metadata: {
+        reporterIp: req.ip,
+        reporterUserAgent: req.headers['user-agent'],
+        reportedMessageType: message ? message.type : null,
+        reportedMessageSender: message ? message.sender : null
+      }
+    };
+    
+    // Insert report into SecurityReports collection
+    await mongoose.connection.collection('SecurityReports').insertOne(securityReport);
+    
+    // Log security report
+    await logAuditEvent(
+      req.user.id,
+      'security_issue_reported',
+      {
+        chatId,
+        messageId: messageId || null,
+        reportType: type,
+        ip: req.ip,
+        userAgent: req.headers['user-agent']
+      },
+      true,
+      'warning'
+    );
+    
+    // Notify admins if it's a group chat
+    if (chat.type === 'group' && chat.admins) {
+      chat.admins.forEach(adminId => {
+        if (adminId.toString() !== req.user.id) {
+          socketEvents.emitToUser(adminId.toString(), 'security_report', {
+            chatId,
+            reporterId: req.user.id,
+            type,
+            messageId: messageId || null
+          });
+          
+          // Create notification for admins
+          Notification.create({
+            recipient: adminId,
+            type: 'security_report',
+            sender: req.user.id,
+            data: {
+              chatId,
+              reportType: type,
+              messageId: messageId || null
+            },
+            timestamp: Date.now()
+          });
+        }
+      });
+    }
+    
+    res.status(201).json({
+      message: 'Security issue reported successfully',
+      reportId: securityReport._id
+    });
+  } catch (error) {
+    logger.error(`Report security issue error: ${error.message}`, { 
+      userId: req.user.id, 
+      chatId: req.params.chatId 
+    });
+    res.status(500).json({ error: 'Server error when reporting security issue' });
+  }
+};
+
+/**
+ * Run security scan on chat
+ * @route POST /api/chats/:chatId/security-scan
+ * @access Private
+ */
+exports.runSecurityScan = async (req, res) => {
+  try {
+    const { chatId } = req.params;
+    
+    // Get chat
+    const chat = await Chat.findById(chatId);
+    
+    if (!chat) {
+      return res.status(404).json({ error: 'Chat not found' });
+    }
+    
+    // Check if user is a participant
+    if (!chat.participants.includes(req.user.id)) {
+      return res.status(403).json({ error: 'You are not a participant in this chat' });
+    }
+    
+    // For group chats, only admins can run security scan
+    if (chat.type === 'group' && !chat.admins.includes(req.user.id)) {
+      return res.status(403).json({ error: 'Only admins can run security scan for group chats' });
+    }
+    
+    // Check if 2FA verification is needed
+    const verificationResult = await verify2FAIfRequired(req, res, 'run_security_scan');
+    if (!verificationResult.success) {
+      return res.status(verificationResult.statusCode).json({ error: verificationResult.message });
+    }
+    
+    // Run security scan
+    const scanResults = {
+      encryptionEnabled: chat.encryption && chat.encryption.enabled,
+      encryptionProtocol: chat.encryption ? chat.encryption.protocol : null,
+      retentionEnabled: chat.security?.messageRetention?.enabled || false,
+      mediaSecurityEnabled: !!chat.security?.mediaAccessControl,
+      participantCount: chat.participants.length,
+      adminCount: chat.admins ? chat.admins.length : 0,
+      vulnerabilities: [],
+      recommendations: []
+    };
+    
+    // Check for potential security issues
+    if (!chat.encryption || !chat.encryption.enabled) {
+      scanResults.vulnerabilities.push('Chat is not encrypted');
+      scanResults.recommendations.push('Enable end-to-end encryption for this chat');
+    }
+    
+    if (!chat.security?.messageRetention?.enabled) {
+      scanResults.recommendations.push('Consider enabling message expiration for better privacy');
+    }
+    
+    if (!chat.security?.mediaAccessControl?.allowScreenshots === undefined) {
+      scanResults.recommendations.push('Configure media access controls to prevent unauthorized sharing');
+    }
+    
+    // For group chats, check admin count
+    if (chat.type === 'group' && (!chat.admins || chat.admins.length < 2)) {
+      scanResults.recommendations.push('Add at least one more admin to ensure continuity');
+    }
+    
+    // Check for potentially compromised devices
+    const suspiciousDevices = await mongoose.connection.collection('UserDevices').find({
+      userId: { $in: chat.participants.map(p => p.toString()) },
+      securityStatus: { $in: ['compromised', 'suspicious'] }
+    }).toArray();
+    
+    if (suspiciousDevices.length > 0) {
+      scanResults.vulnerabilities.push(`${suspiciousDevices.length} potentially compromised devices detected among participants`);
+    }
+    
+    // Log security scan
+    await logAuditEvent(
+      req.user.id,
+      'security_scan_executed',
+      {
+        chatId,
+        vulnerabilitiesFound: scanResults.vulnerabilities.length,
+        ip: req.ip,
+        userAgent: req.headers['user-agent']
+      }
+    );
+    
+    res.json({
+      chatId,
+      scanResults,
+      scanTime: new Date(),
+      scanId: uuidv4()
+    });
+  } catch (error) {
+    logger.error(`Run security scan error: ${error.message}`, { 
+      userId: req.user.id, 
+      chatId: req.params.chatId 
+    });
+    res.status(500).json({ error: 'Server error when running security scan' });
+  }
+};
+// Check for unpatched security vulnerabilities in client apps
+const unverifiedClients = userSessions.filter(session => {
+  // Check if client app version is below known security patch level
+  const clientVersion = session.clientInfo?.version || '';
+  if (!clientVersion) return true;
+  
+  // Compare against minimum secure versions (would be a database lookup in production)
+  const minSecureVersions = {
+    'ios-app': '2.4.0',
+    'android-app': '2.3.5',
+    'web-client': '1.9.2'
+  };
+  
+  const clientType = session.clientInfo.type || 'unknown';
+  const minVersion = minSecureVersions[clientType] || '0.0.0';
+  
+  return compareVersions(clientVersion, minVersion) < 0;
+});
+
+if (unverifiedClients.length > 0) {
+  vulnerabilities.push({
+    severity: 'high',
+    title: 'Outdated Client Applications',
+    description: `${unverifiedClients.length} client applications used in this chat have unpatched security vulnerabilities.`,
+    remediation: 'All participants should update their chat applications to the latest version.'
+  });
+}
+
+// Check admin configuration for group chats
+if (chat.type === 'group') {
+  if (!chat.admins || chat.admins.length < 2) {
+    recommendations.push({
+      title: 'Single Point of Admin Failure',
+      description: 'This group has only one administrator, creating a single point of failure for group management.',
+      remediation: 'Add at least one more admin to ensure continuity.'
+    });
+  }
+  
+  // Check for too many admins (excessive privilege)
+  if (chat.admins && chat.admins.length > chat.participants.length / 3) {
+    recommendations.push({
+      title: 'Excessive Admin Privileges',
+      description: 'More than 1/3 of participants have admin privileges, which may lead to security governance issues.',
+      remediation: 'Review admin assignments and reduce to only necessary users.'
+    });
+  }
+}
+
+// Generate overall security score
+let securityScore = 100;
+
+// Deduct points for each vulnerability based on severity
+vulnerabilities.forEach(v => {
+  if (v.severity === 'high') securityScore -= 20;
+  else if (v.severity === 'medium') securityScore -= 10;
+  else securityScore -= 5;
+});
+
+// Deduct points for each recommendation
+securityScore -= recommendations.length * 3;
+
+// Ensure score is between 0-100
+securityScore = Math.max(0, Math.min(100, securityScore));
+
+// Create vulnerability report
+const report = {
+  chatId,
+  generatedAt: new Date(),
+  securityScore,
+  securityLevel: securityScore >= 80 ? 'Good' : securityScore >= 50 ? 'Fair' : 'Poor',
+  vulnerabilities,
+  recommendations,
+  encryptionStatus: {
+    enabled: !!chat.encryption?.enabled,
+    protocol: chat.encryption?.protocol || 'none'
+  },
+  retentionPolicy: {
+    enabled: !!chat.security?.messageRetention?.enabled,
+    expirationTime: chat.security?.messageRetention?.expirationTime || null
+  },
+  mediaControls: chat.security?.mediaAccessControl || {
+    allowDownloads: true,
+    allowScreenshots: true,
+    allowForwarding: true
+  }
+};
+
+// Log report generation
+await logAuditEvent(
+  req.user.id,
+  'vulnerability_report_generated',
+  {
+    chatId,
+    securityScore,
+    vulnerabilityCount: vulnerabilities.length,
+    recommendationCount: recommendations.length,
+    ip: req.ip,
+    userAgent: req.headers['user-agent']
+  }
+);
+
+res.json(report);
+
+/**
+* Upload file with virus scanning and content moderation
+* @route POST /api/chats/:chatId/uploads
+* @access Private
+*/
+exports.secureFileUpload = async (req, res) => {
+try {
+const { chatId } = req.params;
+
+if (!req.file) {
+  return res.status(400).json({ error: 'File is required' });
+}
+
+// Get chat
+const chat = await Chat.findById(chatId);
+
+if (!chat) {
+  return res.status(404).json({ error: 'Chat not found' });
+}
+
+// Check if user is a participant
+if (!chat.participants.includes(req.user.id)) {
+  return res.status(403).json({ error: 'You are not a participant in this chat' });
+}
+
+// Get file information
+const fileInfo = {
+  originalName: req.file.originalname,
+  mimetype: req.file.mimetype,
+  size: req.file.size,
+  path: req.file.path,
+  isImage: req.file.mimetype.startsWith('image/'),
+  isVideo: req.file.mimetype.startsWith('video/'),
+  isDocument: !req.file.mimetype.startsWith('image/') && !req.file.mimetype.startsWith('video/')
+};
+
+// Log file upload attempt
+await logAuditEvent(
+  req.user.id,
+  'file_upload_initiated',
+  {
+    chatId,
+    fileType: fileInfo.mimetype,
+    fileSize: fileInfo.size,
+    fileName: fileInfo.originalName,
+    ip: req.ip,
+    userAgent: req.headers['user-agent']
+  }
+);
+
+// Run virus scan
+logger.info(`Running virus scan on uploaded file: ${fileInfo.originalName}`);
+const virusScanResult = await securityScanner.scanFileForViruses(req.file.path);
+
+if (!virusScanResult.safe) {
+  // Log malware detection
+  await logAuditEvent(
+    req.user.id,
+    'malware_detected',
+    {
+      chatId,
+      fileType: fileInfo.mimetype,
+      fileSize: fileInfo.size,
+      fileName: fileInfo.originalName,
+      scanResults: virusScanResult.threats,
+      ip: req.ip,
+      userAgent: req.headers['user-agent']
+    },
+    false,
+    'critical'
+  );
+  
+  return res.status(400).json({ 
+    error: 'Malware detected in uploaded file',
+    details: virusScanResult.safeForPublic ? virusScanResult.summary : 'Security threat detected'
+  });
+}
+
+// If it's an image, run content moderation
+if (fileInfo.isImage) {
+  logger.info(`Running content moderation on image: ${fileInfo.originalName}`);
+  const moderationResult = await securityScanner.moderateImageContent(req.file.path);
+  
+  if (!moderationResult.safe) {
+    // Log prohibited content detection
+    await logAuditEvent(
+      req.user.id,
+      'prohibited_content_detected',
+      {
+        chatId,
+        fileType: fileInfo.mimetype,
+        fileSize: fileInfo.size,
+        fileName: fileInfo.originalName,
+        moderationFlags: moderationResult.flags,
+        ip: req.ip,
+        userAgent: req.headers['user-agent']
+      },
+      false,
+      'critical'
+    );
+    
+    return res.status(400).json({ 
+      error: 'Prohibited content detected in image',
+      details: moderationResult.safeForPublic ? moderationResult.summary : 'Content policy violation detected'
+    });
+  }
+}
+
+// Calculate file hash for integrity verification
+const fileHash = await new Promise((resolve, reject) => {
+  const hash = crypto.createHash('sha256');
+  const stream = fs.createReadStream(req.file.path);
+  
+  stream.on('error', err => reject(err));
+  stream.on('data', chunk => hash.update(chunk));
+  stream.on('end', () => resolve(hash.digest('hex')));
+});
+
+// Get access control settings from chat
+const accessControl = chat.security?.mediaAccessControl || {
+  allowDownloads: true,
+  allowScreenshots: true,
+  allowForwarding: true
+};
+
+// Generate a unique access key for this file
+const accessKey = crypto.randomBytes(32).toString('hex');
+
+// Upload to secure cloud storage
+const uploadResult = await cloudStorage.uploadSecureFile(req.file, {
+  userId: req.user.id,
+  chatId,
+  accessControl,
+  accessKey,
+  contentHash: fileHash,
+  metadata: {
+    uploadedBy: req.user.id,
+    uploadedAt: new Date(),
+    originalName: fileInfo.originalName,
+    hash: fileHash,
+    passedSecurity: true
+  }
+});
+
+// Create media record
+const mediaType = fileInfo.isImage ? 'image' : fileInfo.isVideo ? 'video' : 'document';
+
+const media = {
+  url: uploadResult.url,
+  type: mediaType,
+  filename: fileInfo.originalName,
+  size: fileInfo.size,
+  mimetype: fileInfo.mimetype,
+  contentHash: fileHash,
+  accessKey: accessKey,
+  uploadedAt: new Date(),
+  scanResults: {
+    scannedAt: new Date(),
+    virusScan: {
+      passed: true,
+      scanId: virusScanResult.scanId
+    },
+    contentModeration: fileInfo.isImage ? {
+      passed: true,
+      scanId: moderationResult.scanId
+    } : null
+  }
+};
+
+// Log successful upload
+await logAuditEvent(
+  req.user.id,
+  'file_upload_completed',
+  {
+    chatId,
+    fileType: fileInfo.mimetype,
+    fileSize: fileInfo.size,
+    fileName: fileInfo.originalName,
+    mediaType,
+    contentHash: fileHash,
+    ip: req.ip,
+    userAgent: req.headers['user-agent']
+  }
+);
+
+res.status(201).json({
+  media,
+  uploadId: uploadResult.id,
+  secureUrl: uploadResult.secureUrl,
+  expiresAt: uploadResult.expiresAt
+});
+} catch (error) {
+logger.error(`Secure file upload error: ${error.message}`, { 
+  userId: req.user.id, 
+  chatId: req.params.chatId 
+});
+res.status(500).json({ error: 'Server error when uploading file' });
+}
+};
+
+/**
+* Implement Signal Protocol key exchange
+* @route POST /api/chats/:chatId/keys/exchange
+* @access Private
+*/
+exports.exchangeEncryptionKeys = async (req, res) => {
+try {
+const { chatId } = req.params;
+const { identityKey, signedPreKey, oneTimePreKeys } = req.body;
+
+if (!identityKey || !signedPreKey || !oneTimePreKeys) {
+  return res.status(400).json({ error: 'Encryption keys are required' });
+}
+
+// Get chat
+const chat = await Chat.findById(chatId);
+
+if (!chat) {
+  return res.status(404).json({ error: 'Chat not found' });
+}
+
+// Check if user is a participant
+if (!chat.participants.includes(req.user.id)) {
+  return res.status(403).json({ error: 'You are not a participant in this chat' });
+}
+
+// Store keys for signal protocol
+await SignalProtocol.storeUserKeys(req.user.id, {
+  identityKey,
+  signedPreKey,
+  oneTimePreKeys
+});
+
+// Get other participants' keys
+const otherParticipants = chat.participants.filter(p => p.toString() !== req.user.id);
+const otherParticipantKeys = {};
+
+for (const participantId of otherParticipants) {
+  const keys = await SignalProtocol.getUserKeys(participantId.toString());
+  if (keys) {
+    otherParticipantKeys[participantId.toString()] = keys;
+  }
+}
+
+// Update chat encryption status if all participants have shared keys
+const allParticipantsHaveKeys = otherParticipants.every(
+  p => otherParticipantKeys[p.toString()]
+);
+
+if (allParticipantsHaveKeys && (!chat.encryption || !chat.encryption.enabled)) {
+  await Chat.findByIdAndUpdate(chatId, {
+    'encryption.enabled': true,
+    'encryption.protocol': 'signal',
+    'encryption.setupCompleted': true,
+    'encryption.setupCompletedAt': new Date()
+  });
+  
+  // Notify other participants that encryption is now active
+  otherParticipants.forEach(participantId => {
+    socketEvents.emitToUser(participantId.toString(), 'encryption_enabled', {
+      chatId,
+      protocol: 'signal'
+    });
+  });
+  
+  // Log encryption enabled
+  await logAuditEvent(
+    req.user.id,
+    'encryption_enabled',
+    {
+      chatId,
+      protocol: 'signal',
+      ip: req.ip,
+      userAgent: req.headers['user-agent']
+    }
+  );
+}
+
+// Log key exchange
+await logAuditEvent(
+  req.user.id,
+  'encryption_keys_exchanged',
+  {
+    chatId,
+    keyTypes: ['identityKey', 'signedPreKey', 'oneTimePreKeys'],
+    ip: req.ip,
+    userAgent: req.headers['user-agent']
+  }
+);
+
+res.json({
+  success: true,
+  participantKeys: otherParticipantKeys,
+  encryptionActive: allParticipantsHaveKeys
+});
+} catch (error) {
+logger.error(`Exchange encryption keys error: ${error.message}`, { 
+  userId: req.user.id, 
+  chatId: req.params.chatId 
+});
+res.status(500).json({ error: 'Server error during key exchange' });
+}
+};
+
+/**
+* Set up automatic message expiration for all future messages
+* @route POST /api/chats/:chatId/auto-expiration
+* @access Private
+*/
+exports.setAutoExpiration = async (req, res) => {
+try {
+const { chatId } = req.params;
+const { enabled, expirationTime } = req.body;
+
+if (enabled && (!expirationTime || expirationTime < 60 || expirationTime > 2592000)) {
+  return res.status(400).json({ 
+    error: 'Valid expiration time required (60 seconds to 30 days)'
+  });
+}
+
+// Get chat
+const chat = await Chat.findById(chatId);
+
+if (!chat) {
+  return res.status(404).json({ error: 'Chat not found' });
+}
+
+// Check if user is a participant
+if (!chat.participants.includes(req.user.id)) {
+  return res.status(403).json({ error: 'You are not a participant in this chat' });
+}
+
+// For group chats, check if user is admin
+if (chat.type === 'group' && !chat.admins.includes(req.user.id)) {
+  return res.status(403).json({ error: 'Only admins can set auto-expiration for group chats' });
+}
+
+// Update chat settings
+await Chat.findByIdAndUpdate(chatId, {
+  'security.messageRetention.enabled': enabled,
+  'security.messageRetention.expirationTime': enabled ? expirationTime : null,
+  'security.messageRetention.setBy': req.user.id,
+  'security.messageRetention.setAt': new Date()
+});
+
+// Create system message to notify participants
+const systemMessage = new Message({
+  chat: chatId,
+  type: 'system',
+  content: enabled 
+    ? `Messages will now expire after ${formatExpirationTime(expirationTime)}`
+    : 'Message auto-expiration has been disabled',
+  timestamp: Date.now(),
+  status: 'sent',
+  metadata: {
+    systemEvent: 'auto_expiration_changed',
+    userId: req.user.id,
+    expirationEnabled: enabled,
+    expirationTime: expirationTime
+  }
+});
+
+await systemMessage.save();
+
+// Update chat's last message
+await Chat.findByIdAndUpdate(chatId, {
+  lastMessage: systemMessage._id,
+  updatedAt: Date.now()
+});
+
+// Notify other participants
+chat.participants.forEach(participant => {
+  if (participant.toString() !== req.user.id) {
+    socketEvents.emitToUser(participant.toString(), 'auto_expiration_changed', {
+      chatId,
+      enabled,
+      expirationTime,
+      changedBy: req.user.id
+    });
+  }
+});
+
+// Log auto-expiration change
+await logAuditEvent(
+  req.user.id,
+  'auto_expiration_configured',
+  {
+    chatId,
+    enabled,
+    expirationTime,
+    ip: req.ip,
+    userAgent: req.headers['user-agent']
+  }
+);
+
+// Get updated chat
+const updatedChat = await Chat.findById(chatId)
+  .populate('participants', 'firstName lastName username profileImage')
+  .populate('admins', 'firstName lastName username profileImage');
+
+res.json({
+  message: enabled 
+    ? `Auto-expiration set to ${formatExpirationTime(expirationTime)}` 
+    : 'Auto-expiration disabled',
+  chat: updatedChat
+});
+} catch (error) {
+logger.error(`Set auto expiration error: ${error.message}`, { 
+  userId: req.user.id, 
+  chatId: req.params.chatId 
+});
+res.status(500).json({ error: 'Server error when setting auto-expiration' });
+}
+};
+
+// Helper function to format expiration time in a human-readable format
+function formatExpirationTime(seconds) {
+if (seconds < 60) return `${seconds} seconds`;
+if (seconds < 3600) return `${Math.floor(seconds / 60)} minutes`;
+if (seconds < 86400) return `${Math.floor(seconds / 3600)} hours`;
+return `${Math.floor(seconds / 86400)} days`;
+}
+
+// Helper function to compare version strings
+function compareVersions(v1, v2) {
+const parts1 = v1.split('.').map(Number);
+const parts2 = v2.split('.').map(Number);
+
+for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
+const part1 = parts1[i] || 0;
+const part2 = parts2[i] || 0;
+
+if (part1 < part2) return -1;
+if (part1 > part2) return 1;
+}
+
+return 0;
+}
+
+module.exports = exports;
