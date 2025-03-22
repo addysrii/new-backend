@@ -370,8 +370,8 @@ companySalarySchema.pre('save', function(next) {
 });
 
 // Create models
-const Company = mongoose.model('Company', companySchema);
-const CompanyReview = mongoose.model('CompanyReview', companyReviewSchema);
-const CompanySalary = mongoose.model('CompanySalary', companySalarySchema);
-
+const CompanyReview = mongoose.models.CompanyReview || mongoose.model('CompanyReview', companyReviewSchema);
+const CompanySalary = mongoose.models.CompanySalary || mongoose.model('CompanySalary', companySalarySchema);
+const Company = mongoose.models.Company || mongoose.model('Company', companySchema);
 module.exports = { Company, CompanyReview, CompanySalary };
+

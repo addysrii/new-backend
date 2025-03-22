@@ -321,7 +321,7 @@ exports.getGroupAnalytics = async (req, res) => {
   }
 };
 
-module.exports = exports;
+
 
 // Group Moderation
 exports.pinPost = async (req, res) => {
@@ -1689,3 +1689,4 @@ exports.updatePost = async (req, res) => {
     handleError(err, res);
   }
 };
+module.exports = exports;

@@ -1,13 +1,13 @@
-const User = require('../models/User');
-const Post = require('../models/Post');
-const Event = require('../models/Event');
-const Job = require('../models/Job');
-const Company = require('../models/Company');
-const Group = require('../models/Group');
-const Hashtag = require('../models/Hashtag');
-const HashtagFollow = require('../models/Hashtag');
-const Connection = require('../models/Connection');
-const Settings = require('../models/Settings');
+const {User} = require('../models/User');
+const{ Post} = require('../models/Post');
+const {Event} = require('../models/Event');
+const {Job} = require('../models/Job');
+const {Company} = require('../models/Company');
+const{ Group} = require('../models/Group');
+const {Hashtag} = require('../models/Hashtag');
+const{ HashtagFollow} = require('../models/Hashtag');
+const {Connection} = require('../models/Connection');
+const {Settings} = require('../models/Settings');
 const { validationResult } = require('express-validator');
 const mongoose = require('mongoose');
 const ObjectId = mongoose.Types.ObjectId;
@@ -676,7 +676,44 @@ exports.getHashtagDetails = async (req, res) => {
     res.status(500).json({ error: 'Server error when retrieving hashtag details' });
   }
 };
+/**
+ * Get recent searches for current user
+ * @route GET /api/search/recent
+ * @access Private
+ */
+exports.getRecentSearches = async (req, res) => {
+  try {
+    // Assuming you have a UserSearch model or similar
+    // const recentSearches = await UserSearch.find({ user: req.user.id })
+    //   .sort({ timestamp: -1 })
+    //   .limit(10);
+    
+    // For now, return an empty array or mock data
+    const recentSearches = [];
+    
+    res.json(recentSearches);
+  } catch (error) {
+    console.error('Get recent searches error:', error);
+    res.status(500).json({ error: 'Server error when retrieving recent searches' });
+  }
+};
 
+/**
+ * Clear recent searches for current user
+ * @route DELETE /api/search/recent
+ * @access Private
+ */
+exports.clearRecentSearches = async (req, res) => {
+  try {
+    // Assuming you have a UserSearch model or similar
+    // await UserSearch.deleteMany({ user: req.user.id });
+    
+    res.json({ message: 'Recent searches cleared successfully' });
+  } catch (error) {
+    console.error('Clear recent searches error:', error);
+    res.status(500).json({ error: 'Server error when clearing recent searches' });
+  }
+};
 // Helper functions for searching different entity types
 
 /**

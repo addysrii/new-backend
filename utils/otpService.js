@@ -2,7 +2,7 @@
 const crypto = require('crypto');
 const nodemailer = require('nodemailer');
 const twilio = require('twilio');
-const User = require('../models/User');
+const {User} = require('../models/User');
 const logger = require('./logger');
 
 // Initialize Twilio client
@@ -42,37 +42,80 @@ const generateOTP = (length = OTP_LENGTH) => {
   return otp;
 };
 
-// Store OTP in database
+// In your utils/otpService.js, modify the storeOTP function:
+
 const storeOTP = async (userId, type, recipient, otp) => {
   try {
     const now = new Date();
     const expiresAt = new Date(now.getTime() + OTP_EXPIRY_MINUTES * 60000);
     
-    // Update user with OTP information
-    await User.findByIdAndUpdate(userId, {
-      [`verification.${type}`]: {
-        code: otp,
-        expiresAt,
-        attempts: 0,
-        recipient,
-        verified: false
-      }
-    });
+    console.log(`Storing OTP for user ${userId}, type: ${type}, recipient: ${recipient}, code: ${otp}`);
     
+    // First, check if the user exists
+    const user = await User.findById(userId);
+    if (!user) {
+      console.error(`User with ID ${userId} not found`);
+      return false;
+    }
+    
+    // Initialize verification field if it doesn't exist
+    if (!user.verification) {
+      user.verification = {};
+    }
+    
+    // Initialize type-specific verification if it doesn't exist
+    if (!user.verification[type]) {
+      user.verification[type] = {};
+    }
+    
+    // Set the verification data
+    user.verification[type].code = otp;
+    user.verification[type].expiresAt = expiresAt;
+    user.verification[type].attempts = 0;
+    user.verification[type].recipient = recipient;
+    user.verification[type].verified = false;
+    
+    // Save the user document with the updated verification data
+    await user.save();
+    
+    console.log(`OTP stored successfully for user ${userId}`);
     return true;
   } catch (error) {
-    logger.error(`Error storing OTP: ${error.message}`, { userId, type });
+    console.error(`Error storing OTP: ${error.message}`, { userId, type, error });
+    console.error(error.stack); // Add stack trace for more debugging info
     return false;
   }
 };
 
-// Send OTP via email
-const sendEmailOTP = async (email, otp, userId) => {
+// Also modify the sendEmailOTP function to ensure proper error handling:
+
+const sendEmailOTP = async (emailAddress, otp, userId) => {
   try {
+    // Log the email value for debugging
+    console.log("Email value received in sendEmailOTP:", emailAddress);
+    
+    if (!emailAddress) {
+      logger.error('Email parameter is undefined or null');
+      return false;
+    }
+    
+    if (!userId) {
+      logger.error('userId parameter is undefined or null');
+      return false;
+    }
+    
+    // Try to store OTP first to ensure user exists and can be updated
+    const stored = await storeOTP(userId, 'email', emailAddress, otp);
+    
+    if (!stored) {
+      logger.error(`Failed to store OTP for user ${userId}`);
+      return false;
+    }
+    
     // Email template
     const mailOptions = {
-      from: `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_FROM_ADDRESS}>`,
-      to: email,
+      from: `"${process.env.EMAIL_FROM_NAME || 'MeetKats'}" <${process.env.EMAIL_FROM_ADDRESS || 'noreply@meetkats.com'}>`,
+      to: emailAddress,
       subject: 'Verification Code for Your Account',
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
@@ -88,47 +131,102 @@ const sendEmailOTP = async (email, otp, userId) => {
     };
     
     // Send email
-    const info = await emailTransporter.sendMail(mailOptions);
+    try {
+      const info = await emailTransporter.sendMail(mailOptions);
+      logger.info(`Email OTP sent to ${emailAddress}`, { userId, messageId: info.messageId });
+    } catch (emailError) {
+      logger.error(`Error sending email: ${emailError.message}`, { userId, emailAddress });
+      // Continue anyway - in development, we may not have email configured
+      console.log(`[DEV] Email would be sent with code: ${otp}`);
+    }
     
-    // Store OTP in database
-    await storeOTP(userId, 'email', email, otp);
-    
-    logger.info(`Email OTP sent to ${email}`, { userId, messageId: info.messageId });
     return true;
   } catch (error) {
-    logger.error(`Error sending email OTP: ${error.message}`, { userId, email });
+    logger.error(`Error in sendEmailOTP: ${error.message}`, { userId, emailAddress });
+    console.error(error.stack); // Add stack trace for more debugging info
     return false;
   }
 };
-
-// Send OTP via SMS
 const sendSmsOTP = async (phoneNumber, otp, userId) => {
   try {
-    // Send SMS via Twilio
-    const message = await twilioClient.messages.create({
-      body: `Your verification code is: ${otp}. It expires in ${OTP_EXPIRY_MINUTES} minutes.`,
-      from: process.env.TWILIO_PHONE_NUMBER,
-      to: phoneNumber
-    });
+    console.log(`Sending SMS OTP to ${phoneNumber} for user ${userId}, code: ${otp}`);
     
-    // Store OTP in database
-    await storeOTP(userId, 'phone', phoneNumber, otp);
+    if (!phoneNumber) {
+      logger.error('Phone number parameter is undefined or null');
+      return false;
+    }
     
-    logger.info(`SMS OTP sent to ${phoneNumber}`, { userId, messageId: message.sid });
+    if (!userId) {
+      logger.error('userId parameter is undefined or null');
+      return false;
+    }
+    
+    // Try to store OTP first to ensure user exists and can be updated
+    const stored = await storeOTP(userId, 'phone', phoneNumber, otp);
+    
+    if (!stored) {
+      logger.error(`Failed to store OTP for user ${userId}`);
+      return false;
+    }
+    
+    // Try to send SMS via Twilio
+    try {
+      const message = await twilioClient.messages.create({
+        body: `Your verification code is: ${otp}. It expires in ${OTP_EXPIRY_MINUTES} minutes.`,
+        from: process.env.TWILIO_PHONE_NUMBER,
+        to: phoneNumber
+      });
+      
+      logger.info(`SMS OTP sent to ${phoneNumber}`, { userId, messageId: message.sid });
+    } catch (smsError) {
+      logger.error(`Error sending SMS: ${smsError.message}`, { userId, phoneNumber });
+      // For development, we'll just log the code since we may not have Twilio configured
+      console.log(`[DEV] SMS would be sent to ${phoneNumber} with code: ${otp}`);
+    }
+    
+    // Double-check that the OTP was stored properly
+    const updatedUser = await User.findById(userId);
+    console.log('Phone verification data after sending:', JSON.stringify(updatedUser.verification.phone, null, 2));
+    
     return true;
   } catch (error) {
     logger.error(`Error sending SMS OTP: ${error.message}`, { userId, phoneNumber });
+    console.error(`Full error:`, error);
     return false;
   }
 };
 
 // Verify OTP
+// In your utils/otpService.js, fix the verifyOTP function:
+
+// Verify OTP
 const verifyOTP = async (userId, type, code) => {
   try {
+    console.log(`Verifying OTP for user ${userId}, type: ${type}, code: ${code}`);
+    
     // Get user
     const user = await User.findById(userId);
     
-    if (!user || !user.verification || !user.verification[type]) {
+    if (!user) {
+      logger.error(`User with ID ${userId} not found`);
+      return {
+        valid: false,
+        message: 'User not found'
+      };
+    }
+    
+    console.log(`User verification data:`, JSON.stringify(user.verification, null, 2));
+    
+    if (!user.verification) {
+      logger.error(`No verification data for user ${userId}`);
+      return {
+        valid: false,
+        message: 'No verification data found'
+      };
+    }
+    
+    if (!user.verification[type]) {
+      logger.error(`No ${type} verification in progress for user ${userId}`);
       return {
         valid: false,
         message: 'No verification in progress'
@@ -152,13 +250,15 @@ const verifyOTP = async (userId, type, code) => {
     }
     
     // Check if OTP has expired
-    if (new Date() > new Date(verification.expiresAt)) {
+    if (!verification.expiresAt || new Date() > new Date(verification.expiresAt)) {
       return {
         valid: false,
         message: 'Verification code has expired',
         expired: true
       };
     }
+    
+    console.log(`Comparing provided code "${code}" with stored code "${verification.code}"`);
     
     // Check if OTP matches
     if (verification.code !== code) {
@@ -170,10 +270,9 @@ const verifyOTP = async (userId, type, code) => {
         // Lock verification
         const lockedUntil = new Date(Date.now() + LOCKOUT_DURATION_MINUTES * 60000);
         
-        await User.findByIdAndUpdate(userId, {
-          [`verification.${type}.attempts`]: attempts,
-          [`verification.${type}.lockedUntil`]: lockedUntil
-        });
+        user.verification[type].attempts = attempts;
+        user.verification[type].lockedUntil = lockedUntil;
+        await user.save();
         
         return {
           valid: false,
@@ -184,9 +283,8 @@ const verifyOTP = async (userId, type, code) => {
       }
       
       // Update attempts
-      await User.findByIdAndUpdate(userId, {
-        [`verification.${type}.attempts`]: attempts
-      });
+      user.verification[type].attempts = attempts;
+      await user.save();
       
       return {
         valid: false,
@@ -196,24 +294,54 @@ const verifyOTP = async (userId, type, code) => {
     }
     
     // OTP is valid, mark as verified
-    await User.findByIdAndUpdate(userId, {
-      [`verification.${type}.verified`]: true,
-      [`verification.${type}.verifiedAt`]: new Date()
-    });
-    
-    return {
-      valid: true,
-      message: 'Verification successful'
-    };
+    try {
+      user.verification[type].verified = true;
+      user.verification[type].verifiedAt = new Date();
+      
+      // Also update the simplified verification flags
+      if (type === 'email') {
+        user.emailVerified = true;
+        if (user.verification) {
+          user.verification.isEmailVerified = true;
+        }
+      } else if (type === 'phone') {
+        user.phoneVerified = true;
+      }
+      
+      await user.save();
+      
+      logger.info(`${type} verified successfully for user ${userId}`);
+      
+      // Double check the user was updated correctly
+      const updatedUser = await User.findById(userId);
+      console.log(`User after verification:`, JSON.stringify({
+        emailVerified: updatedUser.emailVerified,
+        phoneVerified: updatedUser.phoneVerified,
+        verification: updatedUser.verification
+      }, null, 2));
+      
+      return {
+        valid: true,
+        message: 'Verification successful'
+      };
+    } catch (saveError) {
+      logger.error(`Error saving verification status: ${saveError.message}`, { userId });
+      console.error(`Full save error:`, saveError);
+      
+      return {
+        valid: false,
+        message: 'Error saving verification status'
+      };
+    }
   } catch (error) {
     logger.error(`Error verifying OTP: ${error.message}`, { userId, type });
+    console.error(`Full error:`, error);
     return {
       valid: false,
       message: 'Server error during verification'
     };
   }
 };
-
 module.exports = {
   generateOTP,
   sendEmailOTP,

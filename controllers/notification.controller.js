@@ -1,7 +1,7 @@
-const Notification = require('../models/Notification');
-const User = require('../models/User');
-const PushToken = require('../models/Notfication');
-const Settings = require('../models/Settings');
+const {Notification} = require('../models/Notification');
+const {User} = require('../models/User');
+const {PushToken} = require('../models/Notification');
+const {Settings} = require('../models/Settings');
 const mongoose = require('mongoose');
 const { validationResult } = require('express-validator');
 const pushService = require('../services/pushnotificationService');
@@ -79,7 +79,59 @@ exports.getNotifications = async (req, res) => {
     res.status(500).json({ error: 'Server error when retrieving notifications' });
   }
 };
-
+/**
+ * Update notification settings
+ * @route PUT /api/notification-settings
+ * @access Private
+ */
+exports.updateNotificationSettings = async (req, res) => {
+  try {
+    const { 
+      emailNotifications, 
+      pushNotifications,
+      inAppNotifications,
+      activityTypes
+    } = req.body;
+    
+    // Get user's settings
+    let settings = await Settings.findOne({ user: req.user.id });
+    
+    if (!settings) {
+      settings = new Settings({
+        user: req.user.id
+      });
+    }
+    
+    // Initialize notification settings if needed
+    if (!settings.notificationSettings) {
+      settings.notificationSettings = {};
+    }
+    
+    // Update settings
+    if (emailNotifications !== undefined) {
+      settings.notificationSettings.email = emailNotifications;
+    }
+    
+    if (pushNotifications !== undefined) {
+      settings.notificationSettings.push = pushNotifications;
+    }
+    
+    if (inAppNotifications !== undefined) {
+      settings.notificationSettings.inApp = inAppNotifications;
+    }
+    
+    if (activityTypes) {
+      settings.notificationSettings.activityTypes = activityTypes;
+    }
+    
+    await settings.save();
+    
+    res.json(settings.notificationSettings);
+  } catch (error) {
+    console.error('Update notification settings error:', error);
+    res.status(500).json({ error: 'Server error when updating notification settings' });
+  }
+};
 /**
  * Mark notification as read
  * @route PUT /api/notifications/:notificationId/read

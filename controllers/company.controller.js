@@ -1084,5 +1084,633 @@ exports.getFollowers = async (req, res) => {
     res.status(500).json({ error: 'Server error when retrieving followers' });
   }
 };
+/**
+ * Follow a company
+ * @route POST /api/companies/:companyId/follow
+ * @access Private
+ */
+exports.followCompany = async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    
+    // Check if company exists
+    const company = await Company.findById(companyId);
+    
+    if (!company) {
+      return res.status(404).json({ error: 'Company not found' });
+    }
+    
+    // Check if already following
+    const existingFollow = await Follow.findOne({
+      follower: req.user.id,
+      followingCompany: companyId
+    });
+    
+    if (existingFollow) {
+      return res.status(400).json({ error: 'Already following this company' });
+    }
+    
+    // Follow company
+    const follow = new Follow({
+      follower: req.user.id,
+      followingCompany: companyId,
+      followedAt: Date.now()
+    });
+    
+    await follow.save();
+    
+    // Update follower count
+    await Company.findByIdAndUpdate(companyId, { $inc: { followersCount: 1 } });
+    
+    res.json({
+      following: true,
+      message: 'Company followed successfully'
+    });
+  } catch (error) {
+    console.error('Follow company error:', error);
+    res.status(500).json({ error: 'Server error when following company' });
+  }
+};
 
+/**
+ * Unfollow a company
+ * @route DELETE /api/companies/:companyId/follow
+ * @access Private
+ */
+exports.unfollowCompany = async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    
+    // Check if company exists
+    const company = await Company.findById(companyId);
+    
+    if (!company) {
+      return res.status(404).json({ error: 'Company not found' });
+    }
+    
+    // Check if already following
+    const existingFollow = await Follow.findOne({
+      follower: req.user.id,
+      followingCompany: companyId
+    });
+    
+    if (!existingFollow) {
+      return res.status(400).json({ error: 'Not following this company' });
+    }
+    
+    // Unfollow
+    await Follow.findByIdAndDelete(existingFollow._id);
+    
+    // Update follower count
+    await Company.findByIdAndUpdate(companyId, { $inc: { followersCount: -1 } });
+    
+    res.json({
+      following: false,
+      message: 'Company unfollowed successfully'
+    });
+  } catch (error) {
+    console.error('Unfollow company error:', error);
+    res.status(500).json({ error: 'Server error when unfollowing company' });
+  }
+};
+
+/**
+ * Get companies followed by the user
+ * @route GET /api/companies/following
+ * @access Private
+ */
+exports.getFollowedCompanies = async (req, res) => {
+  try {
+    const { page = 1, limit = 20 } = req.query;
+    
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    
+    // Get followed companies
+    const follows = await Follow.find({ follower: req.user.id })
+      .sort({ followedAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .populate({
+        path: 'followingCompany',
+        select: 'name logo industry headquarters followersCount jobCount'
+      });
+    
+    // Count total
+    const total = await Follow.countDocuments({ follower: req.user.id });
+    
+    res.json({
+      companies: follows.map(follow => follow.followingCompany),
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        pages: Math.ceil(total / parseInt(limit))
+      }
+    });
+  } catch (error) {
+    console.error('Get followed companies error:', error);
+    res.status(500).json({ error: 'Server error when retrieving followed companies' });
+  }
+};
+
+/**
+ * Create a company review
+ * @route POST /api/companies/:companyId/reviews
+ * @access Private
+ */
+exports.createCompanyReview = async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const { 
+      overallRating, 
+      title, 
+      content, 
+      pros, 
+      cons, 
+      ceoApproval, 
+      recommendToFriend,
+      employmentStatus,
+      jobTitle,
+      helpfulnessRating
+    } = req.body;
+    
+    // Validation
+    if (!overallRating || !title || !content) {
+      return res.status(400).json({ error: 'Rating, title and content are required' });
+    }
+    
+    // Check if company exists
+    const company = await Company.findById(companyId);
+    
+    if (!company) {
+      return res.status(404).json({ error: 'Company not found' });
+    }
+    
+    // Check if user has already reviewed
+    const existingReview = await CompanyReview.findOne({
+      company: companyId,
+      author: req.user.id
+    });
+    
+    if (existingReview) {
+      return res.status(400).json({ error: 'You have already reviewed this company' });
+    }
+    
+    // Create review
+    const review = new CompanyReview({
+      company: companyId,
+      author: req.user.id,
+      overallRating,
+      title,
+      content,
+      pros: pros || '',
+      cons: cons || '',
+      ceoApproval: ceoApproval || false,
+      recommendToFriend: recommendToFriend || false,
+      employmentStatus: employmentStatus || 'Current Employee',
+      jobTitle: jobTitle || '',
+      helpfulnessRating: helpfulnessRating || 0,
+      createdAt: Date.now()
+    });
+    
+    await review.save();
+    
+    // Update company review stats
+    const allReviews = await CompanyReview.find({ company: companyId });
+    
+    const overallAvg = allReviews.reduce((sum, review) => sum + review.overallRating, 0) / allReviews.length;
+    const ceoApprovalCount = allReviews.filter(review => review.ceoApproval).length;
+    const recommendCount = allReviews.filter(review => review.recommendToFriend).length;
+    
+    await Company.findByIdAndUpdate(companyId, {
+      'reviews.count': allReviews.length,
+      'reviews.averageRating': overallAvg,
+      'reviews.ceoApprovalPercentage': (ceoApprovalCount / allReviews.length) * 100,
+      'reviews.recommendPercentage': (recommendCount / allReviews.length) * 100
+    });
+    
+    // Populate author info
+    const populatedReview = await CompanyReview.findById(review._id)
+      .populate('author', 'firstName lastName username profileImage');
+    
+    res.status(201).json(populatedReview);
+  } catch (error) {
+    console.error('Create company review error:', error);
+    res.status(500).json({ error: 'Server error when creating company review' });
+  }
+};
+
+/**
+ * Get company reviews
+ * @route GET /api/companies/:companyId/reviews
+ * @access Private
+ */
+exports.getCompanyReviews = async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const { 
+      page = 1, 
+      limit = 10, 
+      sortBy = 'recent',
+      employmentStatus,
+      rating
+    } = req.query;
+    
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    
+    // Check if company exists
+    const company = await Company.findById(companyId);
+    
+    if (!company) {
+      return res.status(404).json({ error: 'Company not found' });
+    }
+    
+    // Build query
+    const query = { company: companyId };
+    
+    if (employmentStatus) {
+      query.employmentStatus = employmentStatus;
+    }
+    
+    if (rating) {
+      query.overallRating = parseInt(rating);
+    }
+    
+    // Build sort options
+    let sortOptions = {}; // Default sort
+    
+    if (sortBy === 'recent') {
+      sortOptions = { createdAt: -1 };
+    } else if (sortBy === 'helpful') {
+      sortOptions = { helpfulnessRating: -1 };
+    } else if (sortBy === 'highest') {
+      sortOptions = { overallRating: -1 };
+    } else if (sortBy === 'lowest') {
+      sortOptions = { overallRating: 1 };
+    }
+    
+    // Get reviews
+    const reviews = await CompanyReview.find(query)
+      .sort(sortOptions)
+      .skip(skip)
+      .limit(parseInt(limit))
+      .populate('author', 'firstName lastName username profileImage');
+    
+    // Count total
+    const total = await CompanyReview.countDocuments(query);
+    
+    // Get review stats
+    const stats = {
+      total,
+      averageRating: company.reviews?.averageRating || 0,
+      ratingCounts: await CompanyReview.aggregate([
+        { $match: { company: new ObjectId(companyId) } },
+        { $group: { _id: '$overallRating', count: { $sum: 1 } } },
+        { $sort: { _id: -1 } }
+      ]),
+      employmentStatus: await CompanyReview.aggregate([
+        { $match: { company: new ObjectId(companyId) } },
+        { $group: { _id: '$employmentStatus', count: { $sum: 1 } } }
+      ])
+    };
+    
+    res.json({
+      reviews,
+      stats,
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        pages: Math.ceil(total / parseInt(limit))
+      }
+    });
+  } catch (error) {
+    console.error('Get company reviews error:', error);
+    res.status(500).json({ error: 'Server error when retrieving company reviews' });
+  }
+};
+
+/**
+ * Update a company review
+ * @route PUT /api/companies/reviews/:reviewId
+ * @access Private
+ */
+exports.updateCompanyReview = async (req, res) => {
+  try {
+    const { reviewId } = req.params;
+    const { 
+      overallRating, 
+      title, 
+      content, 
+      pros, 
+      cons, 
+      ceoApproval, 
+      recommendToFriend,
+      employmentStatus,
+      jobTitle
+    } = req.body;
+    
+    // Get review
+    const review = await CompanyReview.findById(reviewId);
+    
+    if (!review) {
+      return res.status(404).json({ error: 'Review not found' });
+    }
+    
+    // Check if user is the author
+    if (review.author.toString() !== req.user.id) {
+      return res.status(403).json({ error: 'You can only update your own reviews' });
+    }
+    
+    // Update review
+    if (overallRating) review.overallRating = overallRating;
+    if (title) review.title = title;
+    if (content) review.content = content;
+    if (pros !== undefined) review.pros = pros;
+    if (cons !== undefined) review.cons = cons;
+    if (ceoApproval !== undefined) review.ceoApproval = ceoApproval;
+    if (recommendToFriend !== undefined) review.recommendToFriend = recommendToFriend;
+    if (employmentStatus) review.employmentStatus = employmentStatus;
+    if (jobTitle !== undefined) review.jobTitle = jobTitle;
+    
+    review.updatedAt = Date.now();
+    review.edited = true;
+    
+    await review.save();
+    
+    // Update company review stats
+    const allReviews = await CompanyReview.find({ company: review.company });
+    
+    const overallAvg = allReviews.reduce((sum, review) => sum + review.overallRating, 0) / allReviews.length;
+    const ceoApprovalCount = allReviews.filter(review => review.ceoApproval).length;
+    const recommendCount = allReviews.filter(review => review.recommendToFriend).length;
+    
+    await Company.findByIdAndUpdate(review.company, {
+      'reviews.averageRating': overallAvg,
+      'reviews.ceoApprovalPercentage': (ceoApprovalCount / allReviews.length) * 100,
+      'reviews.recommendPercentage': (recommendCount / allReviews.length) * 100
+    });
+    
+    // Populate author info
+    const populatedReview = await CompanyReview.findById(review._id)
+      .populate('author', 'firstName lastName username profileImage');
+    
+    res.json(populatedReview);
+  } catch (error) {
+    console.error('Update company review error:', error);
+    res.status(500).json({ error: 'Server error when updating company review' });
+  }
+};
+
+/**
+ * Delete a company review
+ * @route DELETE /api/companies/reviews/:reviewId
+ * @access Private
+ */
+exports.deleteCompanyReview = async (req, res) => {
+  try {
+    const { reviewId } = req.params;
+    
+    // Get review
+    const review = await CompanyReview.findById(reviewId);
+    
+    if (!review) {
+      return res.status(404).json({ error: 'Review not found' });
+    }
+    
+    // Check if user is the author
+    if (review.author.toString() !== req.user.id) {
+      return res.status(403).json({ error: 'You can only delete your own reviews' });
+    }
+    
+    const companyId = review.company;
+    
+    // Delete review
+    await CompanyReview.findByIdAndDelete(reviewId);
+    
+    // Update company review stats
+    const allReviews = await CompanyReview.find({ company: companyId });
+    
+    if (allReviews.length > 0) {
+      const overallAvg = allReviews.reduce((sum, review) => sum + review.overallRating, 0) / allReviews.length;
+      const ceoApprovalCount = allReviews.filter(review => review.ceoApproval).length;
+      const recommendCount = allReviews.filter(review => review.recommendToFriend).length;
+      
+      await Company.findByIdAndUpdate(companyId, {
+        'reviews.count': allReviews.length,
+        'reviews.averageRating': overallAvg,
+        'reviews.ceoApprovalPercentage': (ceoApprovalCount / allReviews.length) * 100,
+        'reviews.recommendPercentage': (recommendCount / allReviews.length) * 100
+      });
+    } else {
+      // No reviews left
+      await Company.findByIdAndUpdate(companyId, {
+        'reviews.count': 0,
+        'reviews.averageRating': 0,
+        'reviews.ceoApprovalPercentage': 0,
+        'reviews.recommendPercentage': 0
+      });
+    }
+    
+    res.json({
+      message: 'Review deleted successfully'
+    });
+  } catch (error) {
+    console.error('Delete company review error:', error);
+    res.status(500).json({ error: 'Server error when deleting company review' });
+  }
+};
+
+/**
+ * Report a salary
+ * @route POST /api/companies/:companyId/salaries
+ * @access Private
+ */
+exports.reportSalary = async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const { 
+      jobTitle, 
+      salary, 
+      currency = 'USD',
+      location,
+      yearsOfExperience,
+      employmentType = 'Full-time',
+      benefits,
+      isCurrentEmployee,
+      endYear
+    } = req.body;
+    
+    // Validation
+    if (!jobTitle || !salary) {
+      return res.status(400).json({ error: 'Job title and salary are required' });
+    }
+    
+    // Check if company exists
+    const company = await Company.findById(companyId);
+    
+    if (!company) {
+      return res.status(404).json({ error: 'Company not found' });
+    }
+    
+    // Create salary report
+    const salaryReport = new SalaryReport({
+      company: companyId,
+      reporter: req.user.id,
+      jobTitle,
+      salary: parseFloat(salary),
+      currency,
+      location: location || '',
+      yearsOfExperience: yearsOfExperience || 0,
+      employmentType,
+      benefits: benefits || [],
+      isCurrentEmployee: isCurrentEmployee !== undefined ? isCurrentEmployee : true,
+      endYear: endYear || null,
+      createdAt: Date.now()
+    });
+    
+    await salaryReport.save();
+    
+    // Update company salary stats
+    const allSalaries = await SalaryReport.find({ company: companyId });
+    
+    // Group by job title
+    const jobTitleGroups = {};
+    
+    allSalaries.forEach(report => {
+      if (!jobTitleGroups[report.jobTitle]) {
+        jobTitleGroups[report.jobTitle] = [];
+      }
+      
+      jobTitleGroups[report.jobTitle].push(report.salary);
+    });
+    
+    // Calculate averages
+    const salaryStats = Object.keys(jobTitleGroups).map(title => {
+      const salaries = jobTitleGroups[title];
+      const average = salaries.reduce((sum, salary) => sum + salary, 0) / salaries.length;
+      
+      return {
+        jobTitle: title,
+        averageSalary: average,
+        count: salaries.length
+      };
+    });
+    
+    await Company.findByIdAndUpdate(companyId, {
+      'salaries.stats': salaryStats,
+      'salaries.count': allSalaries.length
+    });
+    
+    res.status(201).json({
+      message: 'Salary reported successfully',
+      salaryReport
+    });
+  } catch (error) {
+    console.error('Report salary error:', error);
+    res.status(500).json({ error: 'Server error when reporting salary' });
+  }
+};
+
+/**
+ * Get company salaries
+ * @route GET /api/companies/:companyId/salaries
+ * @access Private
+ */
+exports.getCompanySalaries = async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const { 
+      page = 1,
+      limit = 20,
+      jobTitle,
+      minSalary,
+      maxSalary,
+      location,
+      employmentType
+    } = req.query;
+    
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    
+    // Check if company exists
+    const company = await Company.findById(companyId);
+    
+    if (!company) {
+      return res.status(404).json({ error: 'Company not found' });
+    }
+    
+    // Build query
+    const query = { company: companyId };
+    
+    if (jobTitle) {
+      query.jobTitle = { $regex: new RegExp(jobTitle, 'i') };
+    }
+    
+    if (minSalary) {
+      query.salary = { $gte: parseFloat(minSalary) };
+    }
+    
+    if (maxSalary) {
+      query.salary = { ...query.salary, $lte: parseFloat(maxSalary) };
+    }
+    
+    if (location) {
+      query.location = { $regex: new RegExp(location, 'i') };
+    }
+    
+    if (employmentType) {
+      query.employmentType = employmentType;
+    }
+    
+    // Get salaries
+    const salaries = await SalaryReport.find(query)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .select('-reporter');
+    
+    // Count total
+    const total = await SalaryReport.countDocuments(query);
+    
+    // Get salary statistics
+    const stats = {
+      count: total,
+      jobTitles: await SalaryReport.aggregate([
+        { $match: { company: new ObjectId(companyId) } },
+        { $group: { 
+          _id: '$jobTitle', 
+          count: { $sum: 1 },
+          avgSalary: { $avg: '$salary' },
+          minSalary: { $min: '$salary' },
+          maxSalary: { $max: '$salary' }
+        }},
+        { $sort: { count: -1 } }
+      ]),
+      locations: await SalaryReport.aggregate([
+        { $match: { company: new ObjectId(companyId), location: { $ne: '' } } },
+        { $group: { _id: '$location', count: { $sum: 1 } } },
+        { $sort: { count: -1 } }
+      ]),
+      employmentTypes: await SalaryReport.aggregate([
+        { $match: { company: new ObjectId(companyId) } },
+        { $group: { _id: '$employmentType', count: { $sum: 1 } } },
+        { $sort: { count: -1 } }
+      ])
+    };
+    
+    res.json({
+      salaries,
+      stats,
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        pages: Math.ceil(total / parseInt(limit))
+      }
+    });
+  } catch (error) {
+    console.error('Get company salaries error:', error);
+    res.status(500).json({ error: 'Server error when retrieving company salaries' });
+  }
+};
 module.exports = exports;

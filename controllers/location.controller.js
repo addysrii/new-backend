@@ -1,5 +1,5 @@
 const User = require('../models/User');
-const LocationHistory = require('../models/LocationHistory');
+const LocationHistory = require('../models/Location');
 const LocationSharing = require('../models/Location');
 const Geofence = require('../models/Location');
 const Connection = require('../models/Connection');
@@ -1324,7 +1324,208 @@ exports.getDirections = async (req, res) => {
       res.status(500).json({ error: 'Server error when fetching directions' });
     }
   };
-  
+  /**
+ * Clear location history
+ * @route DELETE /api/location/history
+ * @access Private
+ */
+exports.clearLocationHistory = async (req, res) => {
+  try {
+    const { before } = req.query;
+    
+    // Build query
+    const query = { user: req.user.id };
+    
+    // If 'before' is provided, only delete history before that date
+    if (before) {
+      query.timestamp = { $lte: new Date(before) };
+    }
+    
+    // Delete location history
+    const result = await LocationHistory.deleteMany(query);
+    
+    res.json({
+      success: true,
+      message: `Successfully deleted ${result.deletedCount} location history entries`,
+      deletedCount: result.deletedCount
+    });
+  } catch (error) {
+    console.error('Clear location history error:', error);
+    res.status(500).json({ error: 'Server error when clearing location history' });
+  }
+};
+/**
+ * Share location with user
+ * @route POST /api/location/share
+ * @access Private
+ */
+exports.shareLocation = async (req, res) => {
+  try {
+    const { userId, duration, accuracy = 'precise' } = req.body;
+    
+    if (!userId) {
+      return res.status(400).json({ error: 'User ID is required' });
+    }
+    
+    // Check if target user exists
+    const targetUser = await User.findById(userId);
+    
+    if (!targetUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    // Create or update location sharing
+    let sharing = await LocationSharing.findOne({
+      sharer: req.user.id,
+      sharee: userId
+    });
+    
+    if (!sharing) {
+      sharing = new LocationSharing({
+        sharer: req.user.id,
+        sharee: userId,
+        mutual: false
+      });
+    }
+    
+    // Update sharing settings
+    sharing.sharerToSharee = {
+      enabled: true,
+      accuracy,
+      expiresAt: duration ? new Date(Date.now() + duration * 60 * 1000) : null
+    };
+    
+    // Check if mutual
+    const reverseSharing = await LocationSharing.findOne({
+      sharer: userId,
+      sharee: req.user.id,
+      'sharerToSharee.enabled': true
+    });
+    
+    sharing.mutual = !!reverseSharing;
+    
+    await sharing.save();
+    
+    // Immediately share current location
+    const user = await User.findById(req.user.id).select('location locationMetadata');
+    
+    if (user.location && user.location.coordinates) {
+      socketEvents.emitToUser(userId, 'location_update', {
+        userId: req.user.id,
+        location: {
+          latitude: user.location.coordinates[1],
+          longitude: user.location.coordinates[0],
+          accuracy: user.locationMetadata?.accuracy,
+          timestamp: user.locationMetadata?.lastUpdated || Date.now()
+        },
+        accuracy
+      });
+    }
+    
+    res.json({
+      success: true,
+      sharing: {
+        userId,
+        enabled: true,
+        accuracy,
+        expiresAt: sharing.sharerToSharee.expiresAt,
+        mutual: sharing.mutual
+      }
+    });
+  } catch (error) {
+    console.error('Share location error:', error);
+    res.status(500).json({ error: 'Server error when sharing location' });
+  }
+};
+
+/**
+ * Get users sharing location with me
+ * @route GET /api/location/shared-with-me
+ * @access Private
+ */
+exports.getSharedLocations = async (req, res) => {
+  try {
+    // Find all users sharing location with current user
+    const sharings = await LocationSharing.find({
+      sharee: req.user.id,
+      'sharerToSharee.enabled': true
+    }).populate('sharer', 'firstName lastName username profileImage location locationMetadata lastActive');
+    
+    // Format response
+    const sharedLocations = sharings.map(sharing => {
+      const user = sharing.sharer;
+      
+      let locationData = null;
+      
+      if (user.location && user.location.coordinates) {
+        locationData = {
+          latitude: user.location.coordinates[1],
+          longitude: user.location.coordinates[0],
+          accuracy: sharing.sharerToSharee.accuracy === 'precise' ? user.locationMetadata?.accuracy : null,
+          timestamp: user.locationMetadata?.lastUpdated || null
+        };
+        
+        // Apply approximate location if needed
+        if (sharing.sharerToSharee.accuracy === 'approximate') {
+          locationData.latitude = Math.round(locationData.latitude * 100) / 100;
+          locationData.longitude = Math.round(locationData.longitude * 100) / 100;
+        }
+      }
+      
+      return {
+        userId: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        username: user.username,
+        profileImage: user.profileImage,
+        lastActive: user.lastActive,
+        location: locationData,
+        sharing: {
+          accuracy: sharing.sharerToSharee.accuracy,
+          expiresAt: sharing.sharerToSharee.expiresAt,
+          mutual: sharing.mutual
+        }
+      };
+    });
+    
+    res.json(sharedLocations);
+  } catch (error) {
+    console.error('Get shared locations error:', error);
+    res.status(500).json({ error: 'Server error when getting shared locations' });
+  }
+};
+
+/**
+ * Get location sharing settings
+ * @route GET /api/location/sharing
+ * @access Private
+ */
+exports.getLocationSharing = async (req, res) => {
+  try {
+    // Find sharing configurations initiated by the user
+    const mySharing = await LocationSharing.find({
+      sharer: req.user.id,
+      'sharerToSharee.enabled': true
+    }).populate('sharee', 'firstName lastName username profileImage');
+    
+    // Format response
+    const sharing = mySharing.map(share => ({
+      userId: share.sharee._id,
+      firstName: share.sharee.firstName,
+      lastName: share.sharee.lastName,
+      username: share.sharee.username,
+      profileImage: share.sharee.profileImage,
+      accuracy: share.sharerToSharee.accuracy,
+      expiresAt: share.sharerToSharee.expiresAt,
+      mutual: share.mutual
+    }));
+    
+    res.json(sharing);
+  } catch (error) {
+    console.error('Get location sharing error:', error);
+    res.status(500).json({ error: 'Server error when getting location sharing settings' });
+  }
+};
   /**
    * Format distance for better readability
    */

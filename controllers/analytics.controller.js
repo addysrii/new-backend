@@ -1,13 +1,13 @@
-const User = require('../models/User');
-const Post = require('../models/content/Post');
-const Event = require('../models/Event');
-const Job = require('../models/Job');
-const Company = require('../models/Company');
-const Group = require('../models/Group');
-const ProfileView = require('../models/User');
-const Connection = require('../models/Connection');
-const Follow = require('../models/Job');
-const JobApplication = require('../models/Job');
+const {User} = require('../models/User');
+const {Post} = require('../models/Post');
+const {Event} = require('../models/Event');
+const{ Job} = require('../models/Job');
+const {Company} = require('../models/Company');
+const {Group} = require('../models/Group');
+const {ProfileView} = require('../models/User');
+const {Connection }= require('../models/Connection');
+const {Follow} = require('../models/Job');
+const {JobApplication} = require('../models/Job');
 const { validationResult } = require('express-validator');
 const mongoose = require('mongoose');
 const ObjectId = mongoose.Types.ObjectId;
@@ -1226,6 +1226,317 @@ exports.getGroupAnalytics = async (req, res) => {
   } catch (error) {
     console.error('Get group analytics error:', error);
     res.status(500).json({ error: 'Server error when retrieving group analytics' });
+  }
+};
+/**
+ * Get user analytics (for admin)
+ * @route GET /api/admin/analytics/users
+ * @access Private/Admin
+ */
+exports.getUserAnalytics = async (req, res) => {
+  try {
+    const { timeRange = '30d' } = req.query;
+    
+    // Calculate date range
+    let startDate = new Date();
+    
+    switch(timeRange) {
+      case '7d':
+        startDate.setDate(startDate.getDate() - 7);
+        break;
+      case '30d':
+        startDate.setDate(startDate.getDate() - 30);
+        break;
+      case '90d':
+        startDate.setDate(startDate.getDate() - 90);
+        break;
+      case '1y':
+        startDate.setFullYear(startDate.getFullYear() - 1);
+        break;
+      default:
+        startDate.setDate(startDate.getDate() - 30);
+    }
+    
+    // Get user growth
+    const userGrowth = await User.aggregate([
+      {
+        $match: {
+          createdAt: { $gte: startDate }
+        }
+      },
+      {
+        $group: {
+          _id: {
+            $dateToString: { format: "%Y-%m-%d", date: "$createdAt" }
+          },
+          count: { $sum: 1 }
+        }
+      },
+      {
+        $sort: { _id: 1 }
+      }
+    ]);
+    
+    // Get active users
+    const activeUsers = await User.countDocuments({
+      lastActive: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
+    });
+    
+    // Get total users
+    const totalUsers = await User.countDocuments();
+    
+    // Get user demographics (example: by industry)
+    const usersByIndustry = await User.aggregate([
+      {
+        $group: {
+          _id: "$industry",
+          count: { $sum: 1 }
+        }
+      },
+      {
+        $sort: { count: -1 }
+      },
+      {
+        $limit: 10
+      }
+    ]);
+    
+    // Get users by location
+    const usersByLocation = await User.aggregate([
+      {
+        $group: {
+          _id: "$location.country",
+          count: { $sum: 1 }
+        }
+      },
+      {
+        $sort: { count: -1 }
+      },
+      {
+        $limit: 10
+      }
+    ]);
+    
+    res.json({
+      users: {
+        total: totalUsers,
+        active: activeUsers,
+        growth: userGrowth,
+        byIndustry: usersByIndustry.map(item => ({
+          industry: item._id || 'Not Specified',
+          count: item.count
+        })),
+        byLocation: usersByLocation.map(item => ({
+          location: item._id || 'Not Specified',
+          count: item.count
+        }))
+      },
+      timeRange
+    });
+  } catch (error) {
+    console.error('Get user analytics error:', error);
+    res.status(500).json({ error: 'Server error when retrieving user analytics' });
+  }
+};
+
+/**
+ * Get platform analytics (for admin)
+ * @route GET /api/admin/analytics/platform
+ * @access Private/Admin
+ */
+exports.getPlatformAnalytics = async (req, res) => {
+  try {
+    const { timeRange = '30d' } = req.query;
+    
+    // Calculate date range
+    let startDate = new Date();
+    
+    switch(timeRange) {
+      case '7d':
+        startDate.setDate(startDate.getDate() - 7);
+        break;
+      case '30d':
+        startDate.setDate(startDate.getDate() - 30);
+        break;
+      case '90d':
+        startDate.setDate(startDate.getDate() - 90);
+        break;
+      case '1y':
+        startDate.setFullYear(startDate.getFullYear() - 1);
+        break;
+      default:
+        startDate.setDate(startDate.getDate() - 30);
+    }
+    
+    // Get total counts
+    const totalUsers = await User.countDocuments();
+    const totalPosts = await Post.countDocuments();
+    const totalEvents = await Event.countDocuments();
+    const totalJobs = await Job.countDocuments();
+    const totalCompanies = await Company.countDocuments();
+    const totalGroups = await Group.countDocuments();
+    
+    // Get daily active users
+    const dailyActiveUsers = await User.countDocuments({
+      lastActive: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
+    });
+    
+    // Get weekly active users
+    const weeklyActiveUsers = await User.countDocuments({
+      lastActive: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }
+    });
+    
+    // Get monthly active users
+    const monthlyActiveUsers = await User.countDocuments({
+      lastActive: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) }
+    });
+    
+    // Get daily content creation
+    const dailyPosts = await Post.countDocuments({
+      createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
+    });
+    
+    // Get daily interactions (placeholder - would need reaction, comment tables)
+    const dailyInteractions = await Post.aggregate([
+      {
+        $match: {
+          createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: { $ifNull: ["$interactionCount", 0] } }
+        }
+      }
+    ]);
+    
+    const totalDailyInteractions = dailyInteractions[0]?.total || 0;
+    
+    res.json({
+      platform: {
+        totalUsers,
+        totalPosts,
+        totalEvents,
+        totalJobs,
+        totalCompanies,
+        totalGroups,
+        activeUsers: {
+          daily: dailyActiveUsers,
+          weekly: weeklyActiveUsers, 
+          monthly: monthlyActiveUsers
+        },
+        dailyEngagement: {
+          posts: dailyPosts,
+          interactions: totalDailyInteractions
+        }
+      },
+      timeRange
+    });
+  } catch (error) {
+    console.error('Get platform analytics error:', error);
+    res.status(500).json({ error: 'Server error when retrieving platform analytics' });
+  }
+};
+
+/**
+ * Get job search analytics
+ * @route GET /api/analytics/job-search
+ * @access Private
+ */
+exports.getJobSearchAnalytics = async (req, res) => {
+  try {
+    const { timeRange = '30d' } = req.query;
+    
+    // Calculate date range
+    let startDate = new Date();
+    
+    switch(timeRange) {
+      case '7d':
+        startDate.setDate(startDate.getDate() - 7);
+        break;
+      case '30d':
+        startDate.setDate(startDate.getDate() - 30);
+        break;
+      case '90d':
+        startDate.setDate(startDate.getDate() - 90);
+        break;
+      case '1y':
+        startDate.setFullYear(startDate.getFullYear() - 1);
+        break;
+      default:
+        startDate.setDate(startDate.getDate() - 30);
+    }
+    
+    // Get job applications
+    const applications = await JobApplication.find({
+      applicant: req.user.id,
+      appliedAt: { $gte: startDate }
+    }).populate('job', 'title company');
+    
+    // Group applications by status
+    const applicationsByStatus = {
+      pending: 0,
+      reviewing: 0,
+      shortlisted: 0,
+      rejected: 0,
+      hired: 0
+    };
+    
+    applications.forEach(app => {
+      applicationsByStatus[app.status] = (applicationsByStatus[app.status] || 0) + 1;
+    });
+    
+    // Get application trend
+    const applicationTrend = await JobApplication.aggregate([
+      {
+        $match: {
+          applicant: new ObjectId(req.user.id),
+          appliedAt: { $gte: startDate }
+        }
+      },
+      {
+        $group: {
+          _id: {
+            $dateToString: { format: "%Y-%m-%d", date: "$appliedAt" }
+          },
+          count: { $sum: 1 }
+        }
+      },
+      {
+        $sort: { _id: 1 }
+      }
+    ]);
+    
+    // Get saved jobs
+    const savedJobs = await Job.find({
+      'savedBy.user': req.user.id,
+      'savedBy.savedAt': { $gte: startDate }
+    }).countDocuments();
+    
+    // Get job view history
+    const jobViews = await Job.find({
+      'viewedBy.user': req.user.id,
+      'viewedBy.viewedAt': { $gte: startDate }
+    }).countDocuments();
+    
+    res.json({
+      jobSearch: {
+        applications: {
+          total: applications.length,
+          byStatus: applicationsByStatus,
+          trend: applicationTrend
+        },
+        savedJobs,
+        jobViews,
+        successRate: applications.length > 0 ? 
+          ((applicationsByStatus.shortlisted + applicationsByStatus.hired) / applications.length * 100).toFixed(2) : 0
+      },
+      timeRange
+    });
+  } catch (error) {
+    console.error('Get job search analytics error:', error);
+    res.status(500).json({ error: 'Server error when retrieving job search analytics' });
   }
 };
 

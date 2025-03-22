@@ -1,5 +1,5 @@
 const { Story, Highlight } = require('../models/Story');
-const User = require('../models/User');
+const {User} = require('../models/User');
 const fs = require('fs');
 const path = require('path');
 
@@ -690,6 +690,55 @@ exports.removeCloseFriend = async (req, res) => {
     );
     
     res.json({ message: 'User removed from close friends' });
+  } catch (err) {
+    handleError(err, res);
+  }
+};
+// Here are the missing implementations for your controller:
+
+/**
+ * Get all highlights for the current user
+ * @route GET /api/highlights
+ * @access Private
+ */
+exports.getHighlights = async (req, res) => {
+  try {
+    // Get highlights for the current user
+    const highlights = await Highlight.find({ owner: req.user.id })
+      .populate('owner', 'username email profileImage')
+      .sort({ createdAt: -1 });
+    
+    res.json(highlights);
+  } catch (err) {
+    handleError(err, res);
+  }
+};
+
+/**
+ * Get a specific highlight by ID
+ * @route GET /api/highlights/:highlightId
+ * @access Private
+ */
+exports.getHighlight = async (req, res) => {
+  try {
+    const { highlightId } = req.params;
+    
+    // Find highlight
+    const highlight = await Highlight.findById(highlightId)
+      .populate('owner', 'username email profileImage')
+      .populate('stories');
+    
+    if (!highlight) {
+      return res.status(404).json({ error: 'Highlight not found' });
+    }
+    
+    // Check if user has permission to view
+    // Users can view their own highlights or public highlights of others
+    if (highlight.owner._id.toString() !== req.user.id) {
+      return res.status(403).json({ error: 'You do not have permission to view this highlight' });
+    }
+    
+    res.json(highlight);
   } catch (err) {
     handleError(err, res);
   }

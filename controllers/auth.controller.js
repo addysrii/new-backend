@@ -1,4 +1,5 @@
-const User = require('../models/User');
+const mongoose = require('mongoose');
+const {User} = require('../models/User');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
@@ -7,14 +8,13 @@ const speakeasy = require('speakeasy');
 const QRCode = require('qrcode');
 const sendEmail = require('../utils/sendEmail');
 const { OAuth2Client } = require('google-auth-library');
-const mongoose = require('mongoose');
 const ua = require('universal-analytics');
 const DeviceDetector = require('node-device-detector');
 const geoip = require('geoip-lite');
 const passport = require('passport');
 const logger = require('../utils/logger');
 const otpService = require('../utils/otpService');
-
+const SecurityLog = require('../models/Security');
 // Environment variables for services
 const JWT_SECRET = process.env.JWT_SECRET || 'your-jwt-secret';
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
@@ -35,6 +35,8 @@ const deviceDetector = new DeviceDetector();
  * @route POST /auth/email/send-code
  * @access Public
  */
+// In your controllers/auth.controller.js, modify the sendEmailVerificationCode function:
+
 exports.sendEmailVerificationCode = async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -42,54 +44,99 @@ exports.sendEmailVerificationCode = async (req, res) => {
       return res.status(400).json({ errors: errors.array() });
     }
     
-    const { email } = req.body;
+    const { email, userId } = req.body;
+    console.log('Email verification request for:', { email, userId });
     
-    // Check if email already exists and verified
-    const existingUser = await User.findOne({ email, 'verification.email.verified': true });
-    if (existingUser) {
-      return res.status(400).json({ error: 'Email already registered and verified' });
+    if (!email || !userId) {
+      return res.status(400).json({ error: 'Email and userId are required' });
     }
     
-    let userId;
-    
-    // Check if user is authenticated
-    if (req.user) {
-      userId = req.user.id;
-    } else {
-      // For signup flow, create a temp user or use existing unverified
-      const tempUser = await User.findOne({ email, 'verification.email.verified': false });
-      
-      if (tempUser) {
-        userId = tempUser._id;
-      } else {
-        // Create temporary user entry
-        const newTempUser = new User({
-          email,
-          tempAccount: true
-        });
-        
-        await newTempUser.save();
-        userId = newTempUser._id;
-      }
+    // Verify that the user exists
+    const user = await User.findById(userId);
+    if (!user) {
+      console.error(`User with ID ${userId} not found`);
+      return res.status(404).json({ error: 'User not found' });
     }
+    
+    console.log(`Found user: ${user.email}, ID: ${user._id}`);
     
     // Generate OTP
     const otp = otpService.generateOTP();
+    console.log(`Generated OTP: ${otp} for user ${userId}`);
     
     // Send OTP via email
     const sent = await otpService.sendEmailOTP(email, otp, userId);
     
     if (!sent) {
+      console.error(`Failed to send verification code to ${email}`);
       return res.status(500).json({ error: 'Failed to send verification code' });
     }
     
-    res.json({
+    // Double-check that the OTP was stored properly
+    const updatedUser = await User.findById(userId);
+    console.log('Verification data after sending:', updatedUser.verification);
+    
+    return res.json({
       message: 'Verification code sent to email',
       userId,
       expiresInMinutes: 10
     });
   } catch (error) {
-    logger.error(`Send email verification error: ${error.message}`);
+    console.error(`Send email verification error: ${error.message}`);
+    console.error(error.stack); // Add stack trace
+    res.status(500).json({ error: 'Server error during email verification' });
+  }
+};
+
+// Also modify the verifyEmailCode function:
+
+exports.verifyEmailCode = async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+    
+    const { userId, code } = req.body;
+    console.log(`Verifying email code for user ${userId}: ${code}`);
+    
+    if (!userId || !code) {
+      return res.status(400).json({ error: 'User ID and verification code are required' });
+    }
+    
+    // Check if user exists before trying to verify
+    const user = await User.findById(userId);
+    if (!user) {
+      console.error(`User with ID ${userId} not found`);
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    // Check verification field structure
+    console.log('User verification data:', user.verification);
+    
+    // Verify OTP
+    const verificationResult = await otpService.verifyOTP(userId, 'email', code);
+    console.log('Verification result:', verificationResult);
+    
+    if (!verificationResult.valid) {
+      return res.status(400).json({ 
+        error: verificationResult.message,
+        ...verificationResult
+      });
+    }
+    
+    // Update simplified verification flag for easier querying
+    await User.findByIdAndUpdate(userId, {
+      isEmailVerified: true
+    });
+    
+    res.json({
+      message: 'Email verified successfully',
+      verified: true
+    });
+  } catch (error) {
+    console.error(`Verify email code error: ${error.message}`);
+    console.error(error.stack); // Add stack trace
     res.status(500).json({ error: 'Server error during email verification' });
   }
 };
@@ -107,9 +154,25 @@ exports.verifyEmailCode = async (req, res) => {
     }
     
     const { userId, code } = req.body;
+    console.log(`Verifying email code for user ${userId}: ${code}`);
+    
+    if (!userId || !code) {
+      return res.status(400).json({ error: 'User ID and verification code are required' });
+    }
+    
+    // Check if user exists before trying to verify
+    const user = await User.findById(userId);
+    if (!user) {
+      console.error(`User with ID ${userId} not found`);
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    // Check verification field structure
+    console.log('User verification data:', JSON.stringify(user.verification, null, 2));
     
     // Verify OTP
     const verificationResult = await otpService.verifyOTP(userId, 'email', code);
+    console.log('Verification result:', verificationResult);
     
     if (!verificationResult.valid) {
       return res.status(400).json({ 
@@ -118,24 +181,24 @@ exports.verifyEmailCode = async (req, res) => {
       });
     }
     
-    // If this is a signup flow, user will still need to complete registration
-    // If this is for an existing user, update their record
-    if (req.user) {
-      await User.findByIdAndUpdate(userId, {
-        emailVerified: true
-      });
+    // If we got here, verification was successful
+    // Make sure to update both the simplified flag and the verification status
+    user.emailVerified = true;
+    if (user.verification) {
+      user.verification.isEmailVerified = true;
     }
+    await user.save();
     
     res.json({
       message: 'Email verified successfully',
       verified: true
     });
   } catch (error) {
-    logger.error(`Verify email code error: ${error.message}`);
+    console.error(`Verify email code error: ${error.message}`);
+    console.error(error.stack); // Add stack trace
     res.status(500).json({ error: 'Server error during email verification' });
   }
 };
-
 /**
  * Send phone verification code
  * @route POST /auth/phone/send-code
@@ -148,7 +211,21 @@ exports.sendPhoneVerificationCode = async (req, res) => {
       return res.status(400).json({ errors: errors.array() });
     }
     
-    const { phoneNumber } = req.body;
+    const { phoneNumber, userId } = req.body;
+    console.log('Phone verification request for:', { phoneNumber, userId });
+    
+    if (!phoneNumber || !userId) {
+      return res.status(400).json({ error: 'Phone number and userId are required' });
+    }
+    
+    // Verify that the user exists
+    const user = await User.findById(userId);
+    if (!user) {
+      console.error(`User with ID ${userId} not found`);
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    console.log(`Found user: ${user.email}, ID: ${user._id}`);
     
     // Format phone number to E.164 format
     let formattedPhone = phoneNumber;
@@ -156,59 +233,34 @@ exports.sendPhoneVerificationCode = async (req, res) => {
       formattedPhone = `+${phoneNumber}`;
     }
     
-    // Check if phone already exists and verified
-    const existingUser = await User.findOne({ 
-      phoneNumber: formattedPhone,
-      'verification.phone.verified': true
-    });
-    
-    if (existingUser) {
-      return res.status(400).json({ error: 'Phone number already registered and verified' });
-    }
-    
-    let userId;
-    
-    // Check if user is authenticated
-    if (req.user) {
-      userId = req.user.id;
-    } else {
-      // For signup flow, create a temp user or use existing unverified
-      const tempUser = await User.findOne({ 
-        phoneNumber: formattedPhone,
-        'verification.phone.verified': false
-      });
-      
-      if (tempUser) {
-        userId = tempUser._id;
-      } else {
-        // Create temporary user entry
-        const newTempUser = new User({
-          phoneNumber: formattedPhone,
-          tempAccount: true
-        });
-        
-        await newTempUser.save();
-        userId = newTempUser._id;
-      }
-    }
-    
     // Generate OTP
     const otp = otpService.generateOTP();
+    console.log(`Generated OTP: ${otp} for user ${userId}`);
     
     // Send OTP via SMS
     const sent = await otpService.sendSmsOTP(formattedPhone, otp, userId);
     
     if (!sent) {
+      console.error(`Failed to send verification code to ${formattedPhone}`);
       return res.status(500).json({ error: 'Failed to send verification code' });
     }
     
-    res.json({
+    // Double-check that the OTP was stored properly
+    const updatedUser = await User.findById(userId);
+    console.log('Verification data after sending phone code:', JSON.stringify(updatedUser.verification, null, 2));
+    
+    // Update user's phone number in the database
+    user.phone = formattedPhone;
+    await user.save();
+    
+    return res.json({
       message: 'Verification code sent to phone',
       userId,
       expiresInMinutes: 10
     });
   } catch (error) {
-    logger.error(`Send phone verification error: ${error.message}`);
+    console.error(`Send phone verification error: ${error.message}`);
+    console.error(error.stack); // Add stack trace
     res.status(500).json({ error: 'Server error during phone verification' });
   }
 };
@@ -226,9 +278,25 @@ exports.verifyPhoneCode = async (req, res) => {
     }
     
     const { userId, code } = req.body;
+    console.log(`Verifying phone code for user ${userId}: ${code}`);
+    
+    if (!userId || !code) {
+      return res.status(400).json({ error: 'User ID and verification code are required' });
+    }
+    
+    // Check if user exists before trying to verify
+    const user = await User.findById(userId);
+    if (!user) {
+      console.error(`User with ID ${userId} not found`);
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    // Check verification field structure
+    console.log('User verification data:', JSON.stringify(user.verification, null, 2));
     
     // Verify OTP
     const verificationResult = await otpService.verifyOTP(userId, 'phone', code);
+    console.log('Verification result:', verificationResult);
     
     if (!verificationResult.valid) {
       return res.status(400).json({ 
@@ -237,24 +305,21 @@ exports.verifyPhoneCode = async (req, res) => {
       });
     }
     
-    // If this is a signup flow, user will still need to complete registration
-    // If this is for an existing user, update their record
-    if (req.user) {
-      await User.findByIdAndUpdate(userId, {
-        phoneVerified: true
-      });
-    }
+    // If we got here, verification was successful
+    // Make sure to update the verification status
+    user.phoneVerified = true;
+    await user.save();
     
     res.json({
       message: 'Phone verified successfully',
       verified: true
     });
   } catch (error) {
-    logger.error(`Verify phone code error: ${error.message}`);
+    console.error(`Verify phone code error: ${error.message}`);
+    console.error(error.stack); // Add stack trace
     res.status(500).json({ error: 'Server error during phone verification' });
   }
 };
-
 /**
  * Resend verification code (phone or email)
  * @route POST /auth/resend-code
@@ -322,11 +387,6 @@ exports.resendVerificationCode = async (req, res) => {
   }
 };
 
-/**
- * User signup
- * @route POST /auth/signup
- * @access Public
- */
 exports.signup = async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -336,10 +396,14 @@ exports.signup = async (req, res) => {
     
     const { firstName, lastName, email, password, username } = req.body;
     
+    // Log signup attempt details
+    console.log(`Signup attempt for: ${email}`, { firstName, lastName, username });
+    
     // Check if user already exists
     let user = await User.findOne({ email });
     
     if (user) {
+      console.log(`User already exists with email: ${email}`);
       return res.status(400).json({ error: 'User already exists with this email' });
     }
     
@@ -347,24 +411,31 @@ exports.signup = async (req, res) => {
     if (username) {
       const usernameExists = await User.findOne({ username });
       if (usernameExists) {
+        console.log(`Username already taken: ${username}`);
         return res.status(400).json({ error: 'Username is already taken' });
       }
     }
+    
+    // Generate a unique username if not provided
+    const finalUsername = username || `${email.split('@')[0]}${Math.floor(Math.random() * 1000)}`;
+    console.log(`Using username: ${finalUsername}`);
     
     // Create new user
     user = new User({
       firstName,
       lastName,
       email,
-      username: username || email.split('@')[0] + Math.floor(Math.random() * 1000),
-      password,
+      username: finalUsername,
+      password, // Will be hashed in pre-save middleware
       joinedDate: Date.now(),
       lastActive: Date.now()
     });
     
-    // Hash password
+    // Hash password manually to ensure it's done correctly
+    console.log('Hashing password...');
     const salt = await bcrypt.genSalt(10);
     user.password = await bcrypt.hash(password, salt);
+    console.log(`Password hashed successfully. Hash starts with: ${user.password.substring(0, 10)}...`);
     
     // Generate email verification token
     const verificationToken = crypto.randomBytes(20).toString('hex');
@@ -380,46 +451,14 @@ exports.signup = async (req, res) => {
     const deviceInfo = deviceDetector.detect(userAgent);
     const geo = geoip.lookup(ip);
     
-    // Create login session
-    const sessionToken = jwt.sign({ id: user._id }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
-    
-    user.security = {
-      ...user.security,
-      activeLoginSessions: [{
-        token: sessionToken,
-        device: {
-          type: deviceInfo.device ? deviceInfo.device.type : 'unknown',
-          name: deviceInfo.device ? deviceInfo.device.brand + ' ' + deviceInfo.device.model : 'unknown',
-          browser: deviceInfo.client ? deviceInfo.client.name + ' ' + deviceInfo.client.version : 'unknown',
-          os: deviceInfo.os ? deviceInfo.os.name + ' ' + deviceInfo.os.version : 'unknown'
-        },
-        ip,
-        location: geo ? `${geo.city}, ${geo.country}` : 'unknown',
-        loginTime: Date.now(),
-        lastActive: Date.now()
-      }]
-    };
-    
-    await user.save();
-    
-    // Send verification email
-    const verificationUrl = `${FRONTEND_URL}/verify-email?token=${verificationToken}`;
-    
-    await sendEmail({
-      email: user.email,
-      subject: 'Please verify your email address',
-      template: 'email-verification',
-      context: {
-        name: user.firstName,
-        verificationUrl
-      }
-    });
-    
     // Create JWT token
     const payload = {
       id: user.id,
       role: user.role
     };
+    
+    // Generate session token
+    const sessionToken = jwt.sign({ id: user._id }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
     
     // Generate refresh token
     const refreshToken = jwt.sign(
@@ -428,15 +467,38 @@ exports.signup = async (req, res) => {
       { expiresIn: JWT_REFRESH_EXPIRES_IN }
     );
     
-    // Save refresh token to user
-    user.security.refreshTokens = [{
-      token: refreshToken,
-      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
-      issuedAt: new Date(),
-      device: deviceInfo.device ? deviceInfo.device.type : 'unknown'
-    }];
+    // Initialize user security settings
+    user.security = {
+      mfa: {
+        enabled: false,
+        method: null,
+        secret: null,
+        backupCodes: []
+      },
+      chatEncryption: {
+        enabled: false,
+        publicKey: null,
+        updatedAt: null
+      },
+      activeLoginSessions: [{
+        token: sessionToken,
+        device: deviceInfo.device ? deviceInfo.device.type : 'unknown', // String value
+        browser: deviceInfo.client ? deviceInfo.client.name + ' ' + deviceInfo.client.version : 'unknown',
+        ip: ip,
+        location: geo ? `${geo.city}, ${geo.country}` : 'unknown',
+        lastActive: Date.now(),
+        createdAt: Date.now()
+      }],
+      refreshTokens: [{
+        token: refreshToken,
+        device: deviceInfo.device ? deviceInfo.device.type : 'unknown',
+        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
+        createdAt: new Date()
+      }]
+    };
     
     await user.save();
+    console.log(`User saved successfully with ID: ${user._id}`);
     
     // Send JWT and user info
     res.status(201).json({
@@ -453,16 +515,19 @@ exports.signup = async (req, res) => {
       }
     });
   } catch (error) {
-    logger.error('Signup error:', error);
+    console.error('Signup error:', error);
+    console.error(error.stack);
     res.status(500).json({ error: 'Server error during signup' });
   }
 };
+
 
 /**
  * User login
  * @route POST /auth/login
  * @access Public
  */
+// Modified login function to add debugging
 exports.login = async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -472,15 +537,22 @@ exports.login = async (req, res) => {
     
     const { email, password } = req.body;
     
+    console.log(`Login attempt for: ${email}`);
+    
     // Find user by email
     const user = await User.findOne({ email });
     
     if (!user) {
+      console.log(`User not found for email: ${email}`);
       return res.status(401).json({ error: 'Invalid credentials' });
     }
     
-    // Check if password matches
-    const isMatch = await bcrypt.compare(password, user.password);
+    console.log(`User found: ${user.email}, ID: ${user._id}`);
+    
+    // Use the User model's comparePassword method instead of direct bcrypt compare
+    console.log('Using user.comparePassword method for verification');
+    const isMatch = await user.comparePassword(password);
+    console.log(`Password comparison for ${user.email}: ${isMatch}`);
     
     if (!isMatch) {
       // Increment failed login attempts
@@ -505,117 +577,44 @@ exports.login = async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
     
-    // Check if account is locked
-    if (user.security && user.security.isLocked) {
-      if (user.security.lockedUntil > new Date()) {
-        return res.status(401).json({
-          error: 'Account is locked due to multiple failed login attempts',
-          lockExpires: user.security.lockedUntil
-        });
-      } else {
-        // Unlock account
-        user.security.isLocked = false;
-        user.security.lockedUntil = null;
-      }
-    }
-    
-    // Reset failed login attempts
-    if (user.security) {
+    // Reset failed login attempts on successful login
+    if (user.security && user.security.failedLoginAttempts) {
       user.security.failedLoginAttempts = 0;
+      user.security.isLocked = false;
+      user.security.lockedUntil = null;
     }
     
-    // Update last login time
+    // Update last active timestamp
     user.lastActive = Date.now();
     
-    // Check if 2FA is enabled
-    if (user.security && user.security.twoFactorAuth && user.security.twoFactorAuth.enabled) {
-      // Generate temporary token for 2FA verification
-      const tempToken = jwt.sign(
-        { id: user.id, require2FA: true },
-        JWT_SECRET,
-        { expiresIn: '10m' }
-      );
-      
-      await user.save();
-      
-      return res.json({
-        requiresTwoFactor: true,
-        tempToken,
-        method: user.security.twoFactorAuth.method
-      });
+    // Generate tokens
+    const token = user.generateAuthToken();
+    const refreshToken = user.generateRefreshToken();
+    
+    // Store refresh token in user's document
+    if (!user.security) {
+      user.security = {};
+    }
+    if (!user.security.refreshTokens) {
+      user.security.refreshTokens = [];
     }
     
-    // Get device and location info
-    const userAgent = req.headers['user-agent'];
-    const ip = req.ip || req.connection.remoteAddress;
-    const deviceInfo = deviceDetector.detect(userAgent);
-    const geo = geoip.lookup(ip);
-    
-    // Generate JWT token
-    const token = jwt.sign(
-      { id: user.id, role: user.role },
-      JWT_SECRET,
-      { expiresIn: JWT_EXPIRES_IN }
-    );
-    
-    // Generate refresh token
-    const refreshToken = jwt.sign(
-      { id: user.id },
-      JWT_SECRET,
-      { expiresIn: JWT_REFRESH_EXPIRES_IN }
-    );
-    
-    // Save device info and tokens
-    user.security = user.security || {};
-    user.security.activeLoginSessions = user.security.activeLoginSessions || [];
-    user.security.refreshTokens = user.security.refreshTokens || [];
-    
-    // Add new session
-    user.security.activeLoginSessions.push({
-      token,
-      device: {
-        type: deviceInfo.device ? deviceInfo.device.type : 'unknown',
-        name: deviceInfo.device ? deviceInfo.device.brand + ' ' + deviceInfo.device.model : 'unknown',
-        browser: deviceInfo.client ? deviceInfo.client.name + ' ' + deviceInfo.client.version : 'unknown',
-        os: deviceInfo.os ? deviceInfo.os.name + ' ' + deviceInfo.os.version : 'unknown'
-      },
-      ip,
-      location: geo ? `${geo.city}, ${geo.country}` : 'unknown',
-      loginTime: Date.now(),
-      lastActive: Date.now()
-    });
-    
-    // Add refresh token
+    // Add new refresh token with device info
     user.security.refreshTokens.push({
       token: refreshToken,
-      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
-      issuedAt: new Date(),
-      device: deviceInfo.device ? deviceInfo.device.type : 'unknown'
+      device: req.headers['user-agent'] || 'Unknown device',
+      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) // 30 days
     });
     
-    // Clean up old sessions and tokens
-    if (user.security.activeLoginSessions.length > 10) {
-      user.security.activeLoginSessions = user.security.activeLoginSessions.slice(-10);
-    }
-    
-    if (user.security.refreshTokens.length > 10) {
-      user.security.refreshTokens = user.security.refreshTokens.slice(-10);
+    // Limit stored refresh tokens to prevent document size issues
+    if (user.security.refreshTokens.length > 5) {
+      user.security.refreshTokens = user.security.refreshTokens.slice(-5);
     }
     
     await user.save();
     
-    // Create security log
-    await SecurityLog.create({
-      user: user._id,
-      action: 'login',
-      ip,
-      location: geo ? `${geo.city}, ${geo.country}` : 'unknown',
-      device: deviceInfo.device ? deviceInfo.device.type : 'unknown',
-      browser: deviceInfo.client ? deviceInfo.client.name : 'unknown',
-      os: deviceInfo.os ? deviceInfo.os.name : 'unknown',
-      timestamp: Date.now(),
-      success: true
-    });
+    // Log successful login
+    console.log(`Successful login for user: ${user.email}`);
     
     // Send JWT and user info
     res.json({
@@ -634,20 +633,19 @@ exports.login = async (req, res) => {
       }
     });
   } catch (error) {
-    logger.error('Login error:', error);
+    console.error('Login error:', error);
+    console.error(`Login error details: ${error.message}`);
+    console.error(error.stack);
     res.status(500).json({ error: 'Server error during login' });
   }
 };
-
 /**
- * User logout
+ * Logout
  * @route POST /auth/logout
  * @access Private
  */
 exports.logout = async (req, res) => {
   try {
-    const token = req.headers.authorization.split(' ')[1];
-    
     // Find user
     const user = await User.findById(req.user.id);
     
@@ -655,31 +653,32 @@ exports.logout = async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
     
-    // Remove current session
+    // Get current token
+    const currentToken = req.headers.authorization.split(' ')[1];
+    
+    // Remove current session from active sessions
     if (user.security && user.security.activeLoginSessions) {
       user.security.activeLoginSessions = user.security.activeLoginSessions.filter(
-        session => session.token !== token
+        session => session.token !== currentToken
       );
     }
     
-    // Remove matching refresh token
+    // Get device info
+    const userAgent = req.headers['user-agent'];
+    const deviceInfo = deviceDetector.detect(userAgent);
+    const deviceType = deviceInfo.device ? deviceInfo.device.type : 'unknown';
+    
+    // Remove refresh tokens for this device
     if (user.security && user.security.refreshTokens) {
-      // Find associated refresh token (rough matching by device)
-      const userAgent = req.headers['user-agent'];
-      const deviceInfo = deviceDetector.detect(userAgent);
-      const deviceType = deviceInfo.device ? deviceInfo.device.type : 'unknown';
-      
       user.security.refreshTokens = user.security.refreshTokens.filter(
-        tokenObj => tokenObj.device !== deviceType
+        token => token.device !== deviceType
       );
     }
     
     await user.save();
     
-    // Log the logout
+    // Log the action
     const ip = req.ip || req.connection.remoteAddress;
-    const userAgent = req.headers['user-agent'];
-    const deviceInfo = deviceDetector.detect(userAgent);
     const geo = geoip.lookup(ip);
     
     await SecurityLog.create({
@@ -700,7 +699,6 @@ exports.logout = async (req, res) => {
     res.status(500).json({ error: 'Server error during logout' });
   }
 };
-
 /**
  * Refresh token
  * @route POST /auth/refresh-token
@@ -1719,7 +1717,10 @@ exports.setup2FA = async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
     
-    // Initialize 2FA if not already set up
+    // Authorization check - ensure the authenticated user is modifying their own account
+    if (user._id.toString() !== req.user.id) {
+      return res.status(403).json({ error: 'Unauthorized access to 2FA settings' });
+    }
     user.security = user.security || {};
     user.security.twoFactorAuth = user.security.twoFactorAuth || {};
     
@@ -1768,7 +1769,43 @@ exports.setup2FA = async (req, res) => {
         phoneNumber: `${user.phone.slice(0, 3)}****${user.phone.slice(-2)}`
       });
     }
-  } catch (error) {
+    const ip = req.ip || req.connection.remoteAddress;
+    const userAgent = req.headers['user-agent'];
+    const deviceInfo = deviceDetector.detect(userAgent);
+    const geo = geoip.lookup(ip);
+    
+    // Log the 2FA setup operation
+    await SecurityLog.create({
+      user: user._id,
+      action: '2fa_operation',
+      details: {
+        operation: 'setup',
+        method: method // app or sms
+      },
+      ip,
+      location: geo ? `${geo.city}, ${geo.country}` : 'unknown',
+      device: deviceInfo.device ? deviceInfo.device.type : 'unknown',
+      browser: deviceInfo.client ? deviceInfo.client.name : 'unknown',
+      os: deviceInfo.os ? deviceInfo.os.name : 'unknown',
+      timestamp: Date.now(),
+      success: true
+    });
+    
+    // Final response
+    if (method === 'app') {
+      res.json({
+        secret: secret.base32,
+        qrCode,
+        message: 'Scan QR code with authenticator app'
+      });
+    } else if (method === 'sms') {
+      res.json({
+        message: 'Verification code sent to your phone',
+        phoneNumber: `${user.phone.slice(0, 3)}****${user.phone.slice(-2)}`
+      });
+    }
+  }
+  catch (error) {
     logger.error('Setup 2FA error:', error);
     res.status(500).json({ error: 'Server error during 2FA setup' });
   }
@@ -1792,6 +1829,11 @@ exports.verify2FA = async (req, res) => {
     
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
+    }
+    
+    // Authorization check - ensure the authenticated user is modifying their own account
+    if (user._id.toString() !== req.user.id) {
+      return res.status(403).json({ error: 'Unauthorized access to 2FA settings' });
     }
     
     // Check if 2FA is being set up
@@ -1860,6 +1902,17 @@ exports.verify2FA = async (req, res) => {
       os: deviceInfo.os ? deviceInfo.os.name : 'unknown',
       timestamp: Date.now(),
       success: true
+    });
+    await sendEmail({
+      email: user.email,
+      subject: '2FA Settings Changed',
+      template: '2fa-status-change',
+      context: {
+        name: user.firstName,
+        status: 'enabled',
+        method: user.security.twoFactorAuth.method,
+        timestamp: new Date().toLocaleString()
+      }
     });
     
     res.json({
@@ -2060,6 +2113,14 @@ exports.disable2FA = async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
     
+    // Authorization check - ensure the authenticated user is modifying their own account
+    if (user._id.toString() !== req.user.id) {
+      return res.status(403).json({ error: 'Unauthorized access to 2FA settings' });
+    }
+    
+    // Rest of the function remains the same
+    // ...
+    
     // Check if 2FA is enabled
     if (
       !user.security ||
@@ -2101,6 +2162,17 @@ exports.disable2FA = async (req, res) => {
       timestamp: Date.now(),
       success: true
     });
+    await sendEmail({
+      email: user.email,
+      subject: '2FA Settings Changed',
+      template: '2fa-status-change',
+      context: {
+        name: user.firstName,
+        status: 'enabled',
+        method: user.security.twoFactorAuth.method,
+        timestamp: new Date().toLocaleString()
+      }
+    });
     
     res.json({ message: '2FA disabled successfully' });
   } catch (error) {
@@ -2121,6 +2193,11 @@ exports.getBackupCodes = async (req, res) => {
     
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
+    }
+    
+    // Authorization check - ensure the authenticated user is accessing their own backup codes
+    if (user._id.toString() !== req.user.id) {
+      return res.status(403).json({ error: 'Unauthorized access to backup codes' });
     }
     
     // Check if 2FA is enabled
@@ -2161,6 +2238,12 @@ exports.regenerateBackupCodes = async (req, res) => {
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
+    
+    // Authorization check - ensure the authenticated user is modifying their own account
+    if (user._id.toString() !== req.user.id) {
+      return res.status(403).json({ error: 'Unauthorized access to backup codes' });
+    }
+    
     
     // Check if 2FA is enabled
     if (
@@ -2204,6 +2287,15 @@ exports.regenerateBackupCodes = async (req, res) => {
       os: deviceInfo.os ? deviceInfo.os.name : 'unknown',
       timestamp: Date.now(),
       success: true
+    });
+    await sendEmail({
+      email: user.email,
+      subject: '2FA Backup Codes Regenerated',
+      template: '2fa-backup-codes-regenerated',
+      context: {
+        name: user.firstName,
+        timestamp: new Date().toLocaleString()
+      }
     });
     
     res.json({
@@ -2948,48 +3040,4 @@ exports.getAccountSummary = async (req, res) => {
     logger.error('Get account summary error:', error);
     res.status(500).json({ error: 'Server error while fetching account summary' });
   }
-};
-
-// Create SecurityLog model if it doesn't exist yet
-const SecurityLogSchema = new mongoose.Schema({
-  user: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  },
-  action: {
-    type: String,
-    enum: [
-      'login', 'logout', 'signup', 'password_reset_request', 'password_reset_complete',
-      'password_change', 'email_verification', 'email_changed', 'phone_changed',
-      'phone_verified', '2fa_enabled', '2fa_disabled', '2fa_backup_codes_regenerated',
-      'login_2fa', 'oauth_signup', 'oauth_login', 'revoke_all_sessions', 'device_removed'
-    ],
-    required: true
-  },
-  provider: {
-    type: String,
-    enum: ['google', 'linkedin', 'apple', null],
-    default: null
-  },
-  ip: String,
-  location: String,
-  device: String,
-  browser: String,
-  os: String,
-  details: Object,
-  timestamp: {
-    type: Date,
-    default: Date.now
-  },
-  success: {
-    type: Boolean,
-    default: true
-  }
-});
-
-const SecurityLog = mongoose.model('SecurityLog', SecurityLogSchema);
-
-module.exports = {
-  generateBackupCodes: exports.generateBackupCodes
 };

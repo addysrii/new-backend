@@ -1,11 +1,11 @@
-const Post = require('../models/Post');
-const User = require('../models/User');
-const Comment = require('../models/Post');
-const Reaction = require('../models/Post');
-const Bookmark = require('../models/Post');
-const Notification = require('../models/Notification');
-const Share = require('../models/Post');
-const Report = require('../models/Post');
+const {Post} = require('../models/Post');
+const{ User} = require('../models/User');
+const {Comment} = require('../models/Post');
+const {Reaction} = require('../models/Post');
+const {Bookmark }= require('../models/Post');
+const {Notification} = require('../models/Notification');
+const {Share} = require('../models/Post');
+const {Report} = require('../models/Post');
 const { validationResult } = require('express-validator');
 const socketEvents = require('../utils/socketEvents');
 const cloudStorage = require('../utils/cloudStorage');
@@ -14,7 +14,7 @@ const ObjectId = mongoose.Types.ObjectId;
 const sanitizeHtml = require('sanitize-html');
 const logger = require('../utils/logger');
 const metrics = require('../utils/metrics');
-const rateLimit = require('../middlewares/rateLimit');
+const rateLimit = require('../middleware/rate-limit.middleware');
 const cache = require('../utils/cache');
 const config = require('../config');
 const crypto = require('crypto');
@@ -2624,20 +2624,626 @@ exports.addComment = async (req, res) => {
     });
   }
 };
+/**
+ * Remove a reaction from a post
+ * @route DELETE /api/posts/:postId/react
+ * @access Private
+ */
+exports.removeReaction = async (req, res) => {
+  const timer = metrics.startTimer('remove_reaction');
+  const requestId = req.id || crypto.randomBytes(16).toString('hex');
+  
+  try {
+    const { postId } = req.params;
+    
+    // Validate ObjectId
+    if (!mongoose.Types.ObjectId.isValid(postId)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid post ID format',
+        requestId
+      });
+    }
+    
+    // Get post
+    const post = await Post.findById(postId).select('interactionCount');
+    
+    if (!post) {
+      return res.status(404).json({ 
+        status: 'error',
+        message: 'Post not found',
+        requestId
+      });
+    }
+    
+    // Find user's reaction
+    const reaction = await Reaction.findOne({
+      user: req.user.id,
+      post: postId
+    });
+    
+    if (!reaction) {
+      return res.status(404).json({ 
+        status: 'error',
+        message: 'Reaction not found',
+        requestId
+      });
+    }
+    
+    // Start session for transaction
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    
+    try {
+      // Delete the reaction
+      await Reaction.findByIdAndDelete(reaction._id, { session });
+      
+      // Update interaction count
+      await Post.findByIdAndUpdate(
+        postId,
+        { $inc: { interactionCount: -1 } },
+        { session }
+      );
+      
+      await session.commitTransaction();
+      
+      logger.info('Reaction removed', {
+        userId: req.user.id,
+        postId,
+        reactionType: reaction.type,
+        requestId
+      });
+    } catch (txError) {
+      await session.abortTransaction();
+      
+      logger.error('Remove reaction transaction failed', {
+        error: txError.message,
+        userId: req.user.id,
+        postId,
+        requestId
+      });
+      
+      throw txError;
+    } finally {
+      session.endSession();
+    }
+    
+    // Get updated reaction counts
+    const reactionCounts = await Reaction.aggregate([
+      {
+        $match: { post: new ObjectId(postId) }
+      },
+      {
+        $group: {
+          _id: '$type',
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+    
+    // Format reaction counts
+    const formattedReactions = {};
+    reactionCounts.forEach(rc => {
+      formattedReactions[rc._id] = rc.count;
+    });
+    
+    // Invalidate caches
+    await cache.deletePattern(`post:${postId}:*`);
+    
+    // Log data access
+    logger.dataAccess(req.user.id, 'reaction', 'delete', {
+      postId,
+      requestId
+    });
+    
+    metrics.incrementCounter('post_reactions_removed');
+    
+    timer.end();
+    
+    res.json({
+      status: 'success',
+      data: {
+        reactionCounts: formattedReactions
+      },
+      requestId
+    });
+  } catch (error) {
+    timer.end();
+    
+    logger.error('Remove reaction error', { 
+      error: error.message,
+      stack: error.stack,
+      userId: req.user.id,
+      postId: req.params.postId,
+      requestId
+    });
+    
+    metrics.incrementCounter('remove_reaction_errors');
+    
+    res.status(500).json({ 
+      status: 'error',
+      message: 'Server error when removing reaction',
+      error: config.NODE_ENV === 'development' ? error.message : undefined,
+      requestId
+    });
+  }
+};
 
-// Export rate-limited handlers for use in routes with enhanced security
-module.exports = {
-  createPost: rateLimit.moderate(exports.createPost),
-  getPosts: rateLimit.light(exports.getPosts),
-  getPost: rateLimit.light(exports.getPost),
-  updatePost: rateLimit.moderate(exports.updatePost),
-  deletePost: rateLimit.moderate(exports.deletePost),
-  reactToPost: rateLimit.heavy(exports.reactToPost),
-  removeReaction: rateLimit.moderate(exports.removeReaction),
-  addComment: rateLimit.moderate(exports.addComment),
-  getComments: rateLimit.light(exports.getComments),
-  bookmarkPost: rateLimit.moderate(exports.bookmarkPost),
-  removeBookmark: rateLimit.moderate(exports.removeBookmark),
-  reportPost: rateLimit.heavy(exports.reportPost),
-  getMediaAccessUrl: rateLimit.moderate(exports.getMediaAccessUrl)
+/**
+ * Get comments for a post with pagination and threading
+ * @route GET /api/posts/:postId/comments
+ * @access Private
+ */
+exports.getComments = async (req, res) => {
+  const timer = metrics.startTimer('get_comments');
+  const requestId = req.id || crypto.randomBytes(16).toString('hex');
+  
+  try {
+    const { postId } = req.params;
+    const { page = 1, limit = 20, sort = 'recent', parent } = req.query;
+    
+    // Validate ObjectId
+    if (!mongoose.Types.ObjectId.isValid(postId)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid post ID format',
+        requestId
+      });
+    }
+    
+    // Validate and sanitize pagination parameters
+    const validatedPage = Math.max(1, parseInt(page));
+    const validatedLimit = Math.min(config.MAX_COMMENTS_PER_PAGE, Math.max(1, parseInt(limit)));
+    const skip = (validatedPage - 1) * validatedLimit;
+    
+    // Generate cache key
+    const cacheKey = `comments:${postId}:${validatedPage}:${validatedLimit}:${sort}:${parent || 'root'}`;
+    
+    // Check cache first
+    const cachedResult = await cache.get(cacheKey);
+    if (cachedResult) {
+      timer.end();
+      
+      // Log cache hit
+      logger.debug('Comments cache hit', {
+        userId: req.user.id,
+        cacheKey,
+        requestId
+      });
+      
+      metrics.incrementCounter('comments_cache_hits');
+      
+      return res.json(JSON.parse(cachedResult));
+    }
+    
+    // Check if post exists and user has permission to view it
+    const post = await Post.findById(postId).select('author visibility flagged');
+    
+    if (!post) {
+      return res.status(404).json({ 
+        status: 'error',
+        message: 'Post not found',
+        requestId
+      });
+    }
+    
+    // Check if user has permission to view this post (and thus comments)
+    if (!await hasPermission(req.user.id, postId, 'post', 'view')) {
+      logger.security.accessDenied(req.user.id, postId, 'view_comments', {
+        reason: 'no view permission',
+        requestId
+      });
+      
+      return res.status(403).json({ 
+        status: 'error',
+        message: 'You do not have permission to view comments on this post',
+        requestId
+      });
+    }
+    
+    // Build query
+    const query = { post: postId };
+    
+    // If parent specified, get replies to that comment; otherwise get top-level comments
+    if (parent) {
+      if (!mongoose.Types.ObjectId.isValid(parent)) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Invalid parent comment ID format',
+          requestId
+        });
+      }
+      query.parent = parent;
+    } else {
+      query.parent = null; // Only top-level comments
+    }
+    
+    // Check if user is moderator/admin
+    const user = await User.findById(req.user.id).select('role').lean();
+    const isModeratorOrAdmin = user && ['admin', 'moderator'].includes(user.role);
+    
+    // Regular users can't see flagged comments
+    if (!isModeratorOrAdmin) {
+      query.flagged = { $ne: true };
+    }
+    
+    // Determine sort order
+    let sortOptions = { createdAt: -1 }; // Default: newest first
+    if (sort === 'oldest') {
+      sortOptions = { createdAt: 1 };
+    } else if (sort === 'popular') {
+      sortOptions = { reactionCount: -1, createdAt: -1 };
+    }
+    
+    // Get comments
+    const comments = await Comment.find(query)
+      .select('author content contentHash parent mentions createdAt editedAt isEdited reactionCount flagged')
+      .populate('author', 'firstName lastName username profileImage headline')
+      .populate('mentions', 'firstName lastName username profileImage')
+      .sort(sortOptions)
+      .skip(skip)
+      .limit(validatedLimit)
+      .lean();
+    
+    // Count total comments matching query
+    const total = await Comment.countDocuments(query);
+    
+    // Get comment IDs
+    const commentIds = comments.map(comment => comment._id);
+    
+    // Get reaction data for these comments
+    const [reactions, replyCounts, userReactions] = await Promise.all([
+      // Get reaction counts by type
+      Reaction.aggregate([
+        {
+          $match: { comment: { $in: commentIds.map(id => new ObjectId(id)) } }
+        },
+        {
+          $group: {
+            _id: {
+              comment: '$comment',
+              type: '$type'
+            },
+            count: { $sum: 1 }
+          }
+        }
+      ]),
+      
+      // Get reply counts
+      Comment.aggregate([
+        {
+          $match: { parent: { $in: commentIds.map(id => new ObjectId(id)) } }
+        },
+        {
+          $group: {
+            _id: '$parent',
+            count: { $sum: 1 }
+          }
+        }
+      ]),
+      
+      // Get user's reactions
+      Reaction.find({
+        user: req.user.id,
+        comment: { $in: commentIds }
+      }).select('comment type').lean()
+    ]);
+    
+    // Create lookup maps
+    const reactionMap = new Map();
+    reactions.forEach(rc => {
+      const commentId = rc._id.comment.toString();
+      if (!reactionMap.has(commentId)) {
+        reactionMap.set(commentId, {});
+      }
+      reactionMap.get(commentId)[rc._id.type] = rc.count;
+    });
+    
+    const replyCountMap = new Map();
+    replyCounts.forEach(rc => {
+      replyCountMap.set(rc._id.toString(), rc.count);
+    });
+    
+    const userReactionMap = new Map();
+    userReactions.forEach(ur => {
+      userReactionMap.set(ur.comment.toString(), ur.type);
+    });
+    
+    // Format comments with additional data
+    const formattedComments = comments.map(comment => {
+      const commentId = comment._id.toString();
+      const reactions = reactionMap.get(commentId) || {};
+      const reactionCount = Object.values(reactions).reduce((sum, count) => sum + count, 0);
+      const replyCount = replyCountMap.get(commentId) || 0;
+      
+      // Verify content integrity
+      const contentIntegrityVerified = comment.contentHash && 
+                                      calculateContentHash(comment.content) === comment.contentHash;
+      
+      return {
+        ...comment,
+        reactions,
+        reactionCount,
+        replyCount,
+        userReaction: userReactionMap.get(commentId) || null,
+        contentIntegrityVerified
+      };
+    });
+    
+    const response = {
+      status: 'success',
+      data: {
+        comments: formattedComments,
+        pagination: {
+          total,
+          page: validatedPage,
+          limit: validatedLimit,
+          pages: Math.ceil(total / validatedLimit)
+        }
+      },
+      requestId
+    };
+    
+    // Cache the results
+    await cache.set(cacheKey, JSON.stringify(response), 60 * 5); // 5 minutes
+    
+    // Log data access
+    logger.dataAccess(req.user.id, 'comments', 'read', {
+      postId,
+      count: comments.length,
+      requestId
+    });
+    
+    timer.end();
+    
+    res.json(response);
+  } catch (error) {
+    timer.end();
+    
+    logger.error('Get comments error', { 
+      error: error.message,
+      stack: error.stack,
+      userId: req.user.id,
+      postId: req.params.postId,
+      requestId
+    });
+    
+    metrics.incrementCounter('get_comments_errors');
+    
+    res.status(500).json({ 
+      status: 'error',
+      message: 'Server error when retrieving comments',
+      error: config.NODE_ENV === 'development' ? error.message : undefined,
+      requestId
+    });
+  }
+};
+
+/**
+ * Bookmark a post
+ * @route POST /api/posts/:postId/bookmark
+ * @access Private
+ */
+exports.bookmarkPost = async (req, res) => {
+  const timer = metrics.startTimer('bookmark_post');
+  const requestId = req.id || crypto.randomBytes(16).toString('hex');
+  
+  try {
+    const { postId } = req.params;
+    const { collection } = req.body;
+    
+    // Validate ObjectId
+    if (!mongoose.Types.ObjectId.isValid(postId)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid post ID format',
+        requestId
+      });
+    }
+    
+    // Check if post exists
+    const post = await Post.findById(postId).select('visibility flagged');
+    
+    if (!post) {
+      return res.status(404).json({ 
+        status: 'error',
+        message: 'Post not found',
+        requestId
+      });
+    }
+    
+    // Check if post is flagged
+    if (post.flagged) {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Cannot bookmark flagged content',
+        requestId
+      });
+    }
+    
+    // Check if user has permission to view this post (and thus bookmark)
+    if (!await hasPermission(req.user.id, postId, 'post', 'view')) {
+      logger.security.accessDenied(req.user.id, postId, 'bookmark', {
+        reason: 'no view permission',
+        requestId
+      });
+      
+      return res.status(403).json({ 
+        status: 'error',
+        message: 'You do not have permission to bookmark this post',
+        requestId
+      });
+    }
+    
+    // Check if already bookmarked
+    const existingBookmark = await Bookmark.findOne({
+      user: req.user.id,
+      post: postId
+    });
+    
+    if (existingBookmark) {
+      // Update collection if provided
+      if (collection && collection !== existingBookmark.collection) {
+        existingBookmark.collection = collection;
+        existingBookmark.updatedAt = Date.now();
+        await existingBookmark.save();
+        
+        logger.info('Bookmark collection updated', {
+          userId: req.user.id,
+          postId,
+          oldCollection: existingBookmark.collection,
+          newCollection: collection,
+          requestId
+        });
+      }
+      
+      return res.json({
+        status: 'success',
+        data: {
+          bookmarked: true,
+          collection: existingBookmark.collection,
+          updatedAt: existingBookmark.updatedAt
+        },
+        requestId
+      });
+    }
+    
+    // Create new bookmark
+    const bookmark = new Bookmark({
+      user: req.user.id,
+      post: postId,
+      collection: collection || 'default',
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    });
+    
+    await bookmark.save();
+    
+    // Log data access
+    logger.dataAccess(req.user.id, 'bookmark', 'create', {
+      postId,
+      collection: bookmark.collection,
+      requestId
+    });
+    
+    logger.info('Post bookmarked', {
+      userId: req.user.id,
+      postId,
+      collection: bookmark.collection,
+      requestId
+    });
+    
+    metrics.incrementCounter('posts_bookmarked');
+    
+    timer.end();
+    
+    res.status(201).json({
+      status: 'success',
+      data: {
+        bookmarked: true,
+        collection: bookmark.collection,
+        createdAt: bookmark.createdAt
+      },
+      requestId
+    });
+  } catch (error) {
+    timer.end();
+    
+    logger.error('Bookmark post error', { 
+      error: error.message,
+      stack: error.stack,
+      userId: req.user.id,
+      postId: req.params.postId,
+      requestId
+    });
+    
+    metrics.incrementCounter('bookmark_post_errors');
+    
+    res.status(500).json({ 
+      status: 'error',
+      message: 'Server error when bookmarking post',
+      error: config.NODE_ENV === 'development' ? error.message : undefined,
+      requestId
+    });
+  }
+};
+
+/**
+ * Remove bookmark from a post
+ * @route DELETE /api/posts/:postId/bookmark
+ * @access Private
+ */
+exports.removeBookmark = async (req, res) => {
+  const timer = metrics.startTimer('remove_bookmark');
+  const requestId = req.id || crypto.randomBytes(16).toString('hex');
+  
+  try {
+    const { postId } = req.params;
+    
+    // Validate ObjectId
+    if (!mongoose.Types.ObjectId.isValid(postId)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid post ID format',
+        requestId
+      });
+    }
+    
+    // Find and delete bookmark
+    const bookmark = await Bookmark.findOneAndDelete({
+      user: req.user.id,
+      post: postId
+    });
+    
+    if (!bookmark) {
+      return res.status(404).json({ 
+        status: 'error',
+        message: 'Bookmark not found',
+        requestId
+      });
+    }
+    
+    // Log data access
+    logger.dataAccess(req.user.id, 'bookmark', 'delete', {
+      postId,
+      requestId
+    });
+    
+    logger.info('Post bookmark removed', {
+      userId: req.user.id,
+      postId,
+      requestId
+    });
+    
+    metrics.incrementCounter('bookmarks_removed');
+    
+    timer.end();
+    
+    res.json({
+      status: 'success',
+      data: {
+        bookmarked: false
+      },
+      requestId
+    });
+  } catch (error) {
+    timer.end();
+    
+    logger.error('Remove bookmark error', { 
+      error: error.message,
+      stack: error.stack,
+      userId: req.user.id,
+      postId: req.params.postId,
+      requestId
+    });
+    
+    metrics.incrementCounter('remove_bookmark_errors');
+    
+    res.status(500).json({ 
+      status: 'error',
+      message: 'Server error when removing bookmark',
+      error: config.NODE_ENV === 'development' ? error.message : undefined,
+      requestId
+    });
+  }
 };

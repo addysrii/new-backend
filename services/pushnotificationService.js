@@ -6,9 +6,8 @@
 const admin = require('firebase-admin');
 const config = require('../config');
 const logger = require('../utils/logger');
-const PushToken = require('../models/PushToken');
-const Settings = require('../models/Settings');
-
+const {PushToken} = require('../models/Notification');
+const{ Settings} = require('../models/Settings');
 // Initialize Firebase Admin SDK with service account
 if (!admin.apps.length && config.FIREBASE_SERVICE_ACCOUNT) {
   try {

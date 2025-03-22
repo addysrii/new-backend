@@ -1,10 +1,10 @@
-const Chat = require('../models/Chat');
-const Message = require('../models/Chat');
-const User = require('../models/User');
-const Notification = require('../models/Notification');
-const Poll = require('../models/Chat');
-const Call = require('../models/Chat');
-const AuditLog = require('../models/Chat');
+const {Chat} = require('../models/Chat');
+const {Message} = require('../models/Chat');
+const{ User }= require('../models/User');
+const {Notification} = require('../models/Notification');
+const{ Poll} = require('../models/Chat');
+const {Call} = require('../models/Chat');
+const {AuditLog} = require('../models/Chat');
 const { validationResult } = require('express-validator');
 const socketEvents = require('../utils/socketEvents');
 const SignalProtocol = require('../utils/signalProtocol');
@@ -16,10 +16,16 @@ const ObjectId = mongoose.Types.ObjectId;
 const crypto = require('crypto');
 const speakeasy = require('speakeasy');
 const { v4: uuidv4 } = require('uuid');
+const fs = require('fs');
 
-// Audit logging middleware
 const logAuditEvent = async (userId, action, details, success = true, severity = 'info') => {
   try {
+    // Check if AuditLog is properly imported
+    if (!AuditLog || typeof AuditLog.create !== 'function') {
+      console.error('AuditLog model not properly initialized');
+      return;
+    }
+    
     await AuditLog.create({
       user: userId,
       action,
@@ -31,10 +37,9 @@ const logAuditEvent = async (userId, action, details, success = true, severity =
       timestamp: Date.now()
     });
   } catch (error) {
-    logger.error(`Failed to log audit event: ${error.message}`, { userId, action });
+    console.error(`Failed to log audit event: ${error.message}`, { userId, action });
   }
 };
-
 // Verify 2FA requirement for sensitive operations
 const verify2FAIfRequired = async (req, res, operation) => {
   try {
@@ -1385,23 +1390,122 @@ exports.runSecurityScan = async (req, res) => {
       recommendations: []
     };
     
+    // Initialize variables for security findings
+    const vulnerabilities = [];
+    const recommendations = [];
+    
     // Check for potential security issues
     if (!chat.encryption || !chat.encryption.enabled) {
       scanResults.vulnerabilities.push('Chat is not encrypted');
       scanResults.recommendations.push('Enable end-to-end encryption for this chat');
+      vulnerabilities.push({
+        severity: 'high',
+        title: 'Unencrypted Communication',
+        description: 'Chat is not using end-to-end encryption, which poses privacy risks.',
+        remediation: 'Enable end-to-end encryption for sensitive conversations.'
+      });
     }
     
     if (!chat.security?.messageRetention?.enabled) {
       scanResults.recommendations.push('Consider enabling message expiration for better privacy');
+      recommendations.push({
+        title: 'No Message Expiration',
+        description: 'Messages remain indefinitely, which may present privacy concerns.',
+        remediation: 'Enable automatic message expiration for sensitive content.'
+      });
     }
     
     if (!chat.security?.mediaAccessControl?.allowScreenshots === undefined) {
       scanResults.recommendations.push('Configure media access controls to prevent unauthorized sharing');
+      recommendations.push({
+        title: 'Media Controls Not Configured',
+        description: 'Media shared in this chat has no access controls configured.',
+        remediation: 'Set up media access controls to prevent unauthorized screenshots or sharing.'
+      });
     }
     
     // For group chats, check admin count
     if (chat.type === 'group' && (!chat.admins || chat.admins.length < 2)) {
       scanResults.recommendations.push('Add at least one more admin to ensure continuity');
+      recommendations.push({
+        title: 'Single Admin Point of Failure',
+        description: 'This group has only one administrator, creating a single point of failure.',
+        remediation: 'Add at least one more admin to ensure continuity.'
+      });
+    }
+    
+    // Initialize user sessions
+    const userSessions = [];
+    // Fetch session information for all participants
+    if (chat && chat.participants) {
+      for (const participantId of chat.participants) {
+        try {
+          const participant = await User.findById(participantId).select('security.activeLoginSessions');
+          if (participant && participant.security && participant.security.activeLoginSessions) {
+            // Add each session with the user ID for reference
+            participant.security.activeLoginSessions.forEach(session => {
+              userSessions.push({
+                userId: participantId,
+                clientInfo: session.device || {},
+                ...session
+              });
+            });
+          }
+        } catch (err) {
+          logger.error(`Failed to fetch user sessions: ${err.message}`, { 
+            userId: req.user.id, 
+            participantId 
+          });
+        }
+      }
+    }
+
+    // Check for unpatched security vulnerabilities in client apps
+    const unverifiedClients = userSessions.filter(session => {
+      // Check if client app version is below known security patch level
+      const clientVersion = session.clientInfo?.version || '';
+      if (!clientVersion) return true;
+      
+      // Compare against minimum secure versions (would be a database lookup in production)
+      const minSecureVersions = {
+        'ios-app': '2.4.0',
+        'android-app': '2.3.5',
+        'web-client': '1.9.2'
+      };
+      
+      const clientType = session.clientInfo.type || 'unknown';
+      const minVersion = minSecureVersions[clientType] || '0.0.0';
+      
+      return compareVersions(clientVersion, minVersion) < 0;
+    });
+
+    if (unverifiedClients.length > 0) {
+      vulnerabilities.push({
+        severity: 'high',
+        title: 'Outdated Client Applications',
+        description: `${unverifiedClients.length} client applications used in this chat have unpatched security vulnerabilities.`,
+        remediation: 'All participants should update their chat applications to the latest version.'
+      });
+    }
+
+    // Check admin configuration for group chats
+    if (chat.type === 'group') {
+      if (!chat.admins || chat.admins.length < 2) {
+        recommendations.push({
+          title: 'Single Point of Admin Failure',
+          description: 'This group has only one administrator, creating a single point of failure for group management.',
+          remediation: 'Add at least one more admin to ensure continuity.'
+        });
+      }
+      
+      // Check for too many admins (excessive privilege)
+      if (chat.admins && chat.admins.length > chat.participants.length / 3) {
+        recommendations.push({
+          title: 'Excessive Admin Privileges',
+          description: 'More than 1/3 of participants have admin privileges, which may lead to security governance issues.',
+          remediation: 'Review admin assignments and reduce to only necessary users.'
+        });
+      }
     }
     
     // Check for potentially compromised devices
@@ -1412,7 +1516,52 @@ exports.runSecurityScan = async (req, res) => {
     
     if (suspiciousDevices.length > 0) {
       scanResults.vulnerabilities.push(`${suspiciousDevices.length} potentially compromised devices detected among participants`);
+      vulnerabilities.push({
+        severity: 'critical',
+        title: 'Compromised Devices',
+        description: `${suspiciousDevices.length} potentially compromised devices detected among chat participants.`,
+        remediation: 'Affected users should secure their accounts and devices immediately.'
+      });
     }
+
+    // Generate overall security score
+    let securityScore = 100;
+
+    // Deduct points for each vulnerability based on severity
+    vulnerabilities.forEach(v => {
+      if (v.severity === 'high') securityScore -= 20;
+      else if (v.severity === 'medium') securityScore -= 10;
+      else securityScore -= 5;
+    });
+
+    // Deduct points for each recommendation
+    securityScore -= recommendations.length * 3;
+
+    // Ensure score is between 0-100
+    securityScore = Math.max(0, Math.min(100, securityScore));
+
+    // Create vulnerability report
+    const report = {
+      chatId,
+      generatedAt: new Date(),
+      securityScore,
+      securityLevel: securityScore >= 80 ? 'Good' : securityScore >= 50 ? 'Fair' : 'Poor',
+      vulnerabilities,
+      recommendations,
+      encryptionStatus: {
+        enabled: !!chat.encryption?.enabled,
+        protocol: chat.encryption?.protocol || 'none'
+      },
+      retentionPolicy: {
+        enabled: !!chat.security?.messageRetention?.enabled,
+        expirationTime: chat.security?.messageRetention?.expirationTime || null
+      },
+      mediaControls: chat.security?.mediaAccessControl || {
+        allowDownloads: true,
+        allowScreenshots: true,
+        allowForwarding: true
+      }
+    };
     
     // Log security scan
     await logAuditEvent(
@@ -1420,7 +1569,21 @@ exports.runSecurityScan = async (req, res) => {
       'security_scan_executed',
       {
         chatId,
-        vulnerabilitiesFound: scanResults.vulnerabilities.length,
+        vulnerabilitiesFound: vulnerabilities.length,
+        ip: req.ip,
+        userAgent: req.headers['user-agent']
+      }
+    );
+
+    // Log vulnerability report generation
+    await logAuditEvent(
+      req.user.id,
+      'vulnerability_report_generated',
+      {
+        chatId,
+        securityScore,
+        vulnerabilityCount: vulnerabilities.length,
+        recommendationCount: recommendations.length,
         ip: req.ip,
         userAgent: req.headers['user-agent']
       }
@@ -1428,7 +1591,7 @@ exports.runSecurityScan = async (req, res) => {
     
     res.json({
       chatId,
-      scanResults,
+      scanResults: report,
       scanTime: new Date(),
       scanId: uuidv4()
     });
@@ -1440,108 +1603,6 @@ exports.runSecurityScan = async (req, res) => {
     res.status(500).json({ error: 'Server error when running security scan' });
   }
 };
-// Check for unpatched security vulnerabilities in client apps
-const unverifiedClients = userSessions.filter(session => {
-  // Check if client app version is below known security patch level
-  const clientVersion = session.clientInfo?.version || '';
-  if (!clientVersion) return true;
-  
-  // Compare against minimum secure versions (would be a database lookup in production)
-  const minSecureVersions = {
-    'ios-app': '2.4.0',
-    'android-app': '2.3.5',
-    'web-client': '1.9.2'
-  };
-  
-  const clientType = session.clientInfo.type || 'unknown';
-  const minVersion = minSecureVersions[clientType] || '0.0.0';
-  
-  return compareVersions(clientVersion, minVersion) < 0;
-});
-
-if (unverifiedClients.length > 0) {
-  vulnerabilities.push({
-    severity: 'high',
-    title: 'Outdated Client Applications',
-    description: `${unverifiedClients.length} client applications used in this chat have unpatched security vulnerabilities.`,
-    remediation: 'All participants should update their chat applications to the latest version.'
-  });
-}
-
-// Check admin configuration for group chats
-if (chat.type === 'group') {
-  if (!chat.admins || chat.admins.length < 2) {
-    recommendations.push({
-      title: 'Single Point of Admin Failure',
-      description: 'This group has only one administrator, creating a single point of failure for group management.',
-      remediation: 'Add at least one more admin to ensure continuity.'
-    });
-  }
-  
-  // Check for too many admins (excessive privilege)
-  if (chat.admins && chat.admins.length > chat.participants.length / 3) {
-    recommendations.push({
-      title: 'Excessive Admin Privileges',
-      description: 'More than 1/3 of participants have admin privileges, which may lead to security governance issues.',
-      remediation: 'Review admin assignments and reduce to only necessary users.'
-    });
-  }
-}
-
-// Generate overall security score
-let securityScore = 100;
-
-// Deduct points for each vulnerability based on severity
-vulnerabilities.forEach(v => {
-  if (v.severity === 'high') securityScore -= 20;
-  else if (v.severity === 'medium') securityScore -= 10;
-  else securityScore -= 5;
-});
-
-// Deduct points for each recommendation
-securityScore -= recommendations.length * 3;
-
-// Ensure score is between 0-100
-securityScore = Math.max(0, Math.min(100, securityScore));
-
-// Create vulnerability report
-const report = {
-  chatId,
-  generatedAt: new Date(),
-  securityScore,
-  securityLevel: securityScore >= 80 ? 'Good' : securityScore >= 50 ? 'Fair' : 'Poor',
-  vulnerabilities,
-  recommendations,
-  encryptionStatus: {
-    enabled: !!chat.encryption?.enabled,
-    protocol: chat.encryption?.protocol || 'none'
-  },
-  retentionPolicy: {
-    enabled: !!chat.security?.messageRetention?.enabled,
-    expirationTime: chat.security?.messageRetention?.expirationTime || null
-  },
-  mediaControls: chat.security?.mediaAccessControl || {
-    allowDownloads: true,
-    allowScreenshots: true,
-    allowForwarding: true
-  }
-};
-
-// Log report generation
-await logAuditEvent(
-  req.user.id,
-  'vulnerability_report_generated',
-  {
-    chatId,
-    securityScore,
-    vulnerabilityCount: vulnerabilities.length,
-    recommendationCount: recommendations.length,
-    ip: req.ip,
-    userAgent: req.headers['user-agent']
-  }
-);
-
-res.json(report);
 
 /**
 * Upload file with virus scanning and content moderation
@@ -1711,7 +1772,6 @@ const media = {
     } : null
   }
 };
-
 // Log successful upload
 await logAuditEvent(
   req.user.id,
@@ -1957,6 +2017,703 @@ logger.error(`Set auto expiration error: ${error.message}`, {
 res.status(500).json({ error: 'Server error when setting auto-expiration' });
 }
 };
+/**
+ * Get all chats for current user
+ * @route GET /api/chats
+ * @access Private
+ */
+exports.getChats = async (req, res) => {
+  try {
+    // Get all chats where user is a participant
+    const chats = await Chat.find({
+      participants: req.user.id
+    })
+      .populate('participants', 'firstName lastName username profileImage lastActive')
+      .populate('admins', 'firstName lastName username profileImage')
+      .populate({
+        path: 'lastMessage',
+        select: 'content type sender timestamp status',
+        populate: {
+          path: 'sender',
+          select: 'firstName lastName username profileImage'
+        }
+      })
+      .sort({ updatedAt: -1 });
+    
+    res.json(chats);
+  } catch (error) {
+    logger.error(`Get chats error: ${error.message}`, { userId: req.user.id });
+    res.status(500).json({ error: 'Server error when retrieving chats' });
+  }
+};
+
+/**
+ * Get a single chat by ID
+ * @route GET /api/chats/:chatId
+ * @access Private
+ */
+exports.getChat = async (req, res) => {
+  try {
+    const { chatId } = req.params;
+    
+    // Get chat
+    const chat = await Chat.findById(chatId)
+      .populate('participants', 'firstName lastName username profileImage lastActive')
+      .populate('admins', 'firstName lastName username profileImage')
+      .populate({
+        path: 'lastMessage',
+        select: 'content type sender timestamp status',
+        populate: {
+          path: 'sender',
+          select: 'firstName lastName username profileImage'
+        }
+      });
+    
+    if (!chat) {
+      return res.status(404).json({ error: 'Chat not found' });
+    }
+    
+    // Check if user is a participant
+    if (!chat.participants.some(p => p._id.toString() === req.user.id)) {
+      return res.status(403).json({ error: 'You are not a participant in this chat' });
+    }
+    
+    res.json(chat);
+  } catch (error) {
+    logger.error(`Get chat error: ${error.message}`, { 
+      userId: req.user.id, 
+      chatId: req.params.chatId 
+    });
+    res.status(500).json({ error: 'Server error when retrieving chat' });
+  }
+};
+
+/**
+ * Update a chat
+ * @route PUT /api/chats/:chatId
+ * @access Private
+ */
+exports.updateChat = async (req, res) => {
+  try {
+    const { chatId } = req.params;
+    const { name, description } = req.body;
+    
+    // Get chat
+    const chat = await Chat.findById(chatId);
+    
+    if (!chat) {
+      return res.status(404).json({ error: 'Chat not found' });
+    }
+    
+    // Check if user is a participant
+    if (!chat.participants.includes(req.user.id)) {
+      return res.status(403).json({ error: 'You are not a participant in this chat' });
+    }
+    
+    // For group chats, only admins can update
+    if (chat.type === 'group' && (!chat.admins || !chat.admins.includes(req.user.id))) {
+      return res.status(403).json({ error: 'Only admins can update group chats' });
+    }
+    
+    // Update fields
+    const updateData = {};
+    if (name !== undefined) updateData.name = name;
+    if (description !== undefined) updateData.description = description;
+    
+    const updatedChat = await Chat.findByIdAndUpdate(
+      chatId,
+      updateData,
+      { new: true }
+    )
+      .populate('participants', 'firstName lastName username profileImage lastActive')
+      .populate('admins', 'firstName lastName username profileImage');
+    
+    // Log chat update
+    await logAuditEvent(
+      req.user.id,
+      'chat_updated',
+      {
+        chatId,
+        updatedFields: Object.keys(updateData),
+        ip: req.ip,
+        userAgent: req.headers['user-agent']
+      }
+    );
+    
+    // Notify other participants
+    chat.participants.forEach(participant => {
+      if (participant.toString() !== req.user.id) {
+        socketEvents.emitToUser(participant.toString(), 'chat_updated', {
+          chatId,
+          updatedFields: updateData,
+          updatedBy: req.user.id
+        });
+      }
+    });
+    
+    res.json(updatedChat);
+  } catch (error) {
+    logger.error(`Update chat error: ${error.message}`, { 
+      userId: req.user.id, 
+      chatId: req.params.chatId 
+    });
+    res.status(500).json({ error: 'Server error when updating chat' });
+  }
+};
+
+/**
+ * Delete a chat
+ * @route DELETE /api/chats/:chatId
+ * @access Private
+ */
+exports.deleteChat = async (req, res) => {
+  try {
+    const { chatId } = req.params;
+    
+    // Get chat
+    const chat = await Chat.findById(chatId);
+    
+    if (!chat) {
+      return res.status(404).json({ error: 'Chat not found' });
+    }
+    
+    // Check if user is a participant
+    if (!chat.participants.includes(req.user.id)) {
+      return res.status(403).json({ error: 'You are not a participant in this chat' });
+    }
+    
+    // For group chats, only admins or creator can delete
+    if (
+      chat.type === 'group' && 
+      chat.creator.toString() !== req.user.id && 
+      (!chat.admins || !chat.admins.includes(req.user.id))
+    ) {
+      return res.status(403).json({ error: 'Only admins or the creator can delete group chats' });
+    }
+    
+    // Check if 2FA verification is needed for group deletion
+    if (chat.type === 'group') {
+      const verificationResult = await verify2FAIfRequired(req, res, 'delete_group_chat');
+      if (!verificationResult.success) {
+        return res.status(verificationResult.statusCode).json({ error: verificationResult.message });
+      }
+    }
+    
+    // Delete all messages in the chat
+    await Message.deleteMany({ chat: chatId });
+    
+    // Delete the chat
+    await Chat.findByIdAndDelete(chatId);
+    
+    // Log chat deletion
+    await logAuditEvent(
+      req.user.id,
+      'chat_deleted',
+      {
+        chatId,
+        chatType: chat.type,
+        ip: req.ip,
+        userAgent: req.headers['user-agent']
+      }
+    );
+    
+    // Notify other participants
+    chat.participants.forEach(participant => {
+      if (participant.toString() !== req.user.id) {
+        socketEvents.emitToUser(participant.toString(), 'chat_deleted', {
+          chatId,
+          deletedBy: req.user.id
+        });
+      }
+    });
+    
+    res.json({ message: 'Chat deleted successfully' });
+  } catch (error) {
+    logger.error(`Delete chat error: ${error.message}`, { 
+      userId: req.user.id, 
+      chatId: req.params.chatId 
+    });
+    res.status(500).json({ error: 'Server error when deleting chat' });
+  }
+};
+
+/**
+ * Add participant to a chat
+ * @route POST /api/chats/:chatId/participants
+ * @access Private
+ */
+exports.addParticipant = async (req, res) => {
+  try {
+    const { chatId } = req.params;
+    const { userId } = req.body;
+    
+    if (!userId) {
+      return res.status(400).json({ error: 'User ID is required' });
+    }
+    
+    // Get chat
+    const chat = await Chat.findById(chatId);
+    
+    if (!chat) {
+      return res.status(404).json({ error: 'Chat not found' });
+    }
+    
+    // Check if user is a participant
+    if (!chat.participants.includes(req.user.id)) {
+      return res.status(403).json({ error: 'You are not a participant in this chat' });
+    }
+    
+    // For group chats, only admins can add participants
+    if (chat.type === 'group' && !chat.admins.includes(req.user.id)) {
+      return res.status(403).json({ error: 'Only admins can add participants to group chats' });
+    }
+    
+    // Check if user to add exists
+    const userToAdd = await User.findById(userId);
+    
+    if (!userToAdd) {
+      return res.status(404).json({ error: 'User to add not found' });
+    }
+    
+    // Check if user is already a participant
+    if (chat.participants.includes(userId)) {
+      return res.status(400).json({ error: 'User is already a participant in this chat' });
+    }
+    
+    // Add participant
+    await Chat.findByIdAndUpdate(chatId, {
+      $addToSet: { participants: userId }
+    });
+    
+    // Create system message
+    const systemMessage = new Message({
+      chat: chatId,
+      type: 'system',
+      content: `${userToAdd.firstName} ${userToAdd.lastName} was added to the chat`,
+      timestamp: Date.now(),
+      metadata: {
+        systemEvent: 'participant_added',
+        addedBy: req.user.id,
+        addedUser: userId
+      }
+    });
+    
+    await systemMessage.save();
+    
+    // Update chat's last message
+    await Chat.findByIdAndUpdate(chatId, {
+      lastMessage: systemMessage._id,
+      updatedAt: Date.now()
+    });
+    
+    // Get updated chat
+    const updatedChat = await Chat.findById(chatId)
+      .populate('participants', 'firstName lastName username profileImage lastActive')
+      .populate('admins', 'firstName lastName username profileImage');
+    
+    // Notify participants
+    chat.participants.forEach(participant => {
+      if (participant.toString() !== req.user.id) {
+        socketEvents.emitToUser(participant.toString(), 'participant_added', {
+          chatId,
+          addedBy: req.user.id,
+          addedUser: userId
+        });
+      }
+    });
+    
+    // Notify the user that was added
+    socketEvents.emitToUser(userId, 'added_to_chat', {
+      chat: updatedChat,
+      addedBy: req.user.id
+    });
+    
+    // Create notification for added user
+    await Notification.create({
+      recipient: userId,
+      type: 'added_to_chat',
+      sender: req.user.id,
+      data: {
+        chatId,
+        chatName: chat.name || null,
+        chatType: chat.type
+      },
+      timestamp: Date.now()
+    });
+    
+    // Log participant addition
+    await logAuditEvent(
+      req.user.id,
+      'participant_added',
+      {
+        chatId,
+        addedUserId: userId,
+        ip: req.ip,
+        userAgent: req.headers['user-agent']
+      }
+    );
+    
+    res.json(updatedChat);
+  } catch (error) {
+    logger.error(`Add participant error: ${error.message}`, { 
+      userId: req.user.id, 
+      chatId: req.params.chatId 
+    });
+    res.status(500).json({ error: 'Server error when adding participant' });
+  }
+};
+
+/**
+ * Remove participant from a chat
+ * @route DELETE /api/chats/:chatId/participants/:userId
+ * @access Private
+ */
+exports.removeParticipant = async (req, res) => {
+  try {
+    const { chatId, userId } = req.params;
+    
+    // Get chat
+    const chat = await Chat.findById(chatId);
+    
+    if (!chat) {
+      return res.status(404).json({ error: 'Chat not found' });
+    }
+    
+    // Check if user is a participant
+    if (!chat.participants.includes(req.user.id)) {
+      return res.status(403).json({ error: 'You are not a participant in this chat' });
+    }
+    
+    // Allow users to remove themselves, otherwise require admin
+    const isSelfRemoval = userId === req.user.id;
+    const isAdmin = chat.admins && chat.admins.includes(req.user.id);
+    
+    if (!isSelfRemoval && (!isAdmin || chat.type !== 'group')) {
+      return res.status(403).json({ error: 'Only admins can remove other participants' });
+    }
+    
+    // Cannot remove the creator of the group
+    if (chat.creator.toString() === userId && !isSelfRemoval) {
+      return res.status(403).json({ error: 'Cannot remove the creator of the group' });
+    }
+    
+    // Check if user to remove exists and is a participant
+    if (!chat.participants.includes(userId)) {
+      return res.status(400).json({ error: 'User is not a participant in this chat' });
+    }
+    
+    // Get user info for notification
+    const userToRemove = await User.findById(userId).select('firstName lastName');
+    
+    if (!userToRemove) {
+      return res.status(404).json({ error: 'User to remove not found' });
+    }
+    
+    // Remove participant
+    await Chat.findByIdAndUpdate(chatId, {
+      $pull: { 
+        participants: userId,
+        admins: userId // Also remove from admins if they were an admin
+      }
+    });
+    
+    // Create system message
+    const systemMessage = new Message({
+      chat: chatId,
+      type: 'system',
+      content: isSelfRemoval
+        ? `${userToRemove.firstName} ${userToRemove.lastName} left the chat`
+        : `${userToRemove.firstName} ${userToRemove.lastName} was removed from the chat`,
+      timestamp: Date.now(),
+      metadata: {
+        systemEvent: isSelfRemoval ? 'participant_left' : 'participant_removed',
+        removedBy: isSelfRemoval ? userId : req.user.id,
+        removedUser: userId
+      }
+    });
+    
+    await systemMessage.save();
+    
+    // Update chat's last message
+    await Chat.findByIdAndUpdate(chatId, {
+      lastMessage: systemMessage._id,
+      updatedAt: Date.now()
+    });
+    
+    // Get updated chat
+    const updatedChat = await Chat.findById(chatId)
+      .populate('participants', 'firstName lastName username profileImage lastActive')
+      .populate('admins', 'firstName lastName username profileImage');
+    
+    // Notify remaining participants
+    chat.participants.forEach(participant => {
+      if (participant.toString() !== req.user.id && participant.toString() !== userId) {
+        socketEvents.emitToUser(participant.toString(), isSelfRemoval ? 'participant_left' : 'participant_removed', {
+          chatId,
+          removedBy: req.user.id,
+          removedUser: userId
+        });
+      }
+    });
+    
+    // Notify the removed user if it wasn't self-removal
+    if (!isSelfRemoval) {
+      socketEvents.emitToUser(userId, 'removed_from_chat', {
+        chatId,
+        removedBy: req.user.id
+      });
+      
+      // Create notification for removed user
+      await Notification.create({
+        recipient: userId,
+        type: 'removed_from_chat',
+        sender: req.user.id,
+        data: {
+          chatId,
+          chatName: chat.name || null,
+          chatType: chat.type
+        },
+        timestamp: Date.now()
+      });
+    }
+    
+    // Log participant removal
+    await logAuditEvent(
+      req.user.id,
+      isSelfRemoval ? 'participant_left' : 'participant_removed',
+      {
+        chatId,
+        removedUserId: userId,
+        isSelfRemoval,
+        ip: req.ip,
+        userAgent: req.headers['user-agent']
+      }
+    );
+    
+    res.json({
+      message: isSelfRemoval 
+        ? 'You have left the chat' 
+        : `${userToRemove.firstName} ${userToRemove.lastName} removed from chat`,
+      chat: updatedChat
+    });
+  } catch (error) {
+    logger.error(`Remove participant error: ${error.message}`, { 
+      userId: req.user.id, 
+      chatId: req.params.chatId,
+      removedUserId: req.params.userId
+    });
+    res.status(500).json({ error: 'Server error when removing participant' });
+  }
+};
+
+/**
+ * Update a message
+ * @route PUT /api/messages/:messageId
+ * @access Private
+ */
+exports.updateMessage = async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    const { content } = req.body;
+    
+    if (!content) {
+      return res.status(400).json({ error: 'Updated content is required' });
+    }
+    
+    // Get message
+    const message = await Message.findById(messageId);
+    
+    if (!message) {
+      return res.status(404).json({ error: 'Message not found' });
+    }
+    
+    // Check if user is the sender
+    if (message.sender.toString() !== req.user.id) {
+      return res.status(403).json({ error: 'You can only edit your own messages' });
+    }
+    
+    // Check if message is editable (text messages only, within time limit)
+    if (message.type !== 'text') {
+      return res.status(400).json({ error: 'Only text messages can be edited' });
+    }
+    
+    // Check time limit (e.g., 15 minutes)
+    const timeSinceSent = Date.now() - new Date(message.timestamp).getTime();
+    if (timeSinceSent > 15 * 60 * 1000) {
+      return res.status(400).json({ error: 'Messages can only be edited within 15 minutes of sending' });
+    }
+    
+    // Handle encryption if needed
+    let encryptedContent = content;
+    let encryptionMetadata = null;
+    
+    // Get chat to check encryption
+    const chat = await Chat.findById(message.chat);
+    
+    if (chat && chat.encryption && chat.encryption.enabled) {
+      try {
+        // Get recipients' public keys
+        const recipients = chat.participants.filter(p => p.toString() !== req.user.id);
+        
+        const keys = {};
+        for (const recipientId of recipients) {
+          const recipient = await User.findById(recipientId).select('encryption.publicKeys');
+          if (recipient.encryption?.publicKeys) {
+            keys[recipientId] = recipient.encryption.publicKeys;
+          }
+        }
+        
+        // Encrypt message using Signal Protocol
+        const encryptionResult = await SignalProtocol.encryptMessage(
+          content,
+          req.user.id,
+          recipients,
+          keys
+        );
+        
+        encryptedContent = encryptionResult.encryptedContent;
+        encryptionMetadata = encryptionResult.metadata;
+      } catch (error) {
+        logger.error(`Message encryption error: ${error.message}`, { 
+          userId: req.user.id, 
+          messageId 
+        });
+        return res.status(500).json({ error: 'Failed to encrypt message' });
+      }
+    }
+    
+    // Update message
+    const updates = {
+      content: encryptedContent,
+      edited: true,
+      editedAt: Date.now()
+    };
+    
+    // Add encryption metadata if applicable
+    if (encryptionMetadata) {
+      updates['encryption.metadata'] = encryptionMetadata;
+    }
+    
+    await Message.findByIdAndUpdate(messageId, updates);
+    
+    // Get updated message
+    const updatedMessage = await Message.findById(messageId)
+      .populate('sender', 'firstName lastName username profileImage');
+    
+    // Notify participants
+    const chatId = message.chat.toString();
+    
+    chat.participants.forEach(participant => {
+      if (participant.toString() !== req.user.id) {
+        socketEvents.emitToUser(participant.toString(), 'message_updated', {
+          chatId,
+          message: updatedMessage
+        });
+      }
+    });
+    
+    // Log message update
+    await logAuditEvent(
+      req.user.id,
+      'message_updated',
+      {
+        chatId,
+        messageId,
+        ip: req.ip,
+        userAgent: req.headers['user-agent']
+      }
+    );
+    
+    res.json(updatedMessage);
+  } catch (error) {
+    logger.error(`Update message error: ${error.message}`, { 
+      userId: req.user.id, 
+      messageId: req.params.messageId 
+    });
+    res.status(500).json({ error: 'Server error when updating message' });
+  }
+};
+
+/**
+ * Mark message as read
+ * @route POST /api/messages/:messageId/read
+ * @access Private
+ */
+exports.markMessageAsRead = async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    
+    // Get message
+    const message = await Message.findById(messageId);
+    
+    if (!message) {
+      return res.status(404).json({ error: 'Message not found' });
+    }
+    
+    // Get chat
+    const chat = await Chat.findById(message.chat);
+    
+    if (!chat) {
+      return res.status(404).json({ error: 'Chat not found' });
+    }
+    
+    // Check if user is a participant
+    if (!chat.participants.includes(req.user.id)) {
+      return res.status(403).json({ error: 'You are not a participant in this chat' });
+    }
+    
+    // Check if already read by this user
+    const alreadyRead = message.readBy && message.readBy.some(read => read.user.toString() === req.user.id);
+    
+    if (!alreadyRead) {
+      // Mark as read
+      await Message.findByIdAndUpdate(messageId, {
+        $addToSet: { 
+          readBy: { 
+            user: req.user.id, 
+            timestamp: Date.now() 
+          } 
+        },
+        $set: { 
+          status: message.status === 'sent' ? 'delivered' : message.status 
+        }
+      });
+      
+      // If this user is not the sender, add to deliveredTo if not already there
+      if (message.sender.toString() !== req.user.id) {
+        const alreadyDelivered = message.deliveredTo && 
+          message.deliveredTo.some(delivery => delivery.user.toString() === req.user.id);
+          
+        if (!alreadyDelivered) {
+          await Message.findByIdAndUpdate(messageId, {
+            $addToSet: { 
+              deliveredTo: { 
+                user: req.user.id, 
+                timestamp: Date.now() 
+              } 
+            }
+          });
+        }
+      }
+      
+      // Notify sender
+      socketEvents.emitToUser(message.sender.toString(), 'message_read', {
+        chatId: message.chat.toString(),
+        messageId,
+        readBy: req.user.id,
+        timestamp: Date.now()
+      });
+    }
+    
+    res.json({ success: true });
+  } catch (error) {
+    logger.error(`Mark message as read error: ${error.message}`, { 
+      userId: req.user.id, 
+      messageId: req.params.messageId 
+    });
+    res.status(500).json({ error: 'Server error when marking message as read' });
+  }
+};
 
 // Helper function to format expiration time in a human-readable format
 function formatExpirationTime(seconds) {
@@ -1972,11 +2729,11 @@ const parts1 = v1.split('.').map(Number);
 const parts2 = v2.split('.').map(Number);
 
 for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
-const part1 = parts1[i] || 0;
-const part2 = parts2[i] || 0;
+  const part1 = parts1[i] || 0;
+  const part2 = parts2[i] || 0;
 
-if (part1 < part2) return -1;
-if (part1 > part2) return 1;
+  if (part1 < part2) return -1;
+  if (part1 > part2) return 1;
 }
 
 return 0;

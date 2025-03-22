@@ -570,7 +570,8 @@ reportSchema.statics.findSimilar = function(contentId, excludeReportId) {
 };
 
 // Create model from schema
-const Report = mongoose.model('Report', reportSchema);
+// In each model file where this occurs
+const Report = mongoose.models.Report || mongoose.model('Report', ReportSchema);
 const Post = mongoose.model('Post', postSchema);
 const Reaction = mongoose.model('Reaction', reactionSchema);
 const Comment = mongoose.model('Comment', commentSchema);

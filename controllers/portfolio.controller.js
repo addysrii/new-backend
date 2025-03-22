@@ -1,10 +1,10 @@
-const Project = require('../models/Portfolio');
-const Achievement = require('../models/Portfolio');
-const Streak = require('../models/Portfolio');
-const StreakCheckIn = require('../models/Portfolio');
-const User = require('../models/User');
-const Skill = require('../models/Portfolio');
-const Recommendation = require('../models/Portfolio');
+const {Project }= require('../models/Portfolio');
+const {Achievement} = require('../models/Portfolio');
+const {Streak} = require('../models/Portfolio');
+const{ StreakCheckIn} = require('../models/Portfolio');
+const {User} = require('../models/User');
+const {Skill }= require('../models/Portfolio');
+const {Recommendation} = require('../models/Portfolio');
 const fs = require('fs');
 const path = require('path');
 
@@ -1217,7 +1217,162 @@ exports.addSkill = async (req, res) => {
     handleError(err, res);
   }
 };
+/**
+ * Get list of all skills or filter by query
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+exports.getSkills = async (req, res) => {
+  try {
+    const { search, category, popular, limit = 50 } = req.query;
+    
+    // Base query
+    let query = {};
+    
+    // Apply search filter if provided
+    if (search) {
+      query.$or = [
+        { name: { $regex: search, $options: 'i' } },
+        { aliases: { $regex: search, $options: 'i' } }
+      ];
+    }
+    
+    // Filter by category if provided
+    if (category) {
+      query.category = category;
+    }
+    
+    // Filter by popularity if requested
+    if (popular === 'true') {
+      query.popular = true;
+    }
+    
+    // Find skills with pagination
+    const skills = await Skill.find(query)
+      .sort({ popular: -1, categoryRank: -1, name: 1 })
+      .limit(parseInt(limit));
+    
+    // Determine which skills the current user has
+    const user = await User.findById(req.user.id).select('skills');
+    const userSkillIds = user.skills.map(s => s.toString());
+    
+    // Add a flag to indicate which skills the user has
+    const skillsWithUserStatus = skills.map(skill => ({
+      ...skill.toObject(),
+      userHasSkill: userSkillIds.includes(skill._id.toString())
+    }));
+    
+    res.json(skillsWithUserStatus);
+  } catch (err) {
+    handleError(err, res);
+  }
+};
 
+/**
+ * Remove a skill from user's profile
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+exports.removeSkill = async (req, res) => {
+  try {
+    const { skillId } = req.params;
+    
+    // Check if skill exists
+    const skill = await Skill.findById(skillId);
+    if (!skill) {
+      return res.status(404).json({ error: 'Skill not found' });
+    }
+    
+    // Remove skill from user
+    await User.findByIdAndUpdate(
+      req.user.id, 
+      { $pull: { skills: skillId } }
+    );
+    
+    // Also remove any endorsements for this skill
+    await User.findByIdAndUpdate(
+      req.user.id,
+      { $pull: { skillEndorsements: { skill: skillId } } }
+    );
+    
+    // Get updated user skills
+    const user = await User.findById(req.user.id).populate('skills');
+    
+    res.json({
+      message: `Skill "${skill.name}" removed successfully`,
+      skills: user.skills
+    });
+  } catch (err) {
+    handleError(err, res);
+  }
+};
+
+/**
+ * Remove an endorsement from a skill
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+exports.removeEndorsement = async (req, res) => {
+  try {
+    const { skillId } = req.params;
+    const { userId } = req.body;
+    
+    // Check if skill exists
+    const skill = await Skill.findById(skillId);
+    if (!skill) {
+      return res.status(404).json({ error: 'Skill not found' });
+    }
+    
+    // Determine target user - if userId provided, remove endorsement from that user's skill
+    // Otherwise, assume we're removing an endorsement the current user made
+    const targetUser = userId ? userId : req.user.id;
+    
+    if (userId) {
+      // Current user is removing their endorsement from someone else's skill
+      await User.findByIdAndUpdate(
+        userId,
+        { 
+          $pull: { 
+            skillEndorsements: { 
+              skill: skillId,
+              endorser: req.user.id
+            } 
+          } 
+        }
+      );
+      
+      res.json({
+        message: `Your endorsement for skill "${skill.name}" has been removed`
+      });
+    } else {
+      // User is removing an endorsement from their own skill
+      // Identify the endorser from query param
+      const { endorserId } = req.query;
+      
+      if (!endorserId) {
+        return res.status(400).json({ error: 'Endorser ID is required' });
+      }
+      
+      await User.findByIdAndUpdate(
+        req.user.id,
+        { 
+          $pull: { 
+            skillEndorsements: { 
+              skill: skillId,
+              endorser: endorserId
+            } 
+          } 
+        }
+      );
+      
+      res.json({
+        message: `Endorsement for skill "${skill.name}" has been removed`
+      });
+    }
+  } catch (err) {
+    handleError(err, res);
+  }
+};
 exports.removeSkill = async (req, res) => {
   try {
     const { skillName } = req.params;
@@ -1248,7 +1403,41 @@ exports.removeSkill = async (req, res) => {
     handleError(err, res);
   }
 };
-
+/**
+ * Remove a skill from user's profile by name
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+exports.removeSkillByName = async (req, res) => {
+  try {
+    const { skillName } = req.params;
+    
+    // Find skill
+    const skill = await Skill.findOne({ name: skillName.toLowerCase() });
+    if (!skill) {
+      return res.status(404).json({ error: 'Skill not found' });
+    }
+    
+    // Remove skill from user
+    await User.findByIdAndUpdate(
+      req.user.id, 
+      { $pull: { skills: skill._id } }
+    );
+    
+    // Also remove any endorsements for this skill
+    await User.findByIdAndUpdate(
+      req.user.id,
+      { $pull: { skillEndorsements: { skill: skill._id } } }
+    );
+    
+    // Get updated user skills
+    const user = await User.findById(req.user.id).populate('skills');
+    
+    res.json(user.skills);
+  } catch (err) {
+    handleError(err, res);
+  }
+};
 // Recommendations
 exports.createRecommendation = async (req, res) => {
   try {

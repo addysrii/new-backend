@@ -1,9 +1,8 @@
-const User = require('../models/User');
-const jwt = require('jsonwebtoken');
-const { validationResult } = require('express-validator');
+// controllers/user.controller.js
+const { User } = require('../models/User');
 const mongoose = require('mongoose');
 const ObjectId = mongoose.Types.ObjectId;
-const ProfileView = require('../models/ProfileView');
+const { ProfileView } = require('../models/User');
 const Settings = require('../models/Settings');
 
 /**
@@ -36,11 +35,6 @@ exports.getCurrentUser = async (req, res) => {
  */
 exports.updateProfile = async (req, res) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-    
     const {
       firstName,
       lastName,
@@ -69,8 +63,8 @@ exports.updateProfile = async (req, res) => {
     if (website) profileFields.website = website;
     if (birthday) profileFields.birthday = birthday;
     if (gender) profileFields.gender = gender;
-    if (skills) profileFields.skills = skills.split(',').map(skill => skill.trim());
-    if (interests) profileFields.interests = interests.split(',').map(interest => interest.trim());
+    if (skills) profileFields.skills = Array.isArray(skills) ? skills : skills.split(',').map(skill => skill.trim());
+    if (interests) profileFields.interests = Array.isArray(interests) ? interests : interests.split(',').map(interest => interest.trim());
     
     // Handle profile image upload
     if (req.file) {
@@ -120,7 +114,14 @@ exports.updateProfile = async (req, res) => {
  */
 exports.getUserProfile = async (req, res) => {
   try {
-    const user = await User.findById(req.params.userId)
+    const { userId } = req.params;
+    
+    // Check if userId is a valid MongoDB ObjectId
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ error: 'Invalid user ID format' });
+    }
+    
+    const user = await User.findById(userId)
       .select('-password -security -email')
       .populate('connections', 'firstName lastName profileImage username')
       .populate('settings', 'privacySettings.profileVisibility');
@@ -140,11 +141,11 @@ exports.getUserProfile = async (req, res) => {
     }
     
     // Record profile view if viewing another user's profile
-    if (req.user.id !== req.params.userId) {
+    if (req.user && req.user.id !== userId) {
       // Create profile view record
       await ProfileView.create({
         viewer: req.user.id,
-        viewed: req.params.userId,
+        viewed: userId,
         timestamp: Date.now()
       });
     }

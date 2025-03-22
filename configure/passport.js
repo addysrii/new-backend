@@ -2,7 +2,7 @@ const passport = require('passport');
 const LocalStrategy = require('passport-local').Strategy;
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const LinkedInStrategy = require('passport-linkedin-oauth2').Strategy;
-const User = require('../models/user/user.js');
+const{ User} = require('../models/User.js');
 const dotenv = require('dotenv');
 
 dotenv.config();

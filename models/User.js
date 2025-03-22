@@ -32,6 +32,23 @@ const refreshTokenSchema = new Schema({
   }
 }, { _id: true });
 
+// Verification Schema (Embedded Document)
+const verificationItemSchema = new Schema({
+  code: String,
+  expiresAt: Date,
+  attempts: {
+    type: Number,
+    default: 0
+  },
+  recipient: String,
+  verified: {
+    type: Boolean,
+    default: false
+  },
+  lockedUntil: Date,
+  verifiedAt: Date
+}, { _id: false });
+
 // Skill Endorsement Schema (Embedded Document)
 const skillEndorsementSchema = new Schema({
   skill: {
@@ -353,6 +370,19 @@ const userSchema = new Schema({
     default: 'user'
   },
   
+  // Verification - NEW STRUCTURE
+  verification: {
+    email: verificationItemSchema,
+    phone: verificationItemSchema,
+    emailToken: String,
+    emailTokenExpires: Date,
+    isEmailVerified: {
+      type: Boolean,
+      default: false
+    },
+    verifiedAt: Date
+  },
+  
   // Security
   security: {
     mfa: {
@@ -459,7 +489,7 @@ const userSchema = new Schema({
   // Timestamps
   createdAt: {
     type: Date,
-    default: Date.now
+    default: Date.now,
   },
   updatedAt: {
     type: Date,
@@ -480,7 +510,7 @@ userSchema.index({ createdAt: 1 });
 userSchema.index({ email: 1 }, { unique: true });
 userSchema.index({ username: 1 }, { unique: true });
 
-// Pre-save middleware to hash password
+// Pre-save middleware to hash password - ENHANCED WITH DEBUGGING
 userSchema.pre('save', async function(next) {
   const user = this;
   
@@ -488,24 +518,57 @@ userSchema.pre('save', async function(next) {
   user.updatedAt = Date.now();
   
   // Only hash the password if it's modified or new
-  if (!user.isModified('password')) return next();
+  if (!user.isModified('password')) {
+    console.log(`Password not modified for user ${user.email}, skipping hashing`);
+    return next();
+  }
   
   try {
+    console.log(`Hashing password in pre-save middleware for user ${user.email}`);
+    
     // Generate salt
     const salt = await bcrypt.genSalt(12);
+    console.log(`Generated salt: ${salt.substring(0, 5)}...`);
+    
     // Hash the password
     const hash = await bcrypt.hash(user.password, salt);
+    console.log(`Generated hash: ${hash.substring(0, 10)}...`);
+    
     // Replace the plain text password with the hash
     user.password = hash;
+    console.log(`Password hashed successfully for user ${user.email}`);
     next();
   } catch (error) {
+    console.error(`Error hashing password for user ${user.email}:`, error);
     return next(error);
   }
 });
 
-// Method to compare password
+// Method to compare password - ENHANCED WITH DEBUGGING
 userSchema.methods.comparePassword = async function(candidatePassword) {
-  return await bcrypt.compare(candidatePassword, this.password);
+  console.log(`Comparing password for user ${this.email}...`);
+  
+  if (!candidatePassword) {
+    console.error('Candidate password is undefined or null');
+    return false;
+  }
+  
+  if (!this.password) {
+    console.error('Stored password hash is undefined or null');
+    return false;
+  }
+  
+  console.log(`Candidate password length: ${candidatePassword.length}`);
+  console.log(`Stored hash: ${this.password.substring(0, 10)}...`);
+  
+  try {
+    const isMatch = await bcrypt.compare(candidatePassword, this.password);
+    console.log(`Password comparison result for ${this.email}: ${isMatch}`);
+    return isMatch;
+  } catch (error) {
+    console.error(`Error comparing passwords for user ${this.email}:`, error);
+    throw error;
+  }
 };
 
 // Method to generate JWT token
@@ -517,8 +580,11 @@ userSchema.methods.generateAuthToken = function() {
     role: user.role
   };
   
-  const token = jwt.sign(payload, config.JWT_SECRET, {
-    expiresIn: config.JWT_EXPIRES_IN
+  const secret = config.JWT_SECRET || 'your-jwt-secret';
+  const expiresIn = config.JWT_EXPIRES_IN || '7d';
+  
+  const token = jwt.sign(payload, secret, {
+    expiresIn: expiresIn
   });
   
   return token;
@@ -532,8 +598,11 @@ userSchema.methods.generateRefreshToken = function() {
     type: 'refresh'
   };
   
-  const token = jwt.sign(payload, config.REFRESH_TOKEN_SECRET, {
-    expiresIn: config.REFRESH_TOKEN_EXPIRES_IN
+  const secret = config.REFRESH_TOKEN_SECRET || config.JWT_SECRET || 'your-jwt-secret';
+  const expiresIn = config.REFRESH_TOKEN_EXPIRES_IN || '30d';
+  
+  const token = jwt.sign(payload, secret, {
+    expiresIn: expiresIn
   });
   
   return token;
@@ -543,140 +612,39 @@ userSchema.methods.generateRefreshToken = function() {
 userSchema.virtual('fullName').get(function() {
   return `${this.firstName} ${this.lastName}`;
 });
-// Settings Schema
-const SettingsSchema = new Schema({
-  user: {
-    type: Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  },
-  appSettings: {
-    theme: {
-      type: String,
-      enum: ['light', 'dark', 'system'],
-      default: 'system'
-    },
-    language: {
-      type: String,
-      default: 'en'
-    },
-    timezone: {
-      type: String,
-      default: 'UTC'
-    },
-    contentPreferences: {
-      type: Object,
-      default: {}
-    }
-  },
-  privacySettings: {
-    profileVisibility: {
-      type: String,
-      enum: ['public', 'connections_only', 'private'],
-      default: 'public'
-    },
-    locationSharing: {
-      type: Boolean,
-      default: true
-    },
-    connectionVisibility: {
-      type: String,
-      enum: ['public', 'connections_only', 'private'],
-      default: 'public'
-    },
-    activityVisibility: {
-      type: String,
-      enum: ['public', 'connections_only', 'private'],
-      default: 'connections_only'
-    },
-    searchableByEmail: {
-      type: Boolean,
-      default: true
-    },
-    searchableByPhone: {
-      type: Boolean,
-      default: false
-    },
-    viewsVisibility: {
-      type: String,
-      enum: ['public', 'connections_only', 'private'],
-      default: 'connections_only'
-    },
-    allowAnonymousViews: {
-      type: Boolean,
-      default: true
-    }
-  },
-  notificationSettings: {
-    emailNotifications: {
-      type: Boolean,
-      default: true
-    },
-    pushNotifications: {
-      type: Boolean,
-      default: true
-    },
-    notifyOnMessage: {
-      type: Boolean,
-      default: true
-    },
-    notifyOnConnection: {
-      type: Boolean,
-      default: true
-    },
-    notifyOnPost: {
-      type: Boolean,
-      default: true
-    },
-    notifyOnComment: {
-      type: Boolean,
-      default: true
-    },
-    notifyOnLike: {
-      type: Boolean,
-      default: true
-    },
-    notifyOnMention: {
-      type: Boolean,
-      default: true
-    },
-    notifyOnProfileView: {
-      type: Boolean,
-      default: true
-    },
-    notifyOnEvent: {
-      type: Boolean,
-      default: true
-    },
-    notifyOnJob: {
-      type: Boolean,
-      default: true
-    },
-    topicSubscriptions: [String],
-    doNotDisturb: {
-      enabled: {
-        type: Boolean,
-        default: false
-      },
-      startTime: {
-        type: String,
-        default: '22:00'
-      },
-      endTime: {
-        type: String,
-        default: '07:00'
-      },
-      timezone: {
-        type: String,
-        default: 'UTC'
-      },
-      muteAll: {
-        type: Boolean,
-        default: false
-      }
-    }
+
+// Initialize verification method for a new user
+userSchema.methods.initializeVerification = async function() {
+  console.log(`Initializing verification for user ${this.email}`);
+  
+  // Initialize verification object if not exists
+  if (!this.verification) {
+    this.verification = {};
   }
-}, { timestamps: true });
+  
+  // Default email and verification flags to false
+  this.emailVerified = false;
+  this.phoneVerified = false;
+  this.verification.isEmailVerified = false;
+  
+  // Make sure verification fields for email and phone are initialized
+  if (!this.verification.email) {
+    this.verification.email = {
+      verified: false,
+      attempts: 0
+    };
+  }
+  
+  if (!this.verification.phone) {
+    this.verification.phone = {
+      verified: false,
+      attempts: 0
+    };
+  }
+  
+  console.log(`Verification initialized for user ${this.email}`);
+  await this.save();
+};
 
 // Profile View Schema
 const ProfileViewSchema = new Schema({
@@ -700,110 +668,11 @@ const ProfileViewSchema = new Schema({
   }
 });
 
-// Skill Schema
-const SkillSchema = new Schema({
-  name: {
-    type: String,
-    required: true,
-    unique: true,
-    lowercase: true,
-    trim: true
-  },
-  category: String,
-  usageCount: {
-    type: Number,
-    default: 0
-  }
-}, { timestamps: true });
-
-// Push Token Schema
-const PushTokenSchema = new Schema({
-  user: {
-    type: Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  },
-  token: {
-    type: String,
-    required: true
-  },
-  deviceType: {
-    type: String,
-    enum: ['ios', 'android', 'web', 'unknown'],
-    default: 'unknown'
-  },
-  deviceName: {
-    type: String,
-    default: 'Unknown Device'
-  },
-  createdAt: {
-    type: Date,
-    default: Date.now
-  },
-  lastUpdated: {
-    type: Date,
-    default: Date.now
-  }
-});
-
-// Security Log Schema
-const SecurityLogSchema = new Schema({
-  user: {
-    type: Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  },
-  action: {
-    type: String,
-    enum: [
-      'login', 'logout', 'signup', 'password_reset_request', 'password_reset_complete',
-      'password_change', 'email_verification', 'email_changed', 'phone_changed',
-      'phone_verified', '2fa_enabled', '2fa_disabled', '2fa_backup_codes_regenerated',
-      'login_2fa', 'oauth_signup', 'oauth_login', 'revoke_all_sessions', 'device_removed',
-      '2fa_verification_failed', '2fa_verification_succeeded'
-    ],
-    required: true
-  },
-  provider: {
-    type: String,
-    enum: ['google', 'linkedin', 'apple', null],
-    default: null
-  },
-  ip: String,
-  location: String,
-  device: String,
-  browser: String,
-  os: String,
-  details: Object,
-  timestamp: {
-    type: Date,
-    default: Date.now
-  },
-  success: {
-    type: Boolean,
-    default: true
-  },
-  severity: {
-    type: String,
-    enum: ['info', 'warning', 'critical'],
-    default: 'info'
-  },
-  userAgent: String
-});
-
 // Export models
 const User = mongoose.model('User', userSchema);
-const Settings = mongoose.model('Settings', SettingsSchema);
 const ProfileView = mongoose.model('ProfileView', ProfileViewSchema);
-const Skill = mongoose.model('Skill', SkillSchema);
-const PushToken = mongoose.model('PushToken', PushTokenSchema);
-const SecurityLog = mongoose.model('SecurityLog', SecurityLogSchema);
 
 module.exports = {
   User,
-  Settings,
   ProfileView,
-  Skill,
-  PushToken,
-  SecurityLog
 };

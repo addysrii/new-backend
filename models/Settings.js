@@ -176,8 +176,44 @@ const settingsSchema = new Schema({
   updatedAt: {
     type: Date,
     default: Date.now
+  },
+  nearbyUsers: {
+    enabled: {
+      type: Boolean,
+      default: false
+    },
+    radius: {
+      type: Number,
+      default: 1
+    },
+    unit: {
+      type: String,
+      enum: ['km', 'mi'],
+      default: 'km'
+    },
+    filters: {
+      industry: {
+        type: String,
+        default: null
+      },
+      skills: [String],
+      interests: [String],
+      connectionStatus: {
+        type: String,
+        enum: ['all', 'connected', 'not_connected'],
+        default: 'all'
+      }
+    },
+    cooldown: {
+      type: Number,
+      default: 60 // minutes
+    }
+  },
+  lastNearbyNotification: {
+    type: Date
   }
 });
+
 
 // Indexes
 settingsSchema.index({ user: 1 }, { unique: true });

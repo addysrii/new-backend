@@ -1,5 +1,8 @@
 const rateLimit = require('express-rate-limit');
-
+const RedisStore = require('rate-limit-redis');
+const redis = require('redis');
+const logger = require('../utils/logger');
+const metrics = require('../utils/metrics');
 /**
  * Rate limiter for API routes
  */
@@ -41,11 +44,7 @@ exports.profileViewLimiter = rateLimit({
     error: 'You have viewed too many profiles in a short time, please try again later'
   }
 });
-const rateLimit = require('express-rate-limit');
-const RedisStore = require('rate-limit-redis');
-const redis = require('redis');
-const logger = require('../utils/logger');
-const metrics = require('../utils/metrics');
+
 
 // Create Redis client for rate limiting
 const redisClient = redis.createClient({

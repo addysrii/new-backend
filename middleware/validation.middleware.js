@@ -1,6 +1,6 @@
 // middleware/validation.middleware.js
 const { validationResult } = require('express-validator');
-const { validationResult } = require('express-validator');
+
 const logger = require('../utils/logger');
 /**
  * Validation result middleware
@@ -240,8 +240,6 @@ exports.profileValidationRules = () => {
       .withMessage('Degree is required')
   ];
 };
-const { validationResult } = require('express-validator');
-const logger = require('../utils/logger');
 
 /**
  * Validation middleware factory

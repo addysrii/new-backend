@@ -1,9 +1,9 @@
-const Job = require('../models/Job');
-const Company = require('../models/Company');
-const User = require('../models/User');
-const JobApplication = require('../models/Job');
-const SavedJob = require('../models/Job');
-const Notification = require('../models/Notification');
+const {Job} = require('../models/Job');
+const {Company} = require('../models/Company');
+const {User} = require('../models/User');
+const {JobApplication} = require('../models/Job');
+const {SavedJob} = require('../models/Job');
+const {Notification} = require('../models/Notification');
 const { validationResult } = require('express-validator');
 const cloudStorage = require('../utils/cloudStorage');
 const mongoose = require('mongoose');

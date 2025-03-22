@@ -1,8 +1,8 @@
-const User = require('../models/User');
-const SecurityLog = require('../models/Security');
-const Report = require('../models/Security');
-const Feedback = require('../models/Security');
-const Webhook = require('../models/Security');
+const {User} = require('../models/User');
+const {SecurityLog }= require('../models/Security');
+const {Report }= require('../models/Security');
+const {Feedback} = require('../models/Security');
+const {Webhook }= require('../models/Security');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const { validationResult } = require('express-validator');
@@ -1585,7 +1585,74 @@ exports.testWebhook = async (req, res) => {
     res.status(500).json({ error: 'Server error when testing webhook' });
   }
 };
-
+/**
+ * Check password strength
+ * @route POST /api/security/check-password
+ * @access Private
+ */
+exports.checkPasswordStrength = async (req, res) => {
+  try {
+    const { password } = req.body;
+    
+    if (!password) {
+      return res.status(400).json({ error: 'Password is required' });
+    }
+    
+    // Implement password strength checking
+    const strength = {
+      score: 0,
+      feedback: {
+        warning: '',
+        suggestions: []
+      }
+    };
+    
+    // Check length
+    if (password.length < 8) {
+      strength.feedback.warning = 'Password is too short';
+      strength.feedback.suggestions.push('Add more characters');
+    } else {
+      strength.score += 1;
+    }
+    
+    // Check for mixed case
+    if (/[a-z]/.test(password) && /[A-Z]/.test(password)) {
+      strength.score += 1;
+    } else {
+      strength.feedback.suggestions.push('Use both uppercase and lowercase characters');
+    }
+    
+    // Check for numbers
+    if (/\d/.test(password)) {
+      strength.score += 1;
+    } else {
+      strength.feedback.suggestions.push('Add some numbers');
+    }
+    
+    // Check for special characters
+    if (/[^a-zA-Z0-9]/.test(password)) {
+      strength.score += 1;
+    } else {
+      strength.feedback.suggestions.push('Add special characters (!@#$%^&*)');
+    }
+    
+    // Set strength label
+    if (strength.score <= 1) {
+      strength.label = 'Weak';
+    } else if (strength.score === 2) {
+      strength.label = 'Fair';
+    } else if (strength.score === 3) {
+      strength.label = 'Good';
+    } else {
+      strength.label = 'Strong';
+    }
+    
+    res.json(strength);
+  } catch (error) {
+    console.error('Check password strength error:', error);
+    res.status(500).json({ error: 'Server error when checking password strength' });
+  }
+};
 /**
  * Get webhook logs
  * @route GET /api/webhooks/:webhookId/logs
@@ -1639,93 +1706,5 @@ exports.getWebhookLogs = async (req, res) => {
 };
 
 // Create Feedback model if it doesn't exist
-const FeedbackSchema = new mongoose.Schema({
-  user: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  },
-  type: {
-    type: String,
-    enum: ['bug', 'feature', 'content', 'other'],
-    required: true
-  },
-  subject: String,
-  details: {
-    type: String,
-    required: true
-  },
-  rating: Number,
-  category: String,
-  url: String,
-  status: {
-    type: String,
-    enum: ['new', 'in_progress', 'resolved', 'closed'],
-    default: 'new'
-  },
-  submittedAt: {
-    type: Date,
-    default: Date.now
-  },
-  adminResponse: String,
-  respondedAt: Date,
-  respondedBy: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
-  }
-});
 
-const Feedback = mongoose.model('Feedback', FeedbackSchema);
-
-// Create Webhook model if it doesn't exist
-const WebhookSchema = new mongoose.Schema({
-  url: {
-    type: String,
-    required: true
-  },
-  events: [{
-    type: String,
-    required: true
-  }],
-  description: String,
-  secret: {
-    type: String,
-    required: true
-  },
-  status: {
-    type: String,
-    enum: ['active', 'inactive'],
-    default: 'active'
-  },
-  createdBy: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  },
-  createdAt: {
-    type: Date,
-    default: Date.now
-  },
-  updatedAt: Date,
-  updatedBy: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
-  },
-  stats: {
-    lastTestedAt: Date,
-    lastTestStatus: String,
-    lastTestStatusCode: Number,
-    lastTestError: String,
-    eventsDelivered: {
-      type: Number,
-      default: 0
-    },
-    eventsFailed: {
-      type: Number,
-      default: 0
-    }
-  }
-});
-
-const Webhook = mongoose.model('Webhook', WebhookSchema);
 

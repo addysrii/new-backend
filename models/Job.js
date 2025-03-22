@@ -309,9 +309,9 @@ savedJobSchema.index({ user: 1, status: 1 });
 savedJobSchema.index({ user: 1, reminderDate: 1 });
 savedJobSchema.index({ user: 1, tags: 1 });
 
-const SavedJob = mongoose.model('SavedJob', savedJobSchema);
-const Job = mongoose.model('Job', jobSchema);
-const Follow = mongoose.model('Job', FollowSchema);
-const JobApplication = mongoose.model('JobApplication', jobApplicationSchema);
+const Job = mongoose.models.Job || mongoose.model('Job', jobSchema);
+const SavedJob = mongoose.models.SavedJob || mongoose.model('SavedJob', savedJobSchema);
+const JobApplication = mongoose.models.JobApplication || mongoose.model('JobApplication', jobApplicationSchema);
+const Follow = mongoose.models.Follow || mongoose.model('Follow', FollowSchema);
 
 module.exports = { Job, JobApplication, Follow, SavedJob};

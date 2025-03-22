@@ -39,49 +39,6 @@ locationHistorySchema.index({ location: '2dsphere' });
 locationHistorySchema.index({ timestamp: 1 });
 locationHistorySchema.index({ source: 1 });
 
-// Profile View Schema
-const profileViewSchema = new Schema({
-  viewer: {
-    type: Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  },
-  viewed: {
-    type: Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  },
-  timestamp: {
-    type: Date,
-    default: Date.now
-  },
-  anonymous: {
-    type: Boolean,
-    default: false
-  },
-  source: {
-    type: String,
-    enum: ['search', 'feed', 'connection', 'group', 'referral', 'external'],
-    default: 'search'
-  },
-  duration: Number, // time spent viewing profile in seconds
-  interactionType: [String], // e.g., 'clicked_contact', 'viewed_posts', etc.
-  fromLocation: {
-    type: {
-      type: String,
-      enum: ['Point'],
-      default: 'Point'
-    },
-    coordinates: [Number] // [longitude, latitude]
-  }
-});
-
-// Indexes for ProfileView
-profileViewSchema.index({ viewed: 1, timestamp: -1 });
-profileViewSchema.index({ viewer: 1, viewed: 1 });
-profileViewSchema.index({ timestamp: 1 });
-profileViewSchema.index({ viewed: 1, anonymous: 1 });
-profileViewSchema.index({ source: 1 });
 
 // Geofence Schema
 const geofenceSchema = new Schema({
@@ -278,9 +235,8 @@ locationSharingSchema.pre('save', function(next) {
 });
 
 // Create model
-const LocationSharing = mongoose.model('LocationSharing', locationSharingSchema);
+const LocationSharing =mongoose.models.LocationSharing || mongoose.model('LocationSharing', locationSharingSchema);
 const LocationHistory = mongoose.model('LocationHistory', locationHistorySchema);
-const ProfileView = mongoose.model('ProfileView', profileViewSchema);
 const Geofence = mongoose.model('Geofence', geofenceSchema);
 
-module.exports = { LocationHistory, ProfileView, Geofence, LocationSharing };
+module.exports = { LocationHistory, Geofence, LocationSharing };

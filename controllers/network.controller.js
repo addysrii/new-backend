@@ -1,10 +1,10 @@
-const User = require('../models/User');
-const ConnectionRequest = require('../models/Connection');
-const Connection = require('../models/Connection');
-const Follow = require('../models/Connection');
-const Block = require('../models/Connection');
-const MeetingRequest = require('../models/Connection');
-const Notification = require('../models/Notification');
+const {User} = require('../models/User');
+const {ConnectionRequest} = require('../models/Connection');
+const {Connection} = require('../models/Connection');
+const{ Follow }= require('../models/Connection');
+const {Block} = require('../models/Connection');
+const{ MeetingRequest} = require('../models/Connection');
+const {Notification} = require('../models/Notification');
 const geolib = require('geolib');
 const mongoose = require('mongoose');
 const { validationResult } = require('express-validator');
@@ -425,7 +425,87 @@ exports.getConnections = async (req, res) => {
     res.status(500).json({ error: 'Server error when retrieving connections' });
   }
 };
+/**
+ * Cancel a connection request
+ * @route DELETE /api/connections/requests/:requestId
+ * @access Private
+ */
+exports.cancelConnectionRequest = async (req, res) => {
+  try {
+    const { requestId } = req.params;
+    
+    // Find connection request
+    const connectionRequest = await ConnectionRequest.findById(requestId);
+    
+    if (!connectionRequest) {
+      return res.status(404).json({ error: 'Connection request not found' });
+    }
+    
+    // Check if user is the sender
+    if (connectionRequest.sender.toString() !== req.user.id) {
+      return res.status(403).json({ error: 'You can only cancel your own connection requests' });
+    }
+    
+    // Check if already processed
+    if (connectionRequest.status !== 'pending') {
+      return res.status(400).json({ error: 'This request has already been processed' });
+    }
+    
+    // Delete the request
+    await ConnectionRequest.findByIdAndDelete(requestId);
+    
+    res.json({ message: 'Connection request cancelled successfully' });
+  } catch (error) {
+    console.error('Cancel connection request error:', error);
+    res.status(500).json({ error: 'Server error when cancelling connection request' });
+  }
+};
 
+/**
+ * Update connection note
+ * @route PUT /api/connections/:connectionId/note
+ * @access Private
+ */
+exports.updateConnectionNote = async (req, res) => {
+  try {
+    const { connectionId } = req.params;
+    const { note } = req.body;
+    
+    // Find connection
+    const connection = await Connection.findById(connectionId);
+    
+    if (!connection) {
+      return res.status(404).json({ error: 'Connection not found' });
+    }
+    
+    // Check if user is part of connection
+    if (
+      connection.user1.toString() !== req.user.id &&
+      connection.user2.toString() !== req.user.id
+    ) {
+      return res.status(403).json({ error: 'Not authorized to update this connection' });
+    }
+    
+    // Update note
+    connection.notes = connection.notes || {};
+    
+    if (connection.user1.toString() === req.user.id) {
+      connection.notes.user1 = note;
+    } else {
+      connection.notes.user2 = note;
+    }
+    
+    await connection.save();
+    
+    res.json({
+      connection,
+      message: 'Connection note updated successfully'
+    });
+  } catch (error) {
+    console.error('Update connection note error:', error);
+    res.status(500).json({ error: 'Server error when updating connection note' });
+  }
+};
 /**
  * Get connection suggestions
  * @route GET /api/network/suggestions
@@ -805,6 +885,38 @@ exports.getFollowing = async (req, res) => {
     res.status(500).json({ error: 'Server error when retrieving following list' });
   }
 };
+// In your network.controller.js file
+exports.getNetworkStats = async (req, res) => {
+  try {
+    // Get connections count
+    const connectionsCount = await Connection.countDocuments({
+      $or: [
+        { user1: req.user.id },
+        { user2: req.user.id }
+      ]
+    });
+    
+    // Get pending invitation count
+    const invitationsCount = await ConnectionRequest.countDocuments({
+      recipient: req.user.id,
+      status: 'pending'
+    });
+    
+    // Get suggestions count (this might vary based on your implementation)
+    const suggestionsCount = await User.estimatedDocumentCount() - connectionsCount - 1; // Rough estimate
+    
+    res.json({
+      connections: connectionsCount,
+      invitations: invitationsCount,
+      suggestions: suggestionsCount
+    });
+  } catch (error) {
+    console.error('Get network stats error:', error);
+    res.status(500).json({ error: 'Server error when retrieving network stats' });
+  }
+};
+
+
 
 /**
  * Toggle block user
@@ -953,15 +1065,30 @@ exports.getBlockedUsers = async (req, res) => {
  * @route GET /api/network/nearby
  * @access Private
  */
+/**
+ * Get nearby users with enhanced filtering
+ * @route GET /api/network/nearby
+ * @access Private
+ */
 exports.getNearbyUsers = async (req, res) => {
   try {
-    const { radius = 10, unit = 'km' } = req.query;
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
-    const skip = (page - 1) * limit;
+    const { 
+      radius = 10, 
+      unit = 'km', 
+      industry,
+      skills,
+      interests,
+      connectionStatus,
+      lastActive,
+      page = 1,
+      limit = 20
+    } = req.query;
+    
+    const skip = (parseInt(page) - 1) * parseInt(limit);
     
     // Get current user location
-    const currentUser = await User.findById(req.user.id).select('location blockedUsers');
+    const currentUser = await User.findById(req.user.id)
+      .select('location blockedUsers skills industry interests connections');
     
     if (!currentUser) {
       return res.status(404).json({ error: 'User not found' });
@@ -974,8 +1101,8 @@ exports.getNearbyUsers = async (req, res) => {
     // Convert radius to meters
     const radiusInMeters = unit === 'km' ? radius * 1000 : radius * 1609.34;
     
-    // Find nearby users
-    const nearbyUsers = await User.find({
+    // Base query - users within radius who share location
+    const baseQuery = {
       _id: { $ne: req.user.id, $nin: currentUser.blockedUsers || [] },
       'location.coordinates': {
         $near: {
@@ -986,14 +1113,59 @@ exports.getNearbyUsers = async (req, res) => {
           $maxDistance: radiusInMeters
         }
       },
-      'settings.privacySettings.locationSharing': { $ne: false } // Only users who share location
-    })
-      .select('firstName lastName username profileImage headline location lastActive')
-      .skip(skip)
-      .limit(limit);
+      'settings.privacySettings.locationSharing': { $ne: false }
+    };
     
-    // Get distance for each user
-    const usersWithDistance = nearbyUsers.map(user => {
+    // Apply additional filters
+    if (industry) {
+      baseQuery.industry = industry;
+    }
+    
+    if (skills) {
+      const skillsArray = skills.split(',');
+      baseQuery.skills = { $in: skillsArray };
+    }
+    
+    if (interests) {
+      const interestsArray = interests.split(',');
+      baseQuery.interests = { $in: interestsArray };
+    }
+    
+    // Filter by connection status
+    if (connectionStatus) {
+      if (connectionStatus === 'connected') {
+        baseQuery._id = { $in: currentUser.connections };
+      } else if (connectionStatus === 'not_connected') {
+        baseQuery._id = { $nin: [...(currentUser.connections || []), ...currentUser.blockedUsers] };
+      }
+    }
+    
+    // Filter by last active
+    if (lastActive) {
+      const now = new Date();
+      let lastActiveDate;
+      
+      if (lastActive === 'today') {
+        lastActiveDate = new Date(now.setDate(now.getDate() - 1));
+      } else if (lastActive === 'week') {
+        lastActiveDate = new Date(now.setDate(now.getDate() - 7));
+      } else if (lastActive === 'month') {
+        lastActiveDate = new Date(now.setMonth(now.getMonth() - 1));
+      }
+      
+      if (lastActiveDate) {
+        baseQuery.lastActive = { $gte: lastActiveDate };
+      }
+    }
+
+    // Find nearby users
+    const nearbyUsers = await User.find(baseQuery)
+      .select('firstName lastName username profileImage headline location lastActive industry skills interests')
+      .skip(skip)
+      .limit(parseInt(limit));
+    
+    // Get distance for each user and check if they're connections
+    const usersWithMetadata = nearbyUsers.map(user => {
       const distance = geolib.getDistance(
         {
           latitude: currentUser.location.coordinates[1],
@@ -1006,30 +1178,300 @@ exports.getNearbyUsers = async (req, res) => {
       );
       
       const distanceInUnits = unit === 'km' ? distance / 1000 : distance / 1609.34;
+      const isConnection = currentUser.connections && 
+                          currentUser.connections.some(conn => conn.toString() === user._id.toString());
       
       return {
         ...user.toObject(),
         distance: Math.round(distanceInUnits * 10) / 10,
-        unit
+        unit,
+        isConnection
       };
     });
     
     // Sort by distance
-    usersWithDistance.sort((a, b) => a.distance - b.distance);
+    usersWithMetadata.sort((a, b) => a.distance - b.distance);
+    
+    // Get total count for pagination
+    const total = await User.countDocuments(baseQuery);
     
     res.json({
-      users: usersWithDistance,
+      users: usersWithMetadata,
       center: {
         latitude: currentUser.location.coordinates[1],
         longitude: currentUser.location.coordinates[0]
       },
-      radius
+      radius,
+      unit,
+      pagination: {
+        total,
+        page: parseInt(page),
+        pages: Math.ceil(total / parseInt(limit))
+      }
     });
   } catch (error) {
     console.error('Get nearby users error:', error);
     res.status(500).json({ error: 'Server error when getting nearby users' });
   }
 };
+
+/**
+ * Update user's location
+ * @route PUT /api/network/location
+ * @access Private
+ */
+exports.updateLocation = async (req, res) => {
+  try {
+    const { latitude, longitude } = req.body;
+    
+    if (!latitude || !longitude) {
+      return res.status(400).json({ error: 'Valid coordinates are required' });
+    }
+    
+    // Update user location
+    const user = await User.findByIdAndUpdate(
+      req.user.id,
+      { 
+        location: {
+          type: 'Point',
+          coordinates: [longitude, latitude]
+        },
+        locationUpdatedAt: Date.now()
+      },
+      { new: true }
+    );
+    
+    // Check for nearby users who match filters and might trigger notifications
+    if (req.body.checkNearbyUsers) {
+      processNearbyUserNotifications(req.user.id, [longitude, latitude])
+        .catch(err => console.error('Error processing nearby user notifications:', err));
+    }
+    
+    res.json({
+      success: true,
+      location: user.location
+    });
+  } catch (error) {
+    console.error('Update location error:', error);
+    res.status(500).json({ error: 'Server error when updating location' });
+  }
+};
+
+/**
+ * Update nearby user notification preferences
+ * @route PUT /api/network/nearby-notifications
+ * @access Private
+ */
+exports.updateNearbyNotificationPreferences = async (req, res) => {
+  try {
+    const { 
+      enabled = true,
+      radius = 1,
+      unit = 'km',
+      industry,
+      skills,
+      interests,
+      connectionStatus,
+      cooldown = 60  // Cooldown in minutes to prevent too many notifications
+    } = req.body;
+    
+    // Get user's settings
+    let settings = await Settings.findOne({ user: req.user.id });
+    
+    if (!settings) {
+      settings = new Settings({
+        user: req.user.id
+      });
+    }
+    
+    // Initialize nearby notification settings if not exist
+    if (!settings.notificationSettings.nearbyUsers) {
+      settings.notificationSettings.nearbyUsers = {};
+    }
+    
+    // Update settings
+    settings.notificationSettings.nearbyUsers = {
+      enabled,
+      radius: parseInt(radius),
+      unit,
+      filters: {
+        industry: industry || null,
+        skills: skills ? (Array.isArray(skills) ? skills : skills.split(',')) : [],
+        interests: interests ? (Array.isArray(interests) ? interests : interests.split(',')) : [],
+        connectionStatus: connectionStatus || 'all'
+      },
+      cooldown: parseInt(cooldown)
+    };
+    
+    await settings.save();
+    
+    res.json({
+      success: true,
+      settings: settings.notificationSettings.nearbyUsers
+    });
+  } catch (error) {
+    console.error('Update nearby notification preferences error:', error);
+    res.status(500).json({ error: 'Server error updating notification preferences' });
+  }
+};
+
+/**
+ * Get nearby user notification preferences
+ * @route GET /api/network/nearby-notifications
+ * @access Private
+ */
+exports.getNearbyNotificationPreferences = async (req, res) => {
+  try {
+    // Get user's settings
+    const settings = await Settings.findOne({ user: req.user.id });
+    
+    if (!settings || !settings.notificationSettings.nearbyUsers) {
+      // Return default settings
+      return res.json({
+        enabled: false,
+        radius: 1,
+        unit: 'km',
+        filters: {
+          industry: null,
+          skills: [],
+          interests: [],
+          connectionStatus: 'all'
+        },
+        cooldown: 60
+      });
+    }
+    
+    res.json(settings.notificationSettings.nearbyUsers);
+  } catch (error) {
+    console.error('Get nearby notification preferences error:', error);
+    res.status(500).json({ error: 'Server error retrieving notification preferences' });
+  }
+};
+
+/**
+ * Process nearby user notifications when a user updates their location
+ * @param {string} userId - User ID
+ * @param {number[]} coordinates - [longitude, latitude]
+ */
+async function processNearbyUserNotifications(userId, coordinates) {
+  try {
+    // Get user settings
+    const user = await User.findById(userId)
+      .select('firstName lastName username profileImage blockedUsers');
+    const settings = await Settings.findOne({ user: userId });
+    
+    if (!settings?.notificationSettings?.nearbyUsers?.enabled) {
+      return; // Nearby notifications not enabled
+    }
+    
+    const nearbySettings = settings.notificationSettings.nearbyUsers;
+    
+    // Check last notification time (cooldown)
+    const lastNotificationTime = settings.notificationSettings.lastNearbyNotification || 0;
+    const cooldownMinutes = nearbySettings.cooldown || 60;
+    const cooldownMs = cooldownMinutes * 60 * 1000;
+    
+    if (Date.now() - lastNotificationTime < cooldownMs) {
+      return; // Still in cooldown period
+    }
+    
+    // Prepare query to find nearby users
+    const radiusInMeters = nearbySettings.unit === 'km' ? 
+      nearbySettings.radius * 1000 : nearbySettings.radius * 1609.34;
+    
+    const query = {
+      _id: { $ne: userId, $nin: user.blockedUsers || [] },
+      'location.coordinates': {
+        $near: {
+          $geometry: {
+            type: 'Point',
+            coordinates
+          },
+          $maxDistance: radiusInMeters
+        }
+      },
+      'settings.privacySettings.locationSharing': { $ne: false }
+    };
+    
+    // Add filters
+    const filters = nearbySettings.filters || {};
+    
+    if (filters.industry) {
+      query.industry = filters.industry;
+    }
+    
+    if (filters.skills && filters.skills.length > 0) {
+      query.skills = { $in: filters.skills };
+    }
+    
+    if (filters.interests && filters.interests.length > 0) {
+      query.interests = { $in: filters.interests };
+    }
+    
+    // Find matching nearby users
+    const nearbyUsers = await User.find(query)
+      .select('firstName lastName username profileImage pushTokens')
+      .limit(5); // Limit to prevent too many notifications
+    
+    if (nearbyUsers.length === 0) {
+      return; // No matching users found
+    }
+    
+    // Update last notification time
+    settings.notificationSettings.lastNearbyNotification = Date.now();
+    await settings.save();
+    
+    // Create notification for the user about nearby users
+    const notification = new Notification({
+      recipient: userId,
+      type: 'nearby_users',
+      data: {
+        nearbyUsers: nearbyUsers.map(u => ({
+          id: u._id,
+          name: `${u.firstName} ${u.lastName}`,
+          username: u.username,
+          profileImage: u.profileImage
+        })),
+        count: nearbyUsers.length,
+        coordinates
+      },
+      timestamp: Date.now()
+    });
+    
+    await notification.save();
+    
+    // Send push notification
+    const pushService = require('../services/pushnotificationService');
+    await pushService.sendNotificationToUser(userId, {
+      title: 'Nearby Connections',
+      body: nearbyUsers.length === 1 
+        ? `${nearbyUsers[0].firstName} ${nearbyUsers[0].lastName} is nearby!` 
+        : `${nearbyUsers.length} potential connections are nearby!`,
+      data: {
+        type: 'nearby_users',
+        count: nearbyUsers.length,
+        notificationId: notification._id.toString()
+      }
+    });
+    
+    // Emit socket event
+    const socketEvents = require('../utils/socketEvents');
+    socketEvents.emitToUser(userId, 'nearby_users', {
+      users: nearbyUsers.map(u => ({
+        id: u._id,
+        name: `${u.firstName} ${u.lastName}`,
+        username: u.username,
+        profileImage: u.profileImage
+      })),
+      count: nearbyUsers.length
+    });
+    
+  } catch (error) {
+    console.error('Process nearby notifications error:', error);
+  }
+}
+
+
 
 /**
  * Get network map
