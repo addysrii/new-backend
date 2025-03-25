@@ -23,7 +23,8 @@ const FRONTEND_URL = process.env.FRONTEND_URL || 'https://meetkats.com';
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const LINKEDIN_CLIENT_ID = process.env.LINKEDIN_CLIENT_ID;
 const LINKEDIN_CLIENT_SECRET = process.env.LINKEDIN_CLIENT_SECRET;
-
+const MOBILE_APP_SCHEME = process.env.MOBILE_APP_SCHEME || 'meetkats';
+const ANDROID_CLIENT_ID = '313533189859-kshbra2ke7jkrritbrk5m2pocnuvjsoi.apps.googleusercontent.com';
 // Initialize Google OAuth client
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 
@@ -420,7 +421,8 @@ exports.signup = async (req, res) => {
     const finalUsername = username || `${email.split('@')[0]}${Math.floor(Math.random() * 1000)}`;
     console.log(`Using username: ${finalUsername}`);
     
-    // Create new user
+    // Create new user - KEEP THE PASSWORD AS PLAIN TEXT
+    // It will be hashed by the pre-save middleware
     user = new User({
       firstName,
       lastName,
@@ -430,12 +432,6 @@ exports.signup = async (req, res) => {
       joinedDate: Date.now(),
       lastActive: Date.now()
     });
-    
-    // Hash password manually to ensure it's done correctly
-    console.log('Hashing password...');
-    const salt = await bcrypt.genSalt(10);
-    user.password = await bcrypt.hash(password, salt);
-    console.log(`Password hashed successfully. Hash starts with: ${user.password.substring(0, 10)}...`);
     
     // Generate email verification token
     const verificationToken = crypto.randomBytes(20).toString('hex');
@@ -451,7 +447,7 @@ exports.signup = async (req, res) => {
     const deviceInfo = deviceDetector.detect(userAgent);
     const geo = geoip.lookup(ip);
     
-    // Create JWT token
+    // Generate JWT token
     const payload = {
       id: user.id,
       role: user.role
@@ -482,7 +478,7 @@ exports.signup = async (req, res) => {
       },
       activeLoginSessions: [{
         token: sessionToken,
-        device: deviceInfo.device ? deviceInfo.device.type : 'unknown', // String value
+        device: deviceInfo.device ? deviceInfo.device.type : 'unknown',
         browser: deviceInfo.client ? deviceInfo.client.name + ' ' + deviceInfo.client.version : 'unknown',
         ip: ip,
         location: geo ? `${geo.city}, ${geo.country}` : 'unknown',
@@ -496,6 +492,9 @@ exports.signup = async (req, res) => {
         createdAt: new Date()
       }]
     };
+    
+    // IMPORTANT: DO NOT MANUALLY HASH THE PASSWORD HERE
+    // Let the User model's pre-save middleware handle it
     
     await user.save();
     console.log(`User saved successfully with ID: ${user._id}`);
@@ -521,7 +520,6 @@ exports.signup = async (req, res) => {
   }
 };
 
-
 /**
  * User login
  * @route POST /auth/login
@@ -537,38 +535,42 @@ exports.login = async (req, res) => {
     
     const { email, password } = req.body;
     
-    console.log(`Login attempt for: ${email}`);
-    
     // Find user by email
     const user = await User.findOne({ email });
     
     if (!user) {
-      console.log(`User not found for email: ${email}`);
       return res.status(401).json({ error: 'Invalid credentials' });
     }
     
-    console.log(`User found: ${user.email}, ID: ${user._id}`);
+    // Check if account is locked
+    if (user.security && user.security.lockUntil && user.security.lockUntil > Date.now()) {
+      return res.status(401).json({
+        error: 'Account is temporarily locked due to multiple failed attempts',
+        lockExpires: user.security.lockUntil
+      });
+    }
     
-    // Use the User model's comparePassword method instead of direct bcrypt compare
-    console.log('Using user.comparePassword method for verification');
+    // Compare password (fixed to match your schema)
     const isMatch = await user.comparePassword(password);
-    console.log(`Password comparison for ${user.email}: ${isMatch}`);
     
     if (!isMatch) {
-      // Increment failed login attempts
-      user.security = user.security || {};
-      user.security.failedLoginAttempts = (user.security.failedLoginAttempts || 0) + 1;
+      // Initialize security object if it doesn't exist
+      if (!user.security) {
+        user.security = {};
+      }
+      
+      // Use loginAttempts instead of failedLoginAttempts to match your schema
+      user.security.loginAttempts = (user.security.loginAttempts || 0) + 1;
       
       // Check if account should be locked
-      if (user.security.failedLoginAttempts >= 5) {
-        user.security.isLocked = true;
-        user.security.lockedUntil = new Date(Date.now() + 30 * 60 * 1000); // Lock for 30 minutes
+      if (user.security.loginAttempts >= 5) {
+        user.security.lockUntil = new Date(Date.now() + 30 * 60 * 1000); // Lock for 30 minutes
         
         await user.save();
         
         return res.status(401).json({
           error: 'Account locked due to multiple failed login attempts',
-          lockExpires: user.security.lockedUntil
+          lockExpires: user.security.lockUntil
         });
       }
       
@@ -577,11 +579,10 @@ exports.login = async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
     
-    // Reset failed login attempts on successful login
-    if (user.security && user.security.failedLoginAttempts) {
-      user.security.failedLoginAttempts = 0;
-      user.security.isLocked = false;
-      user.security.lockedUntil = null;
+    // Reset login attempts on successful login
+    if (user.security) {
+      user.security.loginAttempts = 0;
+      user.security.lockUntil = null;
     }
     
     // Update last active timestamp
@@ -613,9 +614,6 @@ exports.login = async (req, res) => {
     
     await user.save();
     
-    // Log successful login
-    console.log(`Successful login for user: ${user.email}`);
-    
     // Send JWT and user info
     res.json({
       token,
@@ -628,14 +626,11 @@ exports.login = async (req, res) => {
         username: user.username,
         profileImage: user.profileImage,
         role: user.role,
-        isEmailVerified: user.verification && user.verification.isEmailVerified,
-        isProfileComplete: !!user.headline // Simple check - can be enhanced
+        isEmailVerified: user.verification && user.verification.isEmailVerified
       }
     });
   } catch (error) {
-    console.error('Login error:', error);
-    console.error(`Login error details: ${error.message}`);
-    console.error(error.stack);
+    console.error('Login error:', error.message);
     res.status(500).json({ error: 'Server error during login' });
   }
 };
@@ -699,11 +694,128 @@ exports.logout = async (req, res) => {
     res.status(500).json({ error: 'Server error during logout' });
   }
 };
-/**
- * Refresh token
- * @route POST /auth/refresh-token
- * @access Public
- */
+exports.debugLogin = async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    
+    console.log('DEBUG LOGIN ATTEMPT:');
+    console.log('Received credentials:', { email, passwordLength: password?.length });
+    
+    // Find user by email
+    const user = await User.findOne({ email });
+    
+    if (!user) {
+      console.log('User not found with email:', email);
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+    
+    console.log('User found:', user.email, 'ID:', user._id);
+    
+    // Debug password comparison
+    const debugPassword = async (user, inputPassword) => {
+      console.log('DEBUG PASSWORD INFO:');
+      console.log('Input password:', inputPassword);
+      console.log('Input password type:', typeof inputPassword);
+      console.log('Input password length:', inputPassword?.length);
+      console.log('Stored hash type:', typeof user.password);
+      console.log('Stored hash length:', user.password?.length);
+      console.log('Stored hash (partial):', user.password?.substring(0, 20) + '...');
+      
+      // Try direct bcrypt compare
+      try {
+        const bcrypt = require('bcryptjs');
+        const result = await bcrypt.compare(inputPassword, user.password);
+        console.log('Direct bcrypt compare result:', result);
+        return result;
+      } catch (e) {
+        console.error('Error in direct bcrypt compare:', e);
+        return false;
+      }
+    };
+    
+    // Execute debug function
+    const directBcryptResult = await debugPassword(user, password);
+    console.log('Direct bcrypt result:', directBcryptResult);
+    
+    // Use the model's comparePassword method
+    console.log('Calling user.comparePassword method...');
+    const modelMethodResult = await user.comparePassword(password);
+    console.log('User model comparePassword result:', modelMethodResult);
+    
+    // Check if results match
+    console.log('Do results match?', directBcryptResult === modelMethodResult);
+    
+    // Use the result from direct bcrypt for login decision
+    if (!directBcryptResult) {
+      return res.status(200).json({ 
+        success: false, 
+        message: 'Login failed - password does not match',
+        directBcryptResult,
+        modelMethodResult
+      });
+    }
+    
+    // Generate tokens for successful login
+    const token = user.generateAuthToken();
+    const refreshToken = user.generateRefreshToken();
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Login successful with debug mode',
+      token,
+      refreshToken,
+      directBcryptResult,
+      modelMethodResult,
+      user: {
+        id: user._id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName
+      }
+    });
+  } catch (error) {
+    console.error('Debug login error:', error);
+    return res.status(500).json({ 
+      success: false, 
+      error: error.message,
+      stack: error.stack 
+    });
+  }
+};
+// Add this to your controller
+exports.createTestUser = async (req, res) => {
+  try {
+    // Create a simple test user
+    const testUser = new User({
+      firstName: 'Test',
+      lastName: 'User',
+      email: 'testuser@example.com',
+      username: 'testuser',
+      password: 'Password123', // This will be hashed by the pre-save hook
+    });
+    
+    // Save the user
+    await testUser.save();
+    
+    return res.status(201).json({
+      success: true,
+      message: 'Test user created successfully',
+      email: testUser.email,
+      password: 'Password123' // Return the password for testing purposes
+    });
+  } catch (error) {
+    console.error('Create test user error:', error);
+    
+    // Check for duplicate key error
+    if (error.code === 11000) {
+      return res.status(400).json({ 
+        error: 'User with this email or username already exists' 
+      });
+    }
+    
+    return res.status(500).json({ error: 'Server error' });
+  }
+};
 exports.refreshToken = async (req, res) => {
   try {
     const { refreshToken } = req.body;
@@ -1247,7 +1359,7 @@ exports.googleAuth = async (req, res) => {
     // Verify Google token
     const ticket = await googleClient.verifyIdToken({
       idToken,
-      audience: GOOGLE_CLIENT_ID
+      audience: [GOOGLE_CLIENT_ID, ANDROID_CLIENT_ID]  // Add ANDROID_CLIENT_ID here
     });
     
     const payload = ticket.getPayload();
@@ -1444,178 +1556,197 @@ exports.googleCallback = async (req, res) => {
  */
 exports.linkedinAuth = async (req, res) => {
   try {
-    const { accessToken, userID } = req.body;
+    const { code, redirectUri } = req.body;
     
-    if (!accessToken || !userID) {
-      return res.status(400).json({ error: 'Access token and user ID are required' });
-    }
-    
-    // Verify token with LinkedIn (would normally be implemented)
-    // For this example, we'll assume the token is valid
-    
-    // Get user profile from LinkedIn (mock data for example)
-    const linkedinUserProfile = {
-      id: userID,
-      email: req.body.email,
-      firstName: req.body.firstName,
-      lastName: req.body.lastName,
-      profileImage: req.body.profileImage,
-      headline: req.body.headline
-    };
-    
-    // Check if email is provided
-    if (!linkedinUserProfile.email) {
-      return res.status(400).json({ error: 'Email is required from LinkedIn' });
-    }
-    
-    // Check if user exists
-    let user = await User.findOne({ email: linkedinUserProfile.email });
-    let isNewUser = false;
-    
-    if (!user) {
-      // Create new user
-      isNewUser = true;
+    // Check if this is a mobile flow with code and redirectUri
+    if (code && redirectUri) {
+      console.log("Processing LinkedIn auth with code and redirectUri");
       
-      user = new User({
-        firstName: linkedinUserProfile.firstName,
-        lastName: linkedinUserProfile.lastName,
-        email: linkedinUserProfile.email,
-        username: linkedinUserProfile.email.split('@')[0] + Math.floor(Math.random() * 1000),
-        profileImage: linkedinUserProfile.profileImage,
-        headline: linkedinUserProfile.headline,
-        password: crypto.randomBytes(20).toString('hex'), // Random password
-        oauth: {
-          linkedin: {
-            id: linkedinUserProfile.id,
-            email: linkedinUserProfile.email,
-            name: `${linkedinUserProfile.firstName} ${linkedinUserProfile.lastName}`,
-            profileImage: linkedinUserProfile.profileImage,
-            headline: linkedinUserProfile.headline
-          }
+      // Step 1: Exchange authorization code for access token
+      const tokenResponse = await axios.post('https://www.linkedin.com/oauth/v2/accessToken', null, {
+        params: {
+          grant_type: 'authorization_code',
+          code,
+          redirect_uri: redirectUri,
+          client_id: LINKEDIN_CLIENT_ID,
+          client_secret: LINKEDIN_CLIENT_SECRET
         },
-        verification: {
-          isEmailVerified: true, // LinkedIn accounts are pre-verified
-          verifiedAt: Date.now()
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded'
+        }
+      });
+      
+      if (!tokenResponse.data || !tokenResponse.data.access_token) {
+        console.error('LinkedIn token exchange failed:', tokenResponse.data);
+        return res.status(400).json({ error: 'Failed to get LinkedIn access token' });
+      }
+      
+      const accessToken = tokenResponse.data.access_token;
+      
+      // Step 2: Get user profile with access token
+      const profileResponse = await axios.get('https://api.linkedin.com/v2/me', {
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'cache-control': 'no-cache',
+          'X-Restli-Protocol-Version': '2.0.0'
+        }
+      });
+      
+      // Step 3: Get user email with access token
+      const emailResponse = await axios.get('https://api.linkedin.com/v2/emailAddress?q=members&projection=(elements*(handle~))', {
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'cache-control': 'no-cache',
+          'X-Restli-Protocol-Version': '2.0.0'
+        }
+      });
+      
+      // Extract user information
+      const linkedinId = profileResponse.data.id;
+      const firstName = profileResponse.data.localizedFirstName || '';
+      const lastName = profileResponse.data.localizedLastName || '';
+      const email = emailResponse.data.elements?.[0]?.['handle~']?.emailAddress || '';
+      
+      if (!email) {
+        return res.status(400).json({ error: 'Email is required from LinkedIn' });
+      }
+      
+      // Step 4: Check if user exists in our database
+      let user = await User.findOne({ email });
+      let isNewUser = false;
+      
+      if (!user) {
+        // Create new user
+        isNewUser = true;
+        
+        user = new User({
+          firstName,
+          lastName,
+          email,
+          username: email.split('@')[0] + Math.floor(Math.random() * 1000),
+          password: crypto.randomBytes(20).toString('hex'), // Random password
+          oauth: {
+            linkedin: {
+              id: linkedinId,
+              email,
+              name: `${firstName} ${lastName}`
+            }
+          },
+          verification: {
+            isEmailVerified: true, // LinkedIn accounts are pre-verified
+            verifiedAt: Date.now()
+          },
+          joinedDate: Date.now(),
+          lastActive: Date.now()
+        });
+      } else {
+        // Update OAuth info if not already set
+        user.oauth = user.oauth || {};
+        
+        if (!user.oauth.linkedin) {
+          user.oauth.linkedin = {
+            id: linkedinId,
+            email,
+            name: `${firstName} ${lastName}`
+          };
+        }
+        
+        // Mark email as verified if not already
+        if (!user.verification || !user.verification.isEmailVerified) {
+          user.verification = user.verification || {};
+          user.verification.isEmailVerified = true;
+          user.verification.verifiedAt = Date.now();
+        }
+        
+        user.lastActive = Date.now();
+      }
+      
+      // Get device and location info
+      const userAgent = req.headers['user-agent'];
+      const ip = req.ip || req.connection.remoteAddress;
+      const deviceInfo = deviceDetector.detect(userAgent);
+      const geo = geoip.lookup(ip);
+      
+      // Generate JWT tokens
+      const token = jwt.sign(
+        { id: user.id, role: user.role },
+        JWT_SECRET,
+        { expiresIn: JWT_EXPIRES_IN }
+      );
+      
+      const refreshToken = jwt.sign(
+        { id: user.id },
+        JWT_SECRET,
+        { expiresIn: JWT_REFRESH_EXPIRES_IN }
+      );
+      
+      // Setup session and token info
+      user.security = user.security || {};
+      user.security.activeLoginSessions = user.security.activeLoginSessions || [];
+      user.security.refreshTokens = user.security.refreshTokens || [];
+      
+      // Add login session
+      user.security.activeLoginSessions.push({
+        token,
+        device: {
+          type: deviceInfo.device ? deviceInfo.device.type : 'unknown',
+          name: deviceInfo.device ? deviceInfo.device.brand + ' ' + deviceInfo.device.model : 'unknown',
+          browser: deviceInfo.client ? deviceInfo.client.name + ' ' + deviceInfo.client.version : 'unknown',
+          os: deviceInfo.os ? deviceInfo.os.name + ' ' + deviceInfo.os.version : 'unknown'
         },
-        joinedDate: Date.now(),
+        ip,
+        location: geo ? `${geo.city}, ${geo.country}` : 'unknown',
+        loginTime: Date.now(),
         lastActive: Date.now()
       });
+      
+      // Add refresh token
+      user.security.refreshTokens.push({
+        token: refreshToken,
+        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
+        issuedAt: new Date(),
+        device: deviceInfo.device ? deviceInfo.device.type : 'unknown'
+      });
+      
+      await user.save();
+      
+      // Log the action
+      await SecurityLog.create({
+        user: user._id,
+        action: isNewUser ? 'oauth_signup' : 'oauth_login',
+        provider: 'linkedin',
+        ip,
+        location: geo ? `${geo.city}, ${geo.country}` : 'unknown',
+        device: deviceInfo.device ? deviceInfo.device.type : 'unknown',
+        browser: deviceInfo.client ? deviceInfo.client.name : 'unknown',
+        os: deviceInfo.os ? deviceInfo.os.name : 'unknown',
+        timestamp: Date.now(),
+        success: true
+      });
+      
+      // Return user data and tokens
+      res.json({
+        token,
+        refreshToken,
+        user: {
+          id: user.id,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          email: user.email,
+          username: user.username,
+          profileImage: user.profileImage,
+          role: user.role,
+          isEmailVerified: true,
+          isNewUser
+        }
+      });
     } else {
-      // Update OAuth info if not already set
-      user.oauth = user.oauth || {};
-      
-      if (!user.oauth.linkedin) {
-        user.oauth.linkedin = {
-          id: linkedinUserProfile.id,
-          email: linkedinUserProfile.email,
-          name: `${linkedinUserProfile.firstName} ${linkedinUserProfile.lastName}`,
-          profileImage: linkedinUserProfile.profileImage,
-          headline: linkedinUserProfile.headline
-        };
-      }
-      
-      // Update profile image if not set
-      if (!user.profileImage) {
-        user.profileImage = linkedinUserProfile.profileImage;
-      }
-      
-      // Update headline if not set
-      if (!user.headline && linkedinUserProfile.headline) {
-        user.headline = linkedinUserProfile.headline;
-      }
-      
-      // Mark email as verified if not already
-      if (!user.verification || !user.verification.isEmailVerified) {
-        user.verification = user.verification || {};
-        user.verification.isEmailVerified = true;
-        user.verification.verifiedAt = Date.now();
-      }
-      
-      user.lastActive = Date.now();
+      // Handle other authentication flows or return error
+      return res.status(400).json({ error: 'Invalid LinkedIn authentication data. Code and redirectUri required.' });
     }
-    
-    // Get device and location info
-    const userAgent = req.headers['user-agent'];
-    const ip = req.ip || req.connection.remoteAddress;
-    const deviceInfo = deviceDetector.detect(userAgent);
-    const geo = geoip.lookup(ip);
-    
-    // Generate tokens
-    const token = jwt.sign(
-      { id: user.id, role: user.role },
-      JWT_SECRET,
-      { expiresIn: JWT_EXPIRES_IN }
-    );
-    
-    const refreshToken = jwt.sign(
-      { id: user.id },
-      JWT_SECRET,
-      { expiresIn: JWT_REFRESH_EXPIRES_IN }
-    );
-    
-    // Save session info
-    user.security = user.security || {};
-    user.security.activeLoginSessions = user.security.activeLoginSessions || [];
-    user.security.refreshTokens = user.security.refreshTokens || [];
-    
-    // Add login session
-    user.security.activeLoginSessions.push({
-      token,
-      device: {
-        type: deviceInfo.device ? deviceInfo.device.type : 'unknown',
-        name: deviceInfo.device ? deviceInfo.device.brand + ' ' + deviceInfo.device.model : 'unknown',
-        browser: deviceInfo.client ? deviceInfo.client.name + ' ' + deviceInfo.client.version : 'unknown',
-        os: deviceInfo.os ? deviceInfo.os.name + ' ' + deviceInfo.os.version : 'unknown'
-      },
-      ip,
-      location: geo ? `${geo.city}, ${geo.country}` : 'unknown',
-      loginTime: Date.now(),
-      lastActive: Date.now()
-    });
-    
-    // Add refresh token
-    user.security.refreshTokens.push({
-      token: refreshToken,
-      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
-      issuedAt: new Date(),
-      device: deviceInfo.device ? deviceInfo.device.type : 'unknown'
-    });
-    
-    await user.save();
-    
-    // Log the action
-    await SecurityLog.create({
-      user: user._id,
-      action: isNewUser ? 'oauth_signup' : 'oauth_login',
-      provider: 'linkedin',
-      ip,
-      location: geo ? `${geo.city}, ${geo.country}` : 'unknown',
-      device: deviceInfo.device ? deviceInfo.device.type : 'unknown',
-      browser: deviceInfo.client ? deviceInfo.client.name : 'unknown',
-      os: deviceInfo.os ? deviceInfo.os.name : 'unknown',
-      timestamp: Date.now(),
-      success: true
-    });
-    
-    res.json({
-      token,
-      refreshToken,
-      user: {
-        id: user.id,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        email: user.email,
-        username: user.username,
-        profileImage: user.profileImage,
-        headline: user.headline,
-        role: user.role,
-        isEmailVerified: true,
-        isNewUser
-      }
-    });
   } catch (error) {
-    logger.error('LinkedIn auth error:', error);
-    res.status(500).json({ error: 'Server error during LinkedIn authentication' });
+    console.error('LinkedIn auth error:', error);
+    res.status(500).json({ error: 'Server error during LinkedIn authentication: ' + error.message });
   }
 };
 

@@ -14,6 +14,7 @@ const ObjectId = mongoose.Types.ObjectId;
  * @route GET /api/nearby-users
  * @access Private
  */
+// Fix for the getNearbyUsers controller function
 exports.getNearbyUsers = async (req, res) => {
   try {
     const { 
@@ -25,28 +26,59 @@ exports.getNearbyUsers = async (req, res) => {
       connectionStatus,
       lastActive,
       page = 1,
-      limit = 20
+      limit = 20,
+      latitude,
+      longitude
     } = req.query;
+    
+    console.log('Getting nearby users with params:', {
+      radius, unit, industry, skills, interests, connectionStatus, lastActive, latitude, longitude
+    });
     
     const skip = (parseInt(page) - 1) * parseInt(limit);
     
-    // Get current user location
+    // Get current user with error handling
     const currentUser = await User.findById(req.user.id)
       .select('location blockedUsers skills industry interests connections');
     
     if (!currentUser) {
+      console.error('User not found:', req.user.id);
       return res.status(404).json({ error: 'User not found' });
     }
     
-    if (!currentUser.location || !currentUser.location.coordinates) {
+    // Use provided coordinates or get from user's stored location
+    let userCoordinates;
+    
+    if (latitude && longitude) {
+      userCoordinates = [parseFloat(longitude), parseFloat(latitude)];
+      console.log('Using provided coordinates:', userCoordinates);
+    } else if (currentUser.location && currentUser.location.coordinates) {
+      userCoordinates = currentUser.location.coordinates;
+      console.log('Using saved user coordinates:', userCoordinates);
+    } else {
+      console.error('No location available');
       return res.status(400).json({ error: 'Your location is not available' });
+    }
+    
+    // Validate coordinates
+    if (!Array.isArray(userCoordinates) || userCoordinates.length !== 2) {
+      console.error('Invalid coordinates format:', userCoordinates);
+      return res.status(400).json({ error: 'Invalid location format' });
+    }
+    
+    if (isNaN(userCoordinates[0]) || isNaN(userCoordinates[1])) {
+      console.error('Coordinates contain NaN values:', userCoordinates);
+      return res.status(400).json({ error: 'Invalid location coordinates' });
     }
     
     // Convert radius to radians for $geoWithin with $centerSphere
     // Earth's radius is approximately 6371 km or 3959 miles
+    const radiusNum = parseFloat(radius);
     const radiusInRadians = unit === 'km' 
-      ? radius / 6371 
-      : radius / 3959;
+      ? radiusNum / 6371 
+      : radiusNum / 3959;
+    
+    console.log('Search radius in radians:', radiusInRadians);
     
     // Base query - users within radius who share location
     const baseQuery = {
@@ -54,7 +86,7 @@ exports.getNearbyUsers = async (req, res) => {
       'location.coordinates': {
         $geoWithin: {
           $centerSphere: [
-            currentUser.location.coordinates, 
+            userCoordinates, 
             radiusInRadians
           ]
         }
@@ -96,13 +128,14 @@ exports.getNearbyUsers = async (req, res) => {
           };
         } else {
           // No connections, return empty result
+          console.log('No connections found, returning empty result');
           return res.json({
             users: [],
             center: {
-              latitude: currentUser.location.coordinates[1],
-              longitude: currentUser.location.coordinates[0]
+              latitude: userCoordinates[1],
+              longitude: userCoordinates[0]
             },
-            radius,
+            radius: radiusNum,
             unit,
             pagination: {
               total: 0,
@@ -115,8 +148,8 @@ exports.getNearbyUsers = async (req, res) => {
         // Exclude connections and blocked users
         const excludeIds = [
           req.user.id, 
-          ...(currentUser.connections || []), 
-          ...(currentUser.blockedUsers || [])
+          ...(currentUser.connections || []).map(id => id.toString()), 
+          ...(currentUser.blockedUsers || []).map(id => id.toString())
         ];
         baseQuery._id = { $nin: excludeIds };
       }
@@ -140,50 +173,81 @@ exports.getNearbyUsers = async (req, res) => {
       }
     }
 
-    // Find nearby users
-    const nearbyUsers = await User.find(baseQuery)
-      .select('firstName lastName username profileImage headline location lastActive industry skills interests')
-      .skip(skip)
-      .limit(parseInt(limit));
+    console.log('Final query:', JSON.stringify(baseQuery));
+
+    // Find nearby users with try/catch
+    let nearbyUsers;
+    try {
+      nearbyUsers = await User.find(baseQuery)
+        .select('firstName lastName username profileImage headline location lastActive industry skills interests')
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean();
+        
+      console.log(`Found ${nearbyUsers.length} nearby users`);
+    } catch (findError) {
+      console.error('Error finding nearby users:', findError);
+      throw findError;
+    }
     
     // Get distance for each user and check if they're connections
     const usersWithMetadata = nearbyUsers.map(user => {
-      const distance = geolib.getDistance(
-        {
-          latitude: currentUser.location.coordinates[1],
-          longitude: currentUser.location.coordinates[0]
-        },
-        {
-          latitude: user.location.coordinates[1],
-          longitude: user.location.coordinates[0]
-        }
-      );
+      // Skip users with invalid coordinates
+      if (!user.location || !user.location.coordinates || 
+          !Array.isArray(user.location.coordinates) || 
+          user.location.coordinates.length !== 2) {
+        return null;
+      }
       
-      const distanceInUnits = unit === 'km' ? distance / 1000 : distance / 1609.34;
-      const isConnection = currentUser.connections && 
-                          currentUser.connections.some(conn => conn.toString() === user._id.toString());
-      
-      return {
-        ...user.toObject(),
-        distance: Math.round(distanceInUnits * 10) / 10,
-        unit,
-        isConnection
-      };
-    });
+      try {
+        const distance = geolib.getDistance(
+          {
+            latitude: userCoordinates[1],
+            longitude: userCoordinates[0]
+          },
+          {
+            latitude: user.location.coordinates[1],
+            longitude: user.location.coordinates[0]
+          }
+        );
+        
+        const distanceInUnits = unit === 'km' ? distance / 1000 : distance / 1609.34;
+        const isConnection = currentUser.connections && 
+                            currentUser.connections.some(conn => conn.toString() === user._id.toString());
+        
+        return {
+          ...user,
+          distance: Math.round(distanceInUnits * 10) / 10,
+          unit,
+          isConnection
+        };
+      } catch (error) {
+        console.error(`Error calculating distance for user ${user._id}:`, error);
+        return null;
+      }
+    }).filter(Boolean); // Remove null entries
     
     // Sort by distance since we're not using $near
     usersWithMetadata.sort((a, b) => a.distance - b.distance);
     
-    // Get total count for pagination
-    const total = await User.countDocuments(baseQuery);
+    // Get total count for pagination with error handling
+    let total;
+    try {
+      total = await User.countDocuments(baseQuery);
+    } catch (countError) {
+      console.error('Error counting nearby users:', countError);
+      total = usersWithMetadata.length;
+    }
+    
+    console.log(`Sending response with ${usersWithMetadata.length} users`);
     
     res.json({
       users: usersWithMetadata,
       center: {
-        latitude: currentUser.location.coordinates[1],
-        longitude: currentUser.location.coordinates[0]
+        latitude: userCoordinates[1],
+        longitude: userCoordinates[0]
       },
-      radius,
+      radius: radiusNum,
       unit,
       pagination: {
         total,
@@ -196,7 +260,6 @@ exports.getNearbyUsers = async (req, res) => {
     res.status(500).json({ error: 'Server error when getting nearby users' });
   }
 };
-
 /**
  * Update user's location
  * @route PUT /api/nearby-users/location

@@ -1015,3 +1015,137 @@
 {"service":"chat-api","level":"info","message":"Cloudinary storage handler initialized","timestamp":"2025-03-21T19:46:42.879Z"}
 {"message":"MongoDB transport added to security logger","level":"info","service":"chat-api","timestamp":"2025-03-21T19:46:45.308Z"}
 {"service":"chat-api","level":"warn","message":"Redis connection failed, using in-memory adapter: ","timestamp":"2025-03-21T19:46:45.483Z"}
+{"service":"chat-api","level":"info","message":"Cloudinary storage handler initialized","timestamp":"2025-03-23T03:08:21.518Z"}
+{"message":"MongoDB transport added to security logger","level":"info","service":"chat-api","timestamp":"2025-03-23T03:08:46.191Z"}
+{"service":"chat-api","level":"warn","message":"Redis connection failed, using in-memory adapter: ","timestamp":"2025-03-23T03:08:46.750Z"}
+{"service":"chat-api","level":"info","message":"Cloudinary storage handler initialized","timestamp":"2025-03-23T03:22:07.372Z"}
+{"service":"chat-api","level":"info","message":"Cloudinary storage handler initialized","timestamp":"2025-03-23T03:22:12.596Z"}
+{"message":"MongoDB transport added to security logger","level":"info","service":"chat-api","timestamp":"2025-03-23T03:22:15.781Z"}
+{"service":"chat-api","level":"warn","message":"Redis connection failed, using in-memory adapter: ","timestamp":"2025-03-23T03:22:15.827Z"}
+{"service":"chat-api","level":"info","message":"Cloudinary storage handler initialized","timestamp":"2025-03-23T04:37:45.952Z"}
+{"message":"MongoDB transport added to security logger","level":"info","service":"chat-api","timestamp":"2025-03-23T04:37:48.601Z"}
+{"service":"chat-api","level":"warn","message":"Redis connection failed, using in-memory adapter: ","timestamp":"2025-03-23T04:37:48.654Z"}
+{"service":"chat-api","level":"info","message":"Cloudinary storage handler initialized","timestamp":"2025-03-23T06:36:57.947Z"}
+{"message":"MongoDB transport added to security logger","level":"info","service":"chat-api","timestamp":"2025-03-23T06:37:16.349Z"}
+{"service":"chat-api","level":"warn","message":"Redis connection failed, using in-memory adapter: ","timestamp":"2025-03-23T06:37:16.533Z"}
+{"service":"chat-api","level":"info","message":"Cloudinary storage handler initialized","timestamp":"2025-03-23T17:13:39.502Z"}
+{"message":"MongoDB transport added to security logger","level":"info","service":"chat-api","timestamp":"2025-03-23T17:13:58.900Z"}
+{"service":"chat-api","level":"warn","message":"Redis connection failed, using in-memory adapter: ","timestamp":"2025-03-23T17:13:59.456Z"}
+{"service":"chat-api","level":"info","message":"User connected: 67e0475faf85996cbf099fe4, socket ID: 20wkNR7tsorN0Xv7AAAB","timestamp":"2025-03-23T17:39:46.217Z"}
+{"service":"chat-api","userId":"67e0475faf85996cbf099fe4","messageId":"<663bf112-51ed-001a-bf46-4e704c00288c@gmail.com>","level":"info","message":"Email OTP sent to adityasrivastava9406@gmail.com","timestamp":"2025-03-23T17:39:50.952Z"}
+{"service":"chat-api","level":"info","message":"email verified successfully for user 67e0475faf85996cbf099fe4","timestamp":"2025-03-23T17:40:07.988Z"}
+{"service":"chat-api","userId":"67e0475faf85996cbf099fe4","messageId":"SMa4748310fa3bb56b6ec221a0eca16d8f","level":"info","message":"SMS OTP sent to +919264940608","timestamp":"2025-03-23T17:40:25.142Z"}
+{"service":"chat-api","level":"info","message":"phone verified successfully for user 67e0475faf85996cbf099fe4","timestamp":"2025-03-23T17:41:01.136Z"}
+{"service":"chat-api","level":"info","message":"User disconnected: 67e0475faf85996cbf099fe4, socket ID: 20wkNR7tsorN0Xv7AAAB","timestamp":"2025-03-23T17:41:04.129Z"}
+{"service":"chat-api","level":"info","message":"User connected: 67e0475faf85996cbf099fe4, socket ID: 2zwQfasp-i2n_I3sAAAE","timestamp":"2025-03-23T17:41:04.901Z"}
+{"service":"chat-api","level":"info","message":"User disconnected: 67e0475faf85996cbf099fe4, socket ID: 2zwQfasp-i2n_I3sAAAE","timestamp":"2025-03-23T17:41:32.897Z"}
+{"service":"chat-api","level":"info","message":"Cloudinary storage handler initialized","timestamp":"2025-03-23T17:46:35.557Z"}
+{"message":"MongoDB transport added to security logger","level":"info","service":"chat-api","timestamp":"2025-03-23T17:46:37.394Z"}
+{"service":"chat-api","level":"warn","message":"Redis connection failed, using in-memory adapter: ","timestamp":"2025-03-23T17:46:37.458Z"}
+{"service":"chat-api","level":"info","message":"User connected: 67e0d5e9edb27284f1f345b5, socket ID: UQjbF_jp4sipkU3fAAAB","timestamp":"2025-03-24T03:47:56.497Z"}
+{"service":"chat-api","userId":"67e0d5e9edb27284f1f345b5","messageId":"<605bfe59-cbb2-b153-32fd-e280104a82da@gmail.com>","level":"info","message":"Email OTP sent to adityasrivastava9264@gmail.com","timestamp":"2025-03-24T03:48:01.324Z"}
+{"service":"chat-api","level":"info","message":"email verified successfully for user 67e0d5e9edb27284f1f345b5","timestamp":"2025-03-24T03:48:30.659Z"}
+{"service":"chat-api","userId":"67e0d5e9edb27284f1f345b5","messageId":"SM401a0cc92ac5c26f9f2e6bc82f48decc","level":"info","message":"SMS OTP sent to +919264940608","timestamp":"2025-03-24T03:48:40.962Z"}
+{"service":"chat-api","level":"info","message":"phone verified successfully for user 67e0d5e9edb27284f1f345b5","timestamp":"2025-03-24T03:49:01.323Z"}
+{"service":"chat-api","level":"info","message":"User disconnected: 67e0d5e9edb27284f1f345b5, socket ID: UQjbF_jp4sipkU3fAAAB","timestamp":"2025-03-24T03:49:03.882Z"}
+{"service":"chat-api","level":"info","message":"User connected: 67e0d5e9edb27284f1f345b5, socket ID: yjqpbHwpa_dlGXtaAAAE","timestamp":"2025-03-24T03:49:04.628Z"}
+{"service":"chat-api","level":"info","message":"Cloudinary storage handler initialized","timestamp":"2025-03-24T04:06:58.548Z"}
+{"message":"MongoDB transport added to security logger","level":"info","service":"chat-api","timestamp":"2025-03-24T04:07:00.402Z"}
+{"service":"chat-api","level":"warn","message":"Redis connection failed, using in-memory adapter: ","timestamp":"2025-03-24T04:07:00.446Z"}
+{"service":"chat-api","level":"info","message":"Cloudinary storage handler initialized","timestamp":"2025-03-24T04:07:05.234Z"}
+{"message":"MongoDB transport added to security logger","level":"info","service":"chat-api","timestamp":"2025-03-24T04:07:06.813Z"}
+{"service":"chat-api","level":"warn","message":"Redis connection failed, using in-memory adapter: ","timestamp":"2025-03-24T04:07:06.850Z"}
+{"service":"chat-api","level":"info","message":"User connected: 67e0d5e9edb27284f1f345b5, socket ID: 88DDsQUb7umGZJSRAAAB","timestamp":"2025-03-24T04:07:08.783Z"}
+{"service":"chat-api","level":"info","message":"Cloudinary storage handler initialized","timestamp":"2025-03-24T04:07:16.201Z"}
+{"message":"MongoDB transport added to security logger","level":"info","service":"chat-api","timestamp":"2025-03-24T04:07:17.603Z"}
+{"service":"chat-api","level":"warn","message":"Redis connection failed, using in-memory adapter: ","timestamp":"2025-03-24T04:07:17.632Z"}
+{"service":"chat-api","level":"info","message":"User connected: 67e0d5e9edb27284f1f345b5, socket ID: zNJGRfK6qElMatjJAAAB","timestamp":"2025-03-24T04:07:28.261Z"}
+{"service":"chat-api","level":"info","message":"User disconnected: 67e0d5e9edb27284f1f345b5, socket ID: zNJGRfK6qElMatjJAAAB","timestamp":"2025-03-24T04:11:59.882Z"}
+{"service":"chat-api","level":"info","message":"User connected: 67e1215a2bbe547d964d5ee4, socket ID: GDtd0b2wNeO8ecJYAAAE","timestamp":"2025-03-24T09:09:52.281Z"}
+{"service":"chat-api","level":"info","message":"User disconnected: 67e1215a2bbe547d964d5ee4, socket ID: GDtd0b2wNeO8ecJYAAAE","timestamp":"2025-03-24T09:11:19.914Z"}
+{"service":"chat-api","level":"info","message":"User connected: 67e1215a2bbe547d964d5ee4, socket ID: uVk5ekEQdmE0eiNFAAAH","timestamp":"2025-03-24T09:11:21.350Z"}
+{"service":"chat-api","level":"info","message":"User disconnected: 67e1215a2bbe547d964d5ee4, socket ID: uVk5ekEQdmE0eiNFAAAH","timestamp":"2025-03-24T09:11:22.630Z"}
+{"service":"chat-api","level":"info","message":"Cloudinary storage handler initialized","timestamp":"2025-03-24T09:13:01.158Z"}
+{"message":"MongoDB transport added to security logger","level":"info","service":"chat-api","timestamp":"2025-03-24T09:13:24.134Z"}
+{"service":"chat-api","level":"warn","message":"Redis connection failed, using in-memory adapter: ","timestamp":"2025-03-24T09:13:24.515Z"}
+{"service":"chat-api","level":"info","message":"Cloudinary storage handler initialized","timestamp":"2025-03-24T09:39:22.312Z"}
+{"message":"MongoDB transport added to security logger","level":"info","service":"chat-api","timestamp":"2025-03-24T09:39:33.342Z"}
+{"service":"chat-api","level":"warn","message":"Redis connection failed, using in-memory adapter: ","timestamp":"2025-03-24T09:39:33.586Z"}
+{"service":"chat-api","level":"info","message":"Cloudinary storage handler initialized","timestamp":"2025-03-24T09:42:21.494Z"}
+{"message":"MongoDB transport added to security logger","level":"info","service":"chat-api","timestamp":"2025-03-24T09:42:22.949Z"}
+{"service":"chat-api","level":"warn","message":"Redis connection failed, using in-memory adapter: ","timestamp":"2025-03-24T09:42:22.984Z"}
+{"service":"chat-api","level":"info","message":"Cloudinary storage handler initialized","timestamp":"2025-03-24T09:43:50.311Z"}
+{"message":"MongoDB transport added to security logger","level":"info","service":"chat-api","timestamp":"2025-03-24T09:43:51.657Z"}
+{"service":"chat-api","level":"warn","message":"Redis connection failed, using in-memory adapter: ","timestamp":"2025-03-24T09:43:51.686Z"}
+{"service":"chat-api","level":"info","message":"Cloudinary storage handler initialized","timestamp":"2025-03-24T09:46:25.844Z"}
+{"message":"MongoDB transport added to security logger","level":"info","service":"chat-api","timestamp":"2025-03-24T09:46:27.447Z"}
+{"service":"chat-api","level":"warn","message":"Redis connection failed, using in-memory adapter: ","timestamp":"2025-03-24T09:46:27.512Z"}
+{"service":"chat-api","level":"info","message":"Cloudinary storage handler initialized","timestamp":"2025-03-24T09:49:53.865Z"}
+{"message":"MongoDB transport added to security logger","level":"info","service":"chat-api","timestamp":"2025-03-24T09:49:55.516Z"}
+{"service":"chat-api","level":"warn","message":"Redis connection failed, using in-memory adapter: ","timestamp":"2025-03-24T09:49:55.567Z"}
+{"service":"chat-api","level":"info","message":"Cloudinary storage handler initialized","timestamp":"2025-03-24T09:50:44.833Z"}
+{"message":"MongoDB transport added to security logger","level":"info","service":"chat-api","timestamp":"2025-03-24T09:50:46.415Z"}
+{"service":"chat-api","level":"warn","message":"Redis connection failed, using in-memory adapter: ","timestamp":"2025-03-24T09:50:46.456Z"}
+{"service":"chat-api","level":"info","message":"Cloudinary storage handler initialized","timestamp":"2025-03-24T09:50:54.158Z"}
+{"message":"MongoDB transport added to security logger","level":"info","service":"chat-api","timestamp":"2025-03-24T09:50:55.680Z"}
+{"service":"chat-api","level":"warn","message":"Redis connection failed, using in-memory adapter: ","timestamp":"2025-03-24T09:50:55.711Z"}
+{"service":"chat-api","level":"info","message":"Cloudinary storage handler initialized","timestamp":"2025-03-24T09:53:14.352Z"}
+{"message":"MongoDB transport added to security logger","level":"info","service":"chat-api","timestamp":"2025-03-24T09:53:15.849Z"}
+{"service":"chat-api","level":"warn","message":"Redis connection failed, using in-memory adapter: ","timestamp":"2025-03-24T09:53:15.884Z"}
+{"service":"chat-api","level":"info","message":"Cloudinary storage handler initialized","timestamp":"2025-03-24T09:53:45.239Z"}
+{"message":"MongoDB transport added to security logger","level":"info","service":"chat-api","timestamp":"2025-03-24T09:53:46.670Z"}
+{"service":"chat-api","level":"warn","message":"Redis connection failed, using in-memory adapter: ","timestamp":"2025-03-24T09:53:46.705Z"}
+{"service":"chat-api","level":"info","message":"Cloudinary storage handler initialized","timestamp":"2025-03-24T09:57:33.749Z"}
+{"message":"MongoDB transport added to security logger","level":"info","service":"chat-api","timestamp":"2025-03-24T09:57:35.306Z"}
+{"service":"chat-api","level":"warn","message":"Redis connection failed, using in-memory adapter: ","timestamp":"2025-03-24T09:57:35.339Z"}
+{"service":"chat-api","level":"info","message":"User connected: 67e12cec0b730a56c0af7c1d, socket ID: EiDg3JrXYI1kBu_LAAAB","timestamp":"2025-03-24T09:59:11.236Z"}
+{"service":"chat-api","userId":"67e12cec0b730a56c0af7c1d","messageId":"<ee522f9b-5cc1-c8c4-9470-4a45927ca088@gmail.com>","level":"info","message":"Email OTP sent to adityasrivastava9406@gmail.com","timestamp":"2025-03-24T09:59:15.846Z"}
+{"service":"chat-api","level":"info","message":"email verified successfully for user 67e12cec0b730a56c0af7c1d","timestamp":"2025-03-24T09:59:38.313Z"}
+{"service":"chat-api","userId":"67e12cec0b730a56c0af7c1d","messageId":"SMfb5e7e849ca39453315cda2cc4f99e6b","level":"info","message":"SMS OTP sent to +919264940608","timestamp":"2025-03-24T09:59:52.017Z"}
+{"service":"chat-api","level":"info","message":"phone verified successfully for user 67e12cec0b730a56c0af7c1d","timestamp":"2025-03-24T10:00:15.195Z"}
+{"service":"chat-api","level":"info","message":"User disconnected: 67e12cec0b730a56c0af7c1d, socket ID: EiDg3JrXYI1kBu_LAAAB","timestamp":"2025-03-24T10:00:18.764Z"}
+{"service":"chat-api","level":"info","message":"User connected: 67e12cec0b730a56c0af7c1d, socket ID: sHOzGoWsIluqH4iQAAAE","timestamp":"2025-03-24T10:00:19.382Z"}
+{"service":"chat-api","level":"info","message":"User disconnected: 67e12cec0b730a56c0af7c1d, socket ID: sHOzGoWsIluqH4iQAAAE","timestamp":"2025-03-24T10:06:41.399Z"}
+{"service":"chat-api","level":"info","message":"Cloudinary storage handler initialized","timestamp":"2025-03-24T10:08:09.137Z"}
+{"message":"MongoDB transport added to security logger","level":"info","service":"chat-api","timestamp":"2025-03-24T10:08:10.821Z"}
+{"service":"chat-api","level":"warn","message":"Redis connection failed, using in-memory adapter: ","timestamp":"2025-03-24T10:08:10.868Z"}
+{"service":"chat-api","userId":"67e12cec0b730a56c0af7c1d","messageId":"<1e5b9a3c-068c-8b86-a2ae-63af9aa72548@gmail.com>","level":"info","message":"Email OTP sent to adityasrivastava9406@gmail.com","timestamp":"2025-03-24T10:08:29.920Z"}
+{"service":"chat-api","level":"info","message":"email verified successfully for user 67e12cec0b730a56c0af7c1d","timestamp":"2025-03-24T10:08:53.520Z"}
+{"service":"chat-api","userId":"67e12cec0b730a56c0af7c1d","messageId":"SM1a13cec9f1c4d22faaa59675a16d7251","level":"info","message":"SMS OTP sent to +919264940608","timestamp":"2025-03-24T10:09:10.423Z"}
+{"service":"chat-api","level":"info","message":"phone verified successfully for user 67e12cec0b730a56c0af7c1d","timestamp":"2025-03-24T10:09:18.896Z"}
+{"service":"chat-api","error":"Post validation failed: content: Path `content` is required.","userId":"67e12cec0b730a56c0af7c1d","requestId":"af0157d0-0da7-48fd-b6a6-415aebc79b82","level":"error","message":"Post creation transaction failed","timestamp":"2025-03-24T10:09:41.041Z"}
+{"service":"chat-api","error":"Post validation failed: content: Path `content` is required.","stack":"ValidationError: Post validation failed: content: Path `content` is required.\n    at Document.invalidate (E:\\meetkats\\hinge-dating\\api\\node_modules\\mongoose\\lib\\document.js:3329:32)\n    at E:\\meetkats\\hinge-dating\\api\\node_modules\\mongoose\\lib\\document.js:3090:17\n    at E:\\meetkats\\hinge-dating\\api\\node_modules\\mongoose\\lib\\schemaType.js:1407:9\n    at process.processTicksAndRejections (node:internal/process/task_queues:77:11)","userId":"67e12cec0b730a56c0af7c1d","requestId":"af0157d0-0da7-48fd-b6a6-415aebc79b82","level":"error","message":"Create post error","timestamp":"2025-03-24T10:09:41.044Z"}
+{"service":"chat-api","level":"warn","message":"Attempted to increment unknown counter: post_creation_errors","timestamp":"2025-03-24T10:09:41.045Z"}
+{"service":"chat-api","userId":"67e12cec0b730a56c0af7c1d","postId":"67e1304de4efcfbb891dfdf4","requestId":"0929d13a-6156-47fd-a51b-c0affdd85b7b","level":"info","message":"Post creation transaction successful","timestamp":"2025-03-24T10:13:33.385Z"}
+{"service":"chat-api","userId":"67e12cec0b730a56c0af7c1d","postId":"67e1304de4efcfbb891dfdf4","contentLength":5,"hasMentions":false,"hasMedia":false,"visibility":"public","requestId":"0929d13a-6156-47fd-a51b-c0affdd85b7b","level":"info","message":"Post created","timestamp":"2025-03-24T10:13:33.598Z"}
+{"service":"chat-api","postId":"67e1304de4efcfbb891dfdf4","visibility":"public","requestId":"0929d13a-6156-47fd-a51b-c0affdd85b7b","eventType":"data_access","userId":"67e12cec0b730a56c0af7c1d","dataType":"post","action":"create","level":"info","message":"Data create by user 67e12cec0b730a56c0af7c1d on post","timestamp":"2025-03-24T10:13:33.599Z"}
+{"service":"chat-api","level":"warn","message":"Attempted to increment unknown counter: posts_created","timestamp":"2025-03-24T10:13:33.599Z"}
+{"service":"chat-api","level":"info","message":"Cloudinary storage handler initialized","timestamp":"2025-03-24T10:30:49.196Z"}
+{"message":"MongoDB transport added to security logger","level":"info","service":"chat-api","timestamp":"2025-03-24T10:30:51.319Z"}
+{"service":"chat-api","level":"warn","message":"Redis connection failed, using in-memory adapter: ","timestamp":"2025-03-24T10:30:51.366Z"}
+{"service":"chat-api","level":"error","message":"Socket events handler not initialized","timestamp":"2025-03-24T10:42:43.299Z"}
+{"service":"chat-api","level":"error","message":"Socket events handler not initialized","timestamp":"2025-03-24T10:57:27.679Z"}
+{"service":"chat-api","level":"info","message":"Cloudinary storage handler initialized","timestamp":"2025-03-24T11:05:46.177Z"}
+{"message":"MongoDB transport added to security logger","level":"info","service":"chat-api","timestamp":"2025-03-24T11:05:48.708Z"}
+{"service":"chat-api","level":"warn","message":"Redis connection failed, using in-memory adapter: ","timestamp":"2025-03-24T11:05:48.847Z"}
+{"service":"chat-api","level":"info","message":"Cloudinary storage handler initialized","timestamp":"2025-03-24T11:41:43.176Z"}
+{"message":"MongoDB transport added to security logger","level":"info","service":"chat-api","timestamp":"2025-03-24T11:41:47.398Z"}
+{"service":"chat-api","level":"warn","message":"Redis connection failed, using in-memory adapter: ","timestamp":"2025-03-24T11:41:47.548Z"}
+{"service":"chat-api","level":"info","message":"Cloudinary storage handler initialized","timestamp":"2025-03-24T11:42:05.361Z"}
+{"message":"MongoDB transport added to security logger","level":"info","service":"chat-api","timestamp":"2025-03-24T11:42:07.868Z"}
+{"service":"chat-api","level":"warn","message":"Redis connection failed, using in-memory adapter: ","timestamp":"2025-03-24T11:42:07.926Z"}
+{"service":"chat-api","level":"error","message":"Logout error: SecurityLog.create is not a function","stack":"TypeError: SecurityLog.create is not a function\n    at exports.logout (E:\\meetkats\\hinge-dating\\api\\controllers\\auth.controller.js:679:23)\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)","timestamp":"2025-03-24T11:50:12.543Z"}
+{"service":"chat-api","level":"info","message":"User connected: 67e1471c56667dfcbd96d17c, socket ID: XaeTgl9df6DJlMDvAAAB","timestamp":"2025-03-24T11:50:55.511Z"}
+{"service":"chat-api","userId":"67e1471c56667dfcbd96d17c","messageId":"<d9f4b01e-6346-c149-b2bc-dfad88a3b519@gmail.com>","level":"info","message":"Email OTP sent to adityasrivastavatv@gmail.com","timestamp":"2025-03-24T11:51:01.007Z"}
+{"service":"chat-api","level":"info","message":"email verified successfully for user 67e1471c56667dfcbd96d17c","timestamp":"2025-03-24T11:51:18.086Z"}
+{"service":"chat-api","userId":"67e1471c56667dfcbd96d17c","messageId":"SM574de684b47aedde372e453aabbf5705","level":"info","message":"SMS OTP sent to +919264940608","timestamp":"2025-03-24T11:51:32.146Z"}
+{"service":"chat-api","level":"info","message":"Cloudinary storage handler initialized","timestamp":"2025-03-24T11:51:57.607Z"}
+{"message":"MongoDB transport added to security logger","level":"info","service":"chat-api","timestamp":"2025-03-24T11:52:00.394Z"}
+{"service":"chat-api","level":"warn","message":"Redis connection failed, using in-memory adapter: ","timestamp":"2025-03-24T11:52:00.439Z"}
+{"service":"chat-api","level":"info","message":"phone verified successfully for user 67e1471c56667dfcbd96d17c","timestamp":"2025-03-24T11:52:03.405Z"}
+{"service":"chat-api","level":"info","message":"User connected: 67e1471c56667dfcbd96d17c, socket ID: kvHbJr80HAX-004NAAAB","timestamp":"2025-03-24T11:52:07.441Z"}
+{"service":"chat-api","level":"warn","message":"Redis not connected, skipping operation","timestamp":"2025-03-24T14:48:03.083Z"}
+{"service":"chat-api","level":"warn","message":"Redis not connected, skipping operation","timestamp":"2025-03-24T14:48:03.638Z"}
+{"service":"chat-api","type":"feed","count":1,"requestId":"c4e926e9-f005-458e-8d5d-c6415325810b","eventType":"data_access","userId":"67e1471c56667dfcbd96d17c","dataType":"posts","action":"read","level":"info","message":"Data read by user 67e1471c56667dfcbd96d17c on posts","timestamp":"2025-03-24T14:48:03.639Z"}
+{"service":"chat-api","level":"error","message":"Socket events handler not initialized","timestamp":"2025-03-24T14:48:17.682Z"}
+{"service":"chat-api","level":"info","message":"User disconnected: 67e1471c56667dfcbd96d17c, socket ID: kvHbJr80HAX-004NAAAB","timestamp":"2025-03-24T15:07:18.582Z"}

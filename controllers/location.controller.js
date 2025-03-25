@@ -1,9 +1,9 @@
-const User = require('../models/User');
-const LocationHistory = require('../models/Location');
-const LocationSharing = require('../models/Location');
-const Geofence = require('../models/Location');
-const Connection = require('../models/Connection');
-const Settings = require('../models/Settings');
+const {User} = require('../models/User');
+const {LocationHistory} = require('../models/Location');
+const {LocationSharing} = require('../models/Location');
+const {Geofence} = require('../models/Location');
+const {Connection} = require('../models/Connection');
+const {Settings} = require('../models/Settings');
 const { validationResult } = require('express-validator');
 const geolib = require('geolib');
 const axios = require('axios');
@@ -19,69 +19,76 @@ const PLACES_API_KEY = process.env.PLACES_API_KEY;
  * @route PUT /api/location
  * @access Private
  */
+/**
+ * Update user's location
+ * @route PUT /api/nearby-users/location
+ * @access Private
+ */
 exports.updateLocation = async (req, res) => {
   try {
-    const { latitude, longitude, accuracy, timestamp } = req.body;
+    const { latitude, longitude, checkNearbyUsers = false } = req.body;
     
-    // Validate input
+    console.log('Updating location:', { userId: req.user.id, latitude, longitude, checkNearbyUsers });
+    
     if (!latitude || !longitude) {
-      return res.status(400).json({ error: 'Latitude and longitude are required' });
+      console.error('Missing coordinates:', { latitude, longitude });
+      return res.status(400).json({ error: 'Valid coordinates are required' });
     }
     
-    // Update user's location
-    const locationData = {
-      type: 'Point',
-      coordinates: [longitude, latitude]
-    };
+    // Validate coordinates
+    if (isNaN(parseFloat(latitude)) || isNaN(parseFloat(longitude))) {
+      console.error('Invalid coordinates:', { latitude, longitude });
+      return res.status(400).json({ error: 'Invalid coordinates format' });
+    }
     
-    // Update user
-    await User.findByIdAndUpdate(req.user.id, {
-      location: locationData,
-      'locationMetadata.accuracy': accuracy || null,
-      'locationMetadata.lastUpdated': timestamp || Date.now()
-    });
+    // Validate coordinate ranges
+    if (parseFloat(latitude) < -90 || parseFloat(latitude) > 90 ||
+        parseFloat(longitude) < -180 || parseFloat(longitude) > 180) {
+      console.error('Out of range coordinates:', { latitude, longitude });
+      return res.status(400).json({ error: 'Coordinates out of valid range' });
+    }
     
-    // Add to location history (only if significant movement or time elapsed)
-    const lastLocation = await LocationHistory.findOne({ user: req.user.id })
-      .sort({ timestamp: -1 })
-      .limit(1);
+    const parsedLat = parseFloat(latitude);
+    const parsedLng = parseFloat(longitude);
+    
+    // Update user location with error handling
+    try {
+      // Update user location
+      const user = await User.findByIdAndUpdate(
+        req.user.id,
+        { 
+          location: {
+            type: 'Point',
+            coordinates: [parsedLng, parsedLat]
+          },
+          locationUpdatedAt: Date.now()
+        },
+        { new: true }
+      );
       
-    const shouldAddToHistory = shouldRecordLocationHistory(
-      lastLocation,
-      { latitude, longitude },
-      timestamp
-    );
-    
-    if (shouldAddToHistory) {
-      await LocationHistory.create({
-        user: req.user.id,
-        location: locationData,
-        accuracy,
-        timestamp: timestamp || Date.now()
+      console.log('Location updated successfully for user:', req.user.id);
+      
+      // Check for nearby users who match filters and might trigger notifications
+      if (checkNearbyUsers) {
+        // Use Promise without await to avoid blocking response
+        processNearbyUserNotifications(req.user.id, [parsedLng, parsedLat])
+          .then(() => console.log('Nearby user notifications processed'))
+          .catch(err => console.error('Error processing nearby user notifications:', err));
+      }
+      
+      res.json({
+        success: true,
+        location: user.location
       });
+    } catch (updateError) {
+      console.error('Error updating user location in database:', updateError);
+      throw updateError;
     }
-    
-    // Check if user entered any geofences
-    await checkGeofences(req.user.id, { latitude, longitude });
-    
-    // Notify users with active location sharing
-    await notifyLocationSharingUsers(req.user.id, locationData);
-    
-    res.json({
-      location: {
-        latitude,
-        longitude,
-        accuracy,
-        timestamp: timestamp || Date.now()
-      },
-      historyRecorded: shouldAddToHistory
-    });
   } catch (error) {
     console.error('Update location error:', error);
     res.status(500).json({ error: 'Server error when updating location' });
   }
 };
-
 /**
  * Continuous location updates
  * @route POST /api/location/continuous-update

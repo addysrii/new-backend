@@ -176,7 +176,11 @@ app.use(cors({
     'https://meetkats.com/', // Include both versions to be safe
     'http://localhost:3000',
     'http://localhost:5173',
-    'http://localhost:8081'  // For local development
+    'http://localhost:8081' ,
+    'http://192.168.61.248:3000', // Replace with your computer's IP address
+    'capacitor://localhost', // For capacitor apps
+    'ionic://localhost', // For ionic framework
+    '*' // During development, allow all origins (remove in production)
   ],
   credentials: true
 }));
@@ -452,17 +456,15 @@ try {
   };
 }
 
-// ==========================================
-// ROUTES SETUP - With error handling for each route group
-// ==========================================
-
-// ==========================================
 // AUTH ROUTES
 // ==========================================
 console.log('Setting up auth routes...');
 if (authController) {
   try {
     // Basic Authentication
+    // Add this route in your routes file
+    app.post('/create-test-user', authController.createTestUser);
+    app.post('/debug-login', authController.debugLogin);
     app.post('/auth/signup', authLimiter, authController.signup);
     app.post('/auth/login', authLimiter, authController.login);
     app.post('/auth/logout', authenticateToken, authController.logout);
@@ -841,6 +843,7 @@ app.get('/api/network/stats', authenticateToken, networkController.getNetworkSta
 // Import the controller
 const nearbyUsersController = require('./controllers/nearbyUsers.controller');
 
+// Nearby users routes
 // Nearby users routes
 app.get('/api/nearby-users', authenticateToken, nearbyUsersController.getNearbyUsers);
 app.put('/api/nearby-users/location', authenticateToken, nearbyUsersController.updateLocation);
@@ -1394,9 +1397,9 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/professio
    console.error('Failed to load Socket.IO module:', error);
    
    // Start the server even if Socket.IO module fails to load
-   server.listen(PORT, () => {
-     console.log(`Server running on port ${PORT} (without Socket.IO)`);
-   });
+   server.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server running on port ${PORT} and accessible on local network`);
+  });
  }
 })
 .catch(err => {
