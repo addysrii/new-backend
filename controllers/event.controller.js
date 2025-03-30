@@ -93,13 +93,23 @@ exports.createEvent = async (req, res) => {
     
     // Handle cover image
     if (req.file) {
-      // Upload to cloud storage
-      const uploadResult = await cloudStorage.uploadFile(req.file);
+      // Validate that req.file is a proper file object, not a string URL
+      if (typeof req.file === 'string' || !req.file.path) {
+        return res.status(400).json({ error: 'Invalid file object provided for upload' });
+      }
       
-      newEvent.coverImage = {
-        url: uploadResult.url,
-        filename: req.file.originalname
-      };
+      try {
+        // Upload to cloud storage
+        const uploadResult = await cloudStorage.uploadFile(req.file);
+        
+        newEvent.coverImage = {
+          url: uploadResult.url,
+          filename: req.file.originalname
+        };
+      } catch (uploadError) {
+        console.error('Event cover image upload error:', uploadError);
+        // Continue creating the event without the cover image
+      }
     }
     
     // Add creator as attendee
@@ -135,7 +145,6 @@ exports.createEvent = async (req, res) => {
     res.status(500).json({ error: 'Server error when creating event' });
   }
 };
-
 /**
  * Create a recurrent event
  * @route POST /api/events/recurrent
@@ -590,6 +599,11 @@ exports.getEvent = async (req, res) => {
  * @route PUT /api/events/:eventId
  * @access Private
  */
+/**
+ * Update an event
+ * @route PUT /api/events/:eventId
+ * @access Private
+ */
 exports.updateEvent = async (req, res) => {
   try {
     const { eventId } = req.params;
@@ -606,7 +620,8 @@ exports.updateEvent = async (req, res) => {
       category,
       tags,
       requireApproval,
-      updateSeries
+      updateSeries,
+      keepExistingImage
     } = req.body;
     
     // Get event
@@ -681,14 +696,30 @@ exports.updateEvent = async (req, res) => {
       event.tags = tags.map(tag => tag.trim().toLowerCase());
     }
     
-    // Handle cover image
+    // Handle cover image update
     if (req.file) {
-      // Upload to cloud storage
-      const uploadResult = await cloudStorage.uploadFile(req.file);
+      // Validate that req.file is a proper file object, not a string URL
+      if (typeof req.file === 'string' || !req.file.path) {
+        return res.status(400).json({ error: 'Invalid file object provided for upload' });
+      }
       
+      try {
+        // Upload to cloud storage
+        const uploadResult = await cloudStorage.uploadFile(req.file);
+        
+        event.coverImage = {
+          url: uploadResult.url,
+          filename: req.file.originalname
+        };
+      } catch (uploadError) {
+        console.error('Event cover image update error:', uploadError);
+        // Continue updating the event without changing the cover image
+      }
+    } else if (req.body.coverImageUrl && !keepExistingImage) {
+      // If a URL is provided in the request body (but not a file)
       event.coverImage = {
-        url: uploadResult.url,
-        filename: req.file.originalname
+        url: req.body.coverImageUrl,
+        filename: req.body.coverImageFilename || 'external-image'
       };
     }
     
@@ -744,7 +775,7 @@ exports.updateEvent = async (req, res) => {
           }
           
           // Copy cover image if provided
-          if (req.file) {
+          if (event.coverImage) {
             futureEvent.coverImage = { ...event.coverImage };
           }
           
@@ -758,6 +789,48 @@ exports.updateEvent = async (req, res) => {
         await Promise.all(updatePromises);
       }
     }
+    
+    // Populate updated event
+    const updatedEvent = await Event.findById(eventId)
+      .populate('createdBy', 'firstName lastName username profileImage headline')
+      .populate('attendees.user', 'firstName lastName username profileImage');
+    
+    // Notify attendees about updates
+    const attendeeIds = event.attendees
+      .filter(a => a.status === 'going' && a.user.toString() !== req.user.id)
+      .map(a => a.user.toString());
+    
+    if (attendeeIds.length > 0) {
+      // Create notifications
+      const notifications = attendeeIds.map(userId => ({
+        recipient: userId,
+        type: 'event_updated',
+        sender: req.user.id,
+        data: {
+          eventId: event._id,
+          eventName: event.name
+        },
+        timestamp: Date.now()
+      }));
+      
+      await Notification.insertMany(notifications);
+      
+      // Send socket events
+      attendeeIds.forEach(userId => {
+        socketEvents.emitToUser(userId, 'event_updated', {
+          eventId: event._id,
+          eventName: event.name,
+          updatedBy: req.user.id
+        });
+      });
+    }
+    
+    res.json(updatedEvent);
+  } catch (error) {
+    console.error('Update event error:', error);
+    res.status(500).json({ error: 'Server error when updating event' });
+  }
+};
     
     // Populate updated event
     const updatedEvent = await Event.findById(eventId)
