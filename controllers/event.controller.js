@@ -26,18 +26,23 @@ exports.getMyEvents = async (req, res) => {
         { 'attendees.user': req.user.id },
         { createdBy: req.user.id }
       ]
-    })
-    .populate('createdBy', 'firstName lastName username profileImage')
-    .populate('attendees.user', 'firstName lastName username profileImage')
-    .sort({ startDateTime: 1 });
+
+      status: 'going',
+      role: 'host',
+      timestamp: Date.now()
+    });
     
-    res.json(myEvents);
+    // Populate creator info
+    const populatedEvent = await Event.findById(newEvent._id)
+      .populate('createdBy', 'firstName lastName username profileImage')
+      .populate('attendees.user', 'firstName lastName username profileImage');
+    
+    res.status(201).json(populatedEvent);
   } catch (error) {
-    console.error('Get my events error:', error);
-    res.status(500).json({ error: 'Server error when retrieving your events' });
+    console.error('Create event error:', error);
+    res.status(500).json({ error: 'Server error when creating event' });
   }
 };
-
 /**
  * Create a new event
  * @route POST /api/events
@@ -61,7 +66,9 @@ exports.createEvent = async (req, res) => {
       visibility,
       category,
       tags,
-      requireApproval
+      requireApproval,
+      coverImageUrl, // Accept direct URL option
+      coverImageFilename // Accept filename for URL option
     } = req.body;
     
     // Validate required fields
@@ -116,14 +123,18 @@ exports.createEvent = async (req, res) => {
       newEvent.tags = tags.map(tag => tag.trim().toLowerCase());
     }
     
-    // Handle cover image
+    // Handle cover image - first check for uploaded file
     if (req.file) {
-      // Validate that req.file is a proper file object, not a string URL
-      if (typeof req.file === 'string' || !req.file.path) {
-        return res.status(400).json({ error: 'Invalid file object provided for upload' });
-      }
-      
       try {
+        // Validate file object
+        if (typeof req.file === 'string') {
+          return res.status(400).json({ error: 'Invalid file object: expected file object but received string' });
+        }
+        
+        if (!req.file.path) {
+          return res.status(400).json({ error: 'Invalid file object: missing path property' });
+        }
+        
         // Upload to cloud storage
         const uploadResult = await cloudStorage.uploadFile(req.file);
         
@@ -135,6 +146,13 @@ exports.createEvent = async (req, res) => {
         console.error('Event cover image upload error:', uploadError);
         // Continue creating the event without the cover image
       }
+    } 
+    // Handle cover image URL provided directly in request body
+    else if (coverImageUrl) {
+      newEvent.coverImage = {
+        url: coverImageUrl,
+        filename: coverImageFilename || 'external-image'
+      };
     }
     
     // Add creator as attendee
