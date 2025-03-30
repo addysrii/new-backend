@@ -12,173 +12,157 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-// Base Cloudinary storage for general uploads
-const storage = new CloudinaryStorage({
-  cloudinary: cloudinary,
-  params: {
-    folder: 'app_uploads',
-    allowed_formats: ['jpg', 'jpeg', 'png', 'gif', 'mp4', 'mov', 'avi', 'pdf', 'doc', 'docx']
+// Create a factory function for storage configs to reduce repetition
+const createCloudinaryStorage = (folder, formats, transformations = []) => {
+  return new CloudinaryStorage({
+    cloudinary: cloudinary,
+    params: {
+      folder: folder,
+      resource_type: 'auto',
+      allowed_formats: formats,
+      transformation: [
+        { quality: 'auto' },
+        { fetch_format: 'auto' },
+        ...transformations
+      ]
+    }
+  });
+};
+
+// Create a factory function for upload middleware to reduce repetition
+const createUploadMiddleware = (storage, fileSize, maxFiles, allowedMimeTypes) => {
+  return multer({
+    storage: storage,
+    limits: {
+      fileSize: fileSize,
+      files: maxFiles
+    },
+    fileFilter: (req, file, cb) => {
+      if (allowedMimeTypes(file)) {
+        cb(null, true);
+      } else {
+        cb(new Error(`Invalid file type. Only ${allowedMimeTypes.description} are allowed.`), false);
+      }
+    }
+  });
+};
+
+// Define mime type validators with descriptions
+const mimeTypeValidators = {
+  images: {
+    validate: (file) => file.mimetype.startsWith('image/'),
+    description: 'images'
+  },
+  imagesAndVideos: {
+    validate: (file) => file.mimetype.startsWith('image/') || file.mimetype.startsWith('video/'),
+    description: 'images and videos'
+  },
+  documents: {
+    validate: (file) => {
+      const allowedMimeTypes = [
+        'image/jpeg', 'image/png', 'image/gif', 
+        'video/mp4', 'video/quicktime',
+        'application/pdf', 
+        'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'text/plain'
+      ];
+      return allowedMimeTypes.includes(file.mimetype);
+    },
+    description: 'images, videos, and common document formats'
   }
-});
+};
+
+// Base Cloudinary storage for general uploads
+const generalStorage = createCloudinaryStorage(
+  'app_uploads',
+  ['jpg', 'jpeg', 'png', 'gif', 'mp4', 'mov', 'avi', 'pdf', 'doc', 'docx']
+);
 
 // Profile picture storage
-const dpStorage = new CloudinaryStorage({
-  cloudinary: cloudinary,
-  params: {
-    folder: 'dp',
-    resource_type: 'auto',
-    allowed_formats: ['jpg', 'jpeg', 'png'],
-    transformation: [
-      { quality: 'auto' },
-      { fetch_format: 'auto' }
-    ]
-  }
-});
+const dpStorage = createCloudinaryStorage(
+  'dp', 
+  ['jpg', 'jpeg', 'png']
+);
 
 // Post storage
-const postStorage = new CloudinaryStorage({
-  cloudinary: cloudinary,
-  params: {
-    folder: 'posts',
-    resource_type: 'auto',
-    allowed_formats: ['jpg', 'jpeg', 'png', 'gif', 'mp4', 'mov'],
-    transformation: [
-      { quality: 'auto' },
-      { fetch_format: 'auto' }
-    ]
-  }
-});
+const postStorage = createCloudinaryStorage(
+  'posts',
+  ['jpg', 'jpeg', 'png', 'gif', 'mp4', 'mov']
+);
 
 // Story storage
-const storyStorage = new CloudinaryStorage({
-  cloudinary: cloudinary,
-  params: {
-    folder: 'stories',
-    resource_type: 'auto',
-    allowed_formats: ['jpg', 'jpeg', 'png', 'gif', 'mp4', 'mov'],
-    transformation: [
-      { quality: 'auto:good' },
-      { fetch_format: 'auto' }
-    ]
-  }
-});
+const storyStorage = createCloudinaryStorage(
+  'stories',
+  ['jpg', 'jpeg', 'png', 'gif', 'mp4', 'mov'],
+  [{ quality: 'auto:good' }]
+);
+
+// Event storage
+const eventStorage = createCloudinaryStorage(
+  'events',
+  ['jpg', 'jpeg', 'png', 'gif'],
+  [{ quality: 'auto:good' }, { width: 1200, crop: 'limit' }]
+);
 
 // Chat attachment storage
-const chatAttachmentStorage = new CloudinaryStorage({
-  cloudinary: cloudinary,
-  params: {
-    folder: 'chat_attachments',
-    resource_type: 'auto',
-    allowed_formats: ['jpg', 'jpeg', 'png', 'gif', 'mp4', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'txt'],
-    transformation: [
-      { quality: 'auto' },
-      { fetch_format: 'auto' }
-    ]
-  }
-});
+const chatAttachmentStorage = createCloudinaryStorage(
+  'chat_attachments',
+  ['jpg', 'jpeg', 'png', 'gif', 'mp4', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'txt']
+);
 
 // Upload middleware configurations
-const upload = multer({ storage: storage });
+const upload = multer({ storage: generalStorage });
 
-const dpUpload = multer({
-  storage: dpStorage,
-  limits: {
-    fileSize: 25 * 1024 * 1024, // 25MB file size limit
-    files: 1
-  },
-  fileFilter: (req, file, cb) => {
-    const allowedMimeTypes = [
-      'image/jpeg', 'image/png', 'image/gif'
-    ];
-    
-    if (allowedMimeTypes.includes(file.mimetype)) {
-      cb(null, true);
-    } else {
-      cb(new Error('Invalid file type. Only images are allowed.'), false);
-    }
-  }
-});
+const dpUpload = createUploadMiddleware(
+  dpStorage,
+  25 * 1024 * 1024, // 25MB
+  1,
+  mimeTypeValidators.images
+);
 
-const postUpload = multer({
-  storage: postStorage,
-  limits: {
-    fileSize: 100 * 1024 * 1024, // 100MB limit for videos
-    files: 10
-  },
-  fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('image/') || file.mimetype.startsWith('video/')) {
-      cb(null, true);
-    } else {
-      cb(new Error('Invalid file type. Only images and videos are allowed.'), false);
-    }
-  }
-});
-const imageUpload = multer({
-  storage: postStorage,
-  limits: {
-    fileSize: 100 * 1024 * 1024, // 100MB limit for videos
-    files: 10
-  },
-  fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('image/') || file.mimetype.startsWith('video/')) {
-      cb(null, true);
-    } else {
-      cb(new Error('Invalid file type. Only images and videos are allowed.'), false);
-    }
-  }
-});
-const evidenceUpload = multer({
-  storage: postStorage,
-  limits: {
-    fileSize: 100 * 1024 * 1024, // 100MB limit for videos
-    files: 10
-  },
-  fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('image/') || file.mimetype.startsWith('video/')) {
-      cb(null, true);
-    } else {
-      cb(new Error('Invalid file type. Only images and videos are allowed.'), false);
-    }
-  }
-});
-const storyUpload = multer({
-  storage: storyStorage,
-  limits: {
-    fileSize: 50 * 1024 * 1024, // 50MB limit for videos
-    files: 1
-  },
-  fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('image/') || file.mimetype.startsWith('video/')) {
-      cb(null, true);
-    } else {
-      cb(new Error('Invalid file type. Only images and videos are allowed.'), false);
-    }
-  }
-});
+const postUpload = createUploadMiddleware(
+  postStorage,
+  100 * 1024 * 1024, // 100MB
+  10,
+  mimeTypeValidators.imagesAndVideos
+);
 
-const chatUpload = multer({
-  storage: chatAttachmentStorage,
-  limits: {
-    fileSize: 25 * 1024 * 1024, // 25MB file size limit
-    files: 1
-  },
-  fileFilter: (req, file, cb) => {
-    const allowedMimeTypes = [
-      'image/jpeg', 'image/png', 'image/gif', 
-      'video/mp4', 'video/quicktime',
-      'application/pdf', 
-      'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'text/plain'
-    ];
-    
-    if (allowedMimeTypes.includes(file.mimetype)) {
-      cb(null, true);
-    } else {
-      cb(new Error('Invalid file type. Only images, videos, and common document formats are allowed.'), false);
-    }
-  }
-});
+// Now use the same function for imageUpload and evidenceUpload to ensure consistency
+const imageUpload = createUploadMiddleware(
+  postStorage,
+  100 * 1024 * 1024,
+  10,
+  mimeTypeValidators.imagesAndVideos
+);
+
+const evidenceUpload = createUploadMiddleware(
+  postStorage,
+  100 * 1024 * 1024,
+  10,
+  mimeTypeValidators.imagesAndVideos
+);
+
+const storyUpload = createUploadMiddleware(
+  storyStorage,
+  50 * 1024 * 1024, // 50MB
+  1,
+  mimeTypeValidators.imagesAndVideos
+);
+
+const eventUpload = createUploadMiddleware(
+  eventStorage,
+  20 * 1024 * 1024, // 20MB
+  1,
+  mimeTypeValidators.images
+);
+
+const chatUpload = createUploadMiddleware(
+  chatAttachmentStorage,
+  25 * 1024 * 1024, // 25MB
+  1,
+  mimeTypeValidators.documents
+);
 
 module.exports = {
   cloudinary,
@@ -188,5 +172,6 @@ module.exports = {
   storyUpload,
   imageUpload,
   evidenceUpload,
+  eventUpload,
   chatUpload
 };
