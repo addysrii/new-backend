@@ -258,8 +258,9 @@ try {
 }
 
 // Import upload middleware with error handling
+// Import upload middleware with error handling
 console.log('Importing cloudinary configuration...');
-let dpUpload, postUpload, chatUpload, storyUpload, upload, handleMulterError, imageUpload, evidenceUpload;
+let dpUpload, postUpload, chatUpload, storyUpload, upload, handleMulterError, imageUpload, evidenceUpload, eventUpload;
 
 try {
   const cloudinaryConfig = require('./configure/cloudinary');
@@ -269,6 +270,7 @@ try {
   storyUpload = cloudinaryConfig.storyUpload;
   imageUpload = cloudinaryConfig.imageUpload;
   evidenceUpload = cloudinaryConfig.evidenceUpload;
+  eventUpload = cloudinaryConfig.eventUpload; // Add this line to import eventUpload
   upload = cloudinaryConfig.upload;
   handleMulterError = cloudinaryConfig.handleMulterError;
   console.log('Cloudinary configuration imported successfully');
@@ -284,6 +286,7 @@ try {
   storyUpload = { single: () => multerFallback };
   imageUpload = { array: () => multerFallback };
   evidenceUpload = { array: () => multerFallback };
+  eventUpload = { single: () => multerFallback }; // Add this line for fallback
   upload = { single: () => multerFallback };
   handleMulterError = (err, req, res, next) => next(err);
 }
