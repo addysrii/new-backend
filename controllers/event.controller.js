@@ -12,6 +12,30 @@ const mongoose = require('mongoose');
 const ObjectId = mongoose.Types.ObjectId;
 const moment = require('moment-timezone');
 const geolib = require('geolib');
+/**
+ * Get events for the current user (attending and hosting)
+ * @route GET /api/events/my
+ * @access Private
+ */
+exports.getMyEvents = async (req, res) => {
+  try {
+    // Get events where the user is attending or hosting
+    const myEvents = await Event.find({
+      $or: [
+        { 'attendees.user': req.user.id },
+        { createdBy: req.user.id }
+      ]
+    })
+    .populate('createdBy', 'firstName lastName username profileImage')
+    .populate('attendees.user', 'firstName lastName username profileImage')
+    .sort({ startDateTime: 1 });
+    
+    res.json(myEvents);
+  } catch (error) {
+    console.error('Get my events error:', error);
+    res.status(500).json({ error: 'Server error when retrieving your events' });
+  }
+};
 
 /**
  * Create a new event
