@@ -906,11 +906,11 @@ console.log('Setting up event routes...');
 if (eventController) {
   try {
     // Event management
-    app.post('/api/events', authenticateToken, upload.single('coverImage'), eventController.createEvent);
-    app.post('/api/events/recurrent', authenticateToken, upload.single('coverImage'), eventController.createRecurrentEvent);
+       app.post('/api/events', authenticateToken,eventUpload.single('coverImage'), eventController.createEvent);
+    app.post('/api/events/recurrent', authenticateToken, eventUpload.single('coverImage'), eventController.createRecurrentEvent);
     app.get('/api/events', authenticateToken, eventController.getEvents);
     app.get('/api/events/:eventId', authenticateToken, eventController.getEvent);
-    app.put('/api/events/:eventId', authenticateToken, upload.single('coverImage'), eventController.updateEvent);
+    app.put('/api/events/:eventId', authenticateToken, eventUpload.single('coverImage'), eventController.updateEvent);
     app.delete('/api/events/:eventId', authenticateToken, eventController.deleteEvent);
     
     // Event responses
@@ -928,7 +928,7 @@ if (eventController) {
     app.post('/api/events/:eventId/checkin-code', authenticateToken, eventController.generateCheckInCode);
     
     // Event media
-    app.post('/api/events/:eventId/photos', authenticateToken, upload.single('photo'), eventController.addEventPhoto);
+    app.post('/api/events/:eventId/photos', authenticateToken, eventUpload.single('photo'), eventController.addEventPhoto);
     app.get('/api/events/:eventId/photos', authenticateToken, eventController.getEventPhotos);
     app.delete('/api/events/:eventId/photos/:photoId', authenticateToken, eventController.removeEventPhoto);
     
