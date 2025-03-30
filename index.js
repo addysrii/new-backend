@@ -903,6 +903,8 @@ if (locationController) {
 
 // EVENT ROUTES
 // ==========================================
+// EVENT ROUTES
+// ==========================================
 console.log('Setting up event routes...');
 if (eventController) {
   try {
