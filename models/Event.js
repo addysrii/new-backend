@@ -95,38 +95,79 @@ const attendeeSchema = new Schema({
   },
   status: {
     type: String,
-    enum: ['going', 'maybe', 'invited', 'not_going'],
-    default: 'invited'
+    enum: ['going', 'maybe', 'declined', 'pending'],
+    default: 'pending'
   },
-  rsvpDate: {
+  role: {
+    type: String,
+    enum: ['host', 'attendee'],
+    default: 'attendee'
+  },
+  responseDate: {
     type: Date,
     default: Date.now
   },
-  checkedIn: {
-    type: Boolean,
-    default: false
+  message: String
+}, { _id: true });
+
+// Event Invite Schema (Embedded Document)
+const inviteSchema = new Schema({
+  user: {
+    type: Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
   },
-  checkedInAt: Date,
   invitedBy: {
     type: Schema.Types.ObjectId,
-    ref: 'User'
+    ref: 'User',
+    required: true
   },
-  plusOneCount: {
-    type: Number,
-    default: 0
+  invitedAt: {
+    type: Date,
+    default: Date.now
   },
-  notes: String
+  status: {
+    type: String,
+    enum: ['pending', 'responded'],
+    default: 'pending'
+  },
+  responseDate: Date,
+  message: String,
+  role: {
+    type: String,
+    enum: ['host', 'attendee'],
+    default: 'attendee'
+  }
+}, { _id: true });
+
+// Event Comment Schema (Embedded Document)
+const commentSchema = new Schema({
+  user: {
+    type: Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  content: {
+    type: String,
+    required: true
+  },
+  timestamp: {
+    type: Date,
+    default: Date.now
+  }
 }, { _id: true });
 
 // Event Schema
 const eventSchema = new Schema({
-  title: {
+  // Changed: title -> name to match controller
+  name: {
     type: String,
     required: true,
     trim: true
   },
   description: String,
-  organizer: {
+  // Changed: organizer -> createdBy to match controller
+  createdBy: {
     type: Schema.Types.ObjectId,
     ref: 'User',
     required: true
@@ -135,11 +176,13 @@ const eventSchema = new Schema({
     type: Schema.Types.ObjectId,
     ref: 'User'
   }],
-  startDate: {
+  // Changed: startDate -> startDateTime to match controller
+  startDateTime: {
     type: Date,
     required: true
   },
-  endDate: Date,
+  // Changed: endDate -> endDateTime to match controller
+  endDateTime: Date,
   timezone: String,
   allDay: {
     type: Boolean,
@@ -168,6 +211,12 @@ const eventSchema = new Schema({
     meetingPassword: String,
     provider: String
   },
+  // Added: Virtual field at top level to match controller
+  virtual: {
+    type: Boolean,
+    default: false
+  },
+  virtualMeetingLink: String,
   category: {
     type: String,
     enum: ['social', 'business', 'education', 'entertainment', 'family', 'health', 'hobbies', 'technology', 'other'],
@@ -181,6 +230,7 @@ const eventSchema = new Schema({
   },
   capacity: Number,
   attendees: [attendeeSchema],
+  invites: [inviteSchema], // Added: invites array for controller
   visibility: {
     type: String,
     enum: ['public', 'connections', 'private', 'unlisted'],
@@ -192,6 +242,10 @@ const eventSchema = new Schema({
     default: 'scheduled'
   },
   inviteOnly: {
+    type: Boolean,
+    default: false
+  },
+  requireApproval: {
     type: Boolean,
     default: false
   },
@@ -214,6 +268,20 @@ const eventSchema = new Schema({
       default: true
     }
   },
+  comments: [commentSchema], // Added: comments array for controller
+  photos: [{ // Added: photos array for controller
+    url: String,
+    filename: String,
+    uploadedBy: {
+      type: Schema.Types.ObjectId,
+      ref: 'User'
+    },
+    uploadedAt: {
+      type: Date,
+      default: Date.now
+    },
+    caption: String
+  }],
   discussionFeed: [{
     user: {
       type: Schema.Types.ObjectId,
@@ -229,6 +297,22 @@ const eventSchema = new Schema({
       default: Date.now
     }
   }],
+  checkInCode: String, // Added: for controller
+  checkInCount: { // Added: for controller
+    type: Number,
+    default: 0
+  },
+  eventSeries: { // Added: for series events
+    type: Schema.Types.ObjectId,
+    ref: 'EventSeries'
+  },
+  recurrenceInfo: { // Added: for series events
+    seriesId: {
+      type: Schema.Types.ObjectId,
+      ref: 'EventSeries'
+    },
+    position: Number
+  },
   remindersSent: {
     oneDay: {
       type: Boolean,
@@ -247,17 +331,18 @@ const eventSchema = new Schema({
     type: Date,
     default: Date.now
   },
-  updatedAt: {
-    type: Date,
-    default: Date.now
+  updatedAt: Date,
+  updatedBy: {
+    type: Schema.Types.ObjectId,
+    ref: 'User'
   }
 });
 
-// Indexes
-eventSchema.index({ title: 'text', description: 'text', tags: 'text' });
-eventSchema.index({ organizer: 1 });
-eventSchema.index({ startDate: 1 });
-eventSchema.index({ endDate: 1 });
+// Update indexes to match new field names
+eventSchema.index({ name: 'text', description: 'text', tags: 'text' });
+eventSchema.index({ createdBy: 1 });
+eventSchema.index({ startDateTime: 1 });
+eventSchema.index({ endDateTime: 1 });
 eventSchema.index({ 'location.coordinates': '2dsphere' });
 eventSchema.index({ 'location.city': 1, 'location.country': 1 });
 eventSchema.index({ category: 1 });
