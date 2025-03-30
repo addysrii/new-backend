@@ -908,12 +908,69 @@ if (locationController) {
 console.log('Setting up event routes...');
 if (eventController) {
   try {
-    // Event management
-     app.post('/api/events', authenticateToken,eventUpload.single('coverImage'), eventController.createEvent);
-    app.post('/api/events/recurrent', authenticateToken, eventUpload.single('coverImage'), eventController.createRecurrentEvent);
+    const multer = require('multer'); // Make sure to import multer
+    
+    // Event management - with error handling for file uploads
+    app.post('/api/events', authenticateToken, (req, res, next) => {
+      console.log('Event creation request fields:', Object.keys(req.body));
+      
+      eventUpload.single('coverImage')(req, res, (err) => {
+        if (err instanceof multer.MulterError) {
+          console.error('Multer error during event image upload:', err);
+          return res.status(400).json({ 
+            error: 'File upload error', 
+            details: err.message,
+            field: err.field,
+            message: 'Make sure you are using the field name "coverImage" for your event image upload'
+          });
+        } else if (err) {
+          console.error('Unknown error during event image upload:', err);
+          return res.status(500).json({ 
+            error: 'File upload failed',
+            message: err.message
+          });
+        }
+        next();
+      });
+    }, eventController.createEvent);
+
+    app.post('/api/events/recurrent', authenticateToken, (req, res, next) => {
+      eventUpload.single('coverImage')(req, res, (err) => {
+        if (err instanceof multer.MulterError) {
+          console.error('Multer error during recurrent event image upload:', err);
+          return res.status(400).json({ 
+            error: 'File upload error', 
+            details: err.message,
+            message: 'Make sure you are using the field name "coverImage" for your event image upload'
+          });
+        } else if (err) {
+          console.error('Unknown error during recurrent event image upload:', err);
+          return res.status(500).json({ error: 'File upload failed' });
+        }
+        next();
+      });
+    }, eventController.createRecurrentEvent);
+
     app.get('/api/events', authenticateToken, eventController.getEvents);
     app.get('/api/events/:eventId', authenticateToken, eventController.getEvent);
-    app.put('/api/events/:eventId', authenticateToken, eventUpload.single('coverImage'), eventController.updateEvent);
+    
+    app.put('/api/events/:eventId', authenticateToken, (req, res, next) => {
+      eventUpload.single('coverImage')(req, res, (err) => {
+        if (err instanceof multer.MulterError) {
+          console.error('Multer error during event update image upload:', err);
+          return res.status(400).json({ 
+            error: 'File upload error', 
+            details: err.message,
+            message: 'Make sure you are using the field name "coverImage" for your event image upload'
+          });
+        } else if (err) {
+          console.error('Unknown error during event update image upload:', err);
+          return res.status(500).json({ error: 'File upload failed' });
+        }
+        next();
+      });
+    }, eventController.updateEvent);
+    
     app.delete('/api/events/:eventId', authenticateToken, eventController.deleteEvent);
     
     // Event responses
@@ -931,7 +988,23 @@ if (eventController) {
     app.post('/api/events/:eventId/checkin-code', authenticateToken, eventController.generateCheckInCode);
     
     // Event media
-    app.post('/api/events/:eventId/photos', authenticateToken, eventUpload.single('photo'), eventController.addEventPhoto);
+    app.post('/api/events/:eventId/photos', authenticateToken, (req, res, next) => {
+      eventUpload.single('photo')(req, res, (err) => {
+        if (err instanceof multer.MulterError) {
+          console.error('Multer error during event photo upload:', err);
+          return res.status(400).json({ 
+            error: 'File upload error', 
+            details: err.message,
+            message: 'Make sure you are using the field name "photo" for your event photo upload'
+          });
+        } else if (err) {
+          console.error('Unknown error during event photo upload:', err);
+          return res.status(500).json({ error: 'File upload failed' });
+        }
+        next();
+      });
+    }, eventController.addEventPhoto);
+    
     app.get('/api/events/:eventId/photos', authenticateToken, eventController.getEventPhotos);
     app.delete('/api/events/:eventId/photos/:photoId', authenticateToken, eventController.removeEventPhoto);
     
@@ -952,7 +1025,6 @@ if (eventController) {
     app.get('/api/events/:eventId/suggested-users', authenticateToken, eventController.getSuggestedUsers);
     app.get('/api/events/:eventId/similar', authenticateToken, eventController.getSimilarEvents);
     
-    
     console.log('Event routes set up successfully');
   } catch (error) {
     console.error('Error setting up event routes:', error);
@@ -960,7 +1032,6 @@ if (eventController) {
 } else {
   console.log('Skipping event routes setup - controller not available');
 }
-
 // ==========================================
 // JOB ROUTES
 // ==========================================
