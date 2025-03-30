@@ -29,25 +29,7 @@ const createCloudinaryStorage = (folder, formats, transformations = []) => {
   });
 };
 
-// Create a factory function for upload middleware to reduce repetition
-const createUploadMiddleware = (storage, fileSize, maxFiles, allowedMimeTypes) => {
-  return multer({
-    storage: storage,
-    limits: {
-      fileSize: fileSize,
-      files: maxFiles
-    },
-    fileFilter: (req, file, cb) => {
-      if (allowedMimeTypes(file)) {
-        cb(null, true);
-      } else {
-        cb(new Error(`Invalid file type. Only ${allowedMimeTypes.description} are allowed.`), false);
-      }
-    }
-  });
-};
-
-// Define mime type validators with descriptions
+// Define mime type validators
 const mimeTypeValidators = {
   images: {
     validate: (file) => file.mimetype.startsWith('image/'),
@@ -71,6 +53,30 @@ const mimeTypeValidators = {
     },
     description: 'images, videos, and common document formats'
   }
+};
+
+// Create a factory function for upload middleware to reduce repetition
+const createUploadMiddleware = (storage, fileSize, maxFiles, validator) => {
+  return multer({
+    storage: storage,
+    limits: {
+      fileSize: fileSize,
+      files: maxFiles
+    },
+    fileFilter: (req, file, cb) => {
+      // Make sure validator is an object with a validate function
+      if (validator && typeof validator.validate === 'function') {
+        if (validator.validate(file)) {
+          cb(null, true);
+        } else {
+          cb(new Error(`Invalid file type. Only ${validator.description} are allowed.`), false);
+        }
+      } else {
+        // If no validator provided, accept all files
+        cb(null, true);
+      }
+    }
+  });
 };
 
 // Base Cloudinary storage for general uploads
@@ -164,6 +170,28 @@ const chatUpload = createUploadMiddleware(
   mimeTypeValidators.documents
 );
 
+// Handle multer errors gracefully
+const handleMulterError = (err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    console.error('Multer error:', err);
+    return res.status(400).json({
+      error: 'File upload error',
+      details: err.message,
+      code: err.code
+    });
+  }
+  
+  if (err) {
+    console.error('Unknown upload error:', err);
+    return res.status(500).json({
+      error: 'File upload failed',
+      message: err.message
+    });
+  }
+  
+  next();
+};
+
 module.exports = {
   cloudinary,
   upload,
@@ -173,5 +201,6 @@ module.exports = {
   imageUpload,
   evidenceUpload,
   eventUpload,
-  chatUpload
+  chatUpload,
+  handleMulterError
 };
