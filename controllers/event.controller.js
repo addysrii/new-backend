@@ -12,6 +12,7 @@ const mongoose = require('mongoose');
 const ObjectId = mongoose.Types.ObjectId;
 const moment = require('moment-timezone');
 const geolib = require('geolib');
+
 /**
  * Get events for the current user (attending and hosting)
  * @route GET /api/events/my
@@ -169,6 +170,7 @@ exports.createEvent = async (req, res) => {
     res.status(500).json({ error: 'Server error when creating event' });
   }
 };
+
 /**
  * Create a recurrent event
  * @route POST /api/events/recurrent
@@ -623,11 +625,6 @@ exports.getEvent = async (req, res) => {
  * @route PUT /api/events/:eventId
  * @access Private
  */
-/**
- * Update an event
- * @route PUT /api/events/:eventId
- * @access Private
- */
 exports.updateEvent = async (req, res) => {
   try {
     const { eventId } = req.params;
@@ -855,48 +852,6 @@ exports.updateEvent = async (req, res) => {
     res.status(500).json({ error: 'Server error when updating event' });
   }
 };
-    
-    // Populate updated event
-    const updatedEvent = await Event.findById(eventId)
-      .populate('createdBy', 'firstName lastName username profileImage headline')
-      .populate('attendees.user', 'firstName lastName username profileImage');
-    
-    // Notify attendees about updates
-    const attendeeIds = event.attendees
-      .filter(a => a.status === 'going' && a.user.toString() !== req.user.id)
-      .map(a => a.user.toString());
-    
-    if (attendeeIds.length > 0) {
-      // Create notifications
-      const notifications = attendeeIds.map(userId => ({
-        recipient: userId,
-        type: 'event_updated',
-        sender: req.user.id,
-        data: {
-          eventId: event._id,
-          eventName: event.name
-        },
-        timestamp: Date.now()
-      }));
-      
-      await Notification.insertMany(notifications);
-      
-      // Send socket events
-      attendeeIds.forEach(userId => {
-        socketEvents.emitToUser(userId, 'event_updated', {
-          eventId: event._id,
-          eventName: event.name,
-          updatedBy: req.user.id
-        });
-      });
-    }
-    
-    res.json(updatedEvent);
-  } catch (error) {
-    console.error('Update event error:', error);
-    res.status(500).json({ error: 'Server error when updating event' });
-  }
-};
 
 /**
  * Delete an event
@@ -966,6 +921,7 @@ exports.deleteEvent = async (req, res) => {
         });
       }
     } else {
+      // Notify attendees about cancellation
       // Notify attendees about cancellation
       const attendeeIds = event.attendees
         .filter(a => a.status === 'going' && a.user.toString() !== req.user.id)
@@ -1830,7 +1786,7 @@ exports.approveAttendee = async (req, res) => {
       .populate('attendees.user', 'firstName lastName username profileImage');
     
     res.json({
-      success: true,
+success: true,
       message: approved ? 'Attendee approved' : 'Attendee declined',
       attendees: updatedEvent.attendees.filter(a => a.status === 'going')
     });
@@ -2675,6 +2631,7 @@ exports.addEventComment = async (req, res) => {
  * @route GET /api/events/:eventId/comments
  * @access Private
  */
+
 exports.getEventComments = async (req, res) => {
   try {
     const { eventId } = req.params;
