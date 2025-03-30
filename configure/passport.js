@@ -1,135 +1,177 @@
-const passport = require('passport');
-const LocalStrategy = require('passport-local').Strategy;
-const GoogleStrategy = require('passport-google-oauth20').Strategy;
-const LinkedInStrategy = require('passport-linkedin-oauth2').Strategy;
-const{ User} = require('../models/User.js');
+const cloudinary = require('cloudinary').v2;
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
+const multer = require('multer');
 const dotenv = require('dotenv');
 
 dotenv.config();
 
-// Environment variables
-const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
-const LINKEDIN_CLIENT_ID = process.env.LINKEDIN_CLIENT_ID;
-const LINKEDIN_CLIENT_SECRET = process.env.LINKEDIN_CLIENT_SECRET;
-const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
-const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
-const REDIRECT_URI = `${BASE_URL}/auth/linkedin/callback`;
-
-// Passport serialization
-passport.serializeUser((user, done) => {
-  done(null, user.id);
+// Configure Cloudinary
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-passport.deserializeUser(async (id, done) => {
-  try {
-    const user = await User.findById(id);
-    done(null, user);
-  } catch (error) {
-    done(error, null);
-  }
-});
-// Local Strategy (add this to your passport.js file)
-passport.use(new LocalStrategy(
-  { usernameField: 'email' },
-  async (email, password, done) => {
-    try {
-      const user = await User.findOne({ email });
-      if (!user) {
-        return done(null, false, { message: 'Incorrect email or password' });
+// Create a factory function for storage configs to reduce repetition
+const createCloudinaryStorage = (folder, formats, transformations = []) => {
+  return new CloudinaryStorage({
+    cloudinary: cloudinary,
+    params: {
+      folder: folder,
+      resource_type: 'auto',
+      allowed_formats: formats,
+      transformation: [
+        { quality: 'auto' },
+        { fetch_format: 'auto' },
+        ...transformations
+      ]
+    }
+  });
+};
+
+// Create a factory function for upload middleware to reduce repetition
+const createUploadMiddleware = (storage, fileSize, maxFiles, allowedMimeTypes) => {
+  return multer({
+    storage: storage,
+    limits: {
+      fileSize: fileSize,
+      files: maxFiles
+    },
+    fileFilter: (req, file, cb) => {
+      if (allowedMimeTypes(file)) {
+        cb(null, true);
+      } else {
+        cb(new Error(`Invalid file type. Only ${allowedMimeTypes.description} are allowed.`), false);
       }
-      
-      const isMatch = await bcrypt.compare(password, user.password);
-      if (!isMatch) {
-        return done(null, false, { message: 'Incorrect email or password' });
-      }
-      
-      return done(null, user);
-    } catch (error) {
-      return done(error);
     }
+  });
+};
+
+// Define mime type validators with descriptions
+const mimeTypeValidators = {
+  images: {
+    validate: (file) => file.mimetype.startsWith('image/'),
+    description: 'images'
+  },
+  imagesAndVideos: {
+    validate: (file) => file.mimetype.startsWith('image/') || file.mimetype.startsWith('video/'),
+    description: 'images and videos'
+  },
+  documents: {
+    validate: (file) => {
+      const allowedMimeTypes = [
+        'image/jpeg', 'image/png', 'image/gif', 
+        'video/mp4', 'video/quicktime',
+        'application/pdf', 
+        'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'text/plain'
+      ];
+      return allowedMimeTypes.includes(file.mimetype);
+    },
+    description: 'images, videos, and common document formats'
   }
-));
+};
 
-// LinkedIn Strategy
-passport.use(new LinkedInStrategy({
-  clientID: LINKEDIN_CLIENT_ID,
-  clientSecret: LINKEDIN_CLIENT_SECRET,
-  callbackURL: `${BASE_URL}/auth/linkedin/callback`,
-  scope: ['profile', 'email'],
-  state: true
-}, async (accessToken, refreshToken, profile, done) => {
-  try {
-    let user = await User.findOne({ linkedinId: profile.id });
+// Base Cloudinary storage for general uploads
+const generalStorage = createCloudinaryStorage(
+  'app_uploads',
+  ['jpg', 'jpeg', 'png', 'gif', 'mp4', 'mov', 'avi', 'pdf', 'doc', 'docx']
+);
 
-    if (!user) {
-      user = await User.create({
-        linkedinId: profile.id,
-        email: profile.emails[0].value,
-        firstName: profile.name.givenName,
-        lastName: profile.name.familyName,
-        profilePicture: profile.photos[0]?.value,
-        authProvider: 'linkedin'
-      });
-    }
+// Profile picture storage
+const dpStorage = createCloudinaryStorage(
+  'dp', 
+  ['jpg', 'jpeg', 'png']
+);
 
-    return done(null, user);
-  } catch (error) {
-    console.error("Error in LinkedIn authentication:", error);
-    return done(error, null);
-  }
-}));
+// Post storage
+const postStorage = createCloudinaryStorage(
+  'posts',
+  ['jpg', 'jpeg', 'png', 'gif', 'mp4', 'mov']
+);
 
-// Google Strategy
-// Improved Google Strategy with explicit isNewUser flag
-passport.use(new GoogleStrategy({
-  clientID: GOOGLE_CLIENT_ID,
-  clientSecret: GOOGLE_CLIENT_SECRET,
-  callbackURL: `${BASE_URL}/auth/google/callback`,
-  scope: ['profile', 'email']
-}, async (accessToken, refreshToken, profile, done) => {
-  try {
-    if (!profile.id) {
-      return done(null, false, { message: 'Google authentication failed' });
-    }
+// Story storage
+const storyStorage = createCloudinaryStorage(
+  'stories',
+  ['jpg', 'jpeg', 'png', 'gif', 'mp4', 'mov'],
+  [{ quality: 'auto:good' }]
+);
 
-    const email = profile.emails?.[0]?.value || null;
+// Event storage
+const eventStorage = createCloudinaryStorage(
+  'events',
+  ['jpg', 'jpeg', 'png', 'gif'],
+  [{ quality: 'auto:good' }, { width: 1200, crop: 'limit' }]
+);
 
-    // Check if user already exists
-    let user = await User.findOne({ $or: [{ googleId: profile.id }, { email }] }).lean();
+// Chat attachment storage
+const chatAttachmentStorage = createCloudinaryStorage(
+  'chat_attachments',
+  ['jpg', 'jpeg', 'png', 'gif', 'mp4', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'txt']
+);
 
-    // Flag to track if this is a truly new user
-    let isNewUser = false;
+// Upload middleware configurations
+const upload = multer({ storage: generalStorage });
 
-    if (!user) {
-      // Create new user
-      user = await User.create({
-        googleId: profile.id,
-        email,
-        firstName: profile.name?.givenName || '',
-        lastName: profile.name?.familyName || '',
-        profilePicture: profile.photos?.[0]?.value || null,
-        authProvider: 'google',
-        createdAt: new Date(),
-      });
+const dpUpload = createUploadMiddleware(
+  dpStorage,
+  25 * 1024 * 1024, // 25MB
+  1,
+  mimeTypeValidators.images
+);
 
-      // Explicitly mark as new user
-      isNewUser = true;
-      console.log('New user created:', user._id);
-    } else if (!user.googleId) {
-      // Link Google ID to an existing email-based user
-      await User.findByIdAndUpdate(user._id, { googleId: profile.id }, { new: true });
-      console.log('Linked Google account to existing user:', user._id);
-    }
+const postUpload = createUploadMiddleware(
+  postStorage,
+  100 * 1024 * 1024, // 100MB
+  10,
+  mimeTypeValidators.imagesAndVideos
+);
 
-    // Attach isNewUser flag to the user object
-    user.isNewUser = isNewUser;
+// Now use the same function for imageUpload and evidenceUpload to ensure consistency
+const imageUpload = createUploadMiddleware(
+  postStorage,
+  100 * 1024 * 1024,
+  10,
+  mimeTypeValidators.imagesAndVideos
+);
 
-    return done(null, user);
-  } catch (error) {
-    console.error('Error in Google authentication:', error);
-    return done(error, null);
-  }
-}));
+const evidenceUpload = createUploadMiddleware(
+  postStorage,
+  100 * 1024 * 1024,
+  10,
+  mimeTypeValidators.imagesAndVideos
+);
 
+const storyUpload = createUploadMiddleware(
+  storyStorage,
+  50 * 1024 * 1024, // 50MB
+  1,
+  mimeTypeValidators.imagesAndVideos
+);
 
-module.exports = passport;
+const eventUpload = createUploadMiddleware(
+  eventStorage,
+  20 * 1024 * 1024, // 20MB
+  1,
+  mimeTypeValidators.images
+);
+
+const chatUpload = createUploadMiddleware(
+  chatAttachmentStorage,
+  25 * 1024 * 1024, // 25MB
+  1,
+  mimeTypeValidators.documents
+);
+
+module.exports = {
+  cloudinary,
+  upload,
+  dpUpload,
+  postUpload,
+  storyUpload,
+  imageUpload,
+  evidenceUpload,
+  eventUpload,
+  chatUpload
+};
