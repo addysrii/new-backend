@@ -26,23 +26,18 @@ exports.getMyEvents = async (req, res) => {
         { 'attendees.user': req.user.id },
         { createdBy: req.user.id }
       ]
-
-      status: 'going',
-      role: 'host',
-      timestamp: Date.now()
-    });
+    })
+    .populate('createdBy', 'firstName lastName username profileImage')
+    .populate('attendees.user', 'firstName lastName username profileImage')
+    .sort({ startDateTime: 1 });
     
-    // Populate creator info
-    const populatedEvent = await Event.findById(newEvent._id)
-      .populate('createdBy', 'firstName lastName username profileImage')
-      .populate('attendees.user', 'firstName lastName username profileImage');
-    
-    res.status(201).json(populatedEvent);
+    res.json(myEvents);
   } catch (error) {
-    console.error('Create event error:', error);
-    res.status(500).json({ error: 'Server error when creating event' });
+    console.error('Get my events error:', error);
+    res.status(500).json({ error: 'Server error when retrieving your events' });
   }
 };
+
 /**
  * Create a new event
  * @route POST /api/events
@@ -70,6 +65,14 @@ exports.createEvent = async (req, res) => {
       coverImageUrl, // Accept direct URL option
       coverImageFilename // Accept filename for URL option
     } = req.body;
+    
+    // Debug log
+    console.log('Creating event with params:', { 
+      name, startDateTime, endDateTime, 
+      virtual: virtual || false,
+      hasFile: !!req.file,
+      coverImageUrl: coverImageUrl || 'none'
+    });
     
     // Validate required fields
     if (!name || !startDateTime) {
@@ -128,20 +131,41 @@ exports.createEvent = async (req, res) => {
       try {
         // Validate file object
         if (typeof req.file === 'string') {
+          console.log('File object is a string:', req.file);
           return res.status(400).json({ error: 'Invalid file object: expected file object but received string' });
         }
         
         if (!req.file.path) {
+          console.log('File missing path property:', req.file);
           return res.status(400).json({ error: 'Invalid file object: missing path property' });
         }
         
-        // Upload to cloud storage
-        const uploadResult = await cloudStorage.uploadFile(req.file);
+        // Log file object for debugging
+        console.log('Processing file upload:', {
+          originalname: req.file.originalname,
+          path: req.file.path,
+          mimetype: req.file.mimetype,
+          size: req.file.size
+        });
         
-        newEvent.coverImage = {
-          url: uploadResult.url,
-          filename: req.file.originalname
-        };
+        // If file path is a URL, handle it differently
+        if (req.file.path.startsWith('http')) {
+          console.log('File path is already a URL:', req.file.path);
+          newEvent.coverImage = {
+            url: req.file.path,
+            filename: req.file.originalname || 'uploaded-image'
+          };
+        } else {
+          // Upload to cloud storage
+          console.log('Uploading file to cloud storage...');
+          const uploadResult = await cloudStorage.uploadFile(req.file);
+          console.log('Upload result:', uploadResult);
+          
+          newEvent.coverImage = {
+            url: uploadResult.url,
+            filename: req.file.originalname
+          };
+        }
       } catch (uploadError) {
         console.error('Event cover image upload error:', uploadError);
         // Continue creating the event without the cover image
@@ -149,6 +173,7 @@ exports.createEvent = async (req, res) => {
     } 
     // Handle cover image URL provided directly in request body
     else if (coverImageUrl) {
+      console.log('Using provided coverImageUrl:', coverImageUrl);
       newEvent.coverImage = {
         url: coverImageUrl,
         filename: coverImageFilename || 'external-image'
@@ -181,6 +206,12 @@ exports.createEvent = async (req, res) => {
     const populatedEvent = await Event.findById(newEvent._id)
       .populate('createdBy', 'firstName lastName username profileImage')
       .populate('attendees.user', 'firstName lastName username profileImage');
+    
+    console.log('Event created successfully:', {
+      id: populatedEvent._id,
+      name: populatedEvent.name,
+      hasCoverImage: !!populatedEvent.coverImage
+    });
     
     res.status(201).json(populatedEvent);
   } catch (error) {
