@@ -913,10 +913,12 @@ if (eventController) {
     // Event management routes with simple middleware
     app.post('/api/events', authenticateToken, eventUpload.single('coverImage'), eventController.createEvent);
     app.post('/api/events/recurrent', authenticateToken, eventUpload.single('coverImage'), eventController.createRecurrentEvent);
+        app.get('/api/events/my', authenticateToken, eventController.getMyEvents);
     app.get('/api/events', authenticateToken, eventController.getEvents);
     app.get('/api/events/:eventId', authenticateToken, eventController.getEvent);
     app.put('/api/events/:eventId', authenticateToken, eventUpload.single('coverImage'), eventController.updateEvent);
     app.delete('/api/events/:eventId', authenticateToken, eventController.deleteEvent);
+
     
     // Event responses
     app.post('/api/events/:eventId/respond', authenticateToken, eventController.respondToEvent);
