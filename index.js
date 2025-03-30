@@ -906,7 +906,7 @@ console.log('Setting up event routes...');
 if (eventController) {
   try {
     // Event management
-       app.post('/api/events', authenticateToken,eventUpload.single('coverImage'), eventController.createEvent);
+     app.post('/api/events', authenticateToken,eventUpload.single('coverImage'), eventController.createEvent);
     app.post('/api/events/recurrent', authenticateToken, eventUpload.single('coverImage'), eventController.createRecurrentEvent);
     app.get('/api/events', authenticateToken, eventController.getEvents);
     app.get('/api/events/:eventId', authenticateToken, eventController.getEvent);
@@ -948,6 +948,7 @@ if (eventController) {
     app.get('/api/events/:eventId/search-users', authenticateToken, eventController.searchUsersForInvite);
     app.get('/api/events/:eventId/suggested-users', authenticateToken, eventController.getSuggestedUsers);
     app.get('/api/events/:eventId/similar', authenticateToken, eventController.getSimilarEvents);
+    
     
     console.log('Event routes set up successfully');
   } catch (error) {
