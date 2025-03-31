@@ -1,0 +1,203 @@
+[2025-03-31T03:42:43.299Z] Starting imports for booking routes
+[2025-03-31T03:42:43.302Z] Importing auth middleware
+[2025-03-31T03:42:43.303Z] Attempting to import auth middleware from ../middleware/auth.middleware
+[2025-03-31T03:42:43.304Z] Successfully imported auth middleware
+[2025-03-31T03:42:43.305Z] Importing validation middleware
+[2025-03-31T03:42:43.305Z] Attempting to import validation middleware from ../middleware/validation.middleware
+[2025-03-31T03:42:43.306Z] Successfully imported validation middleware
+[2025-03-31T03:42:43.308Z] Importing booking controller
+[2025-03-31T03:42:43.309Z] Attempting to import booking controller from ../controllers/booking.controller
+[2025-03-31T03:42:43.698Z] Successfully imported booking controller
+[2025-03-31T03:42:43.699Z] MISSING controller method: getEventTicketTypes
+[2025-03-31T03:42:43.700Z] MISSING controller method: createTicketType
+[2025-03-31T03:42:43.701Z] MISSING controller method: updateTicketType
+[2025-03-31T03:42:43.703Z] Controller method exists: createBooking
+[2025-03-31T03:42:43.705Z] Controller method exists: getUserBookings
+[2025-03-31T03:42:43.709Z] Controller method exists: getBooking
+[2025-03-31T03:42:43.713Z] Controller method exists: cancelBooking
+[2025-03-31T03:42:43.714Z] Controller method exists: checkInTicket
+[2025-03-31T03:42:43.715Z] Controller method exists: transferTicket
+[2025-03-31T03:42:43.717Z] Controller method exists: downloadTicketPdf
+[2025-03-31T03:42:43.720Z] Controller method exists: getEventTickets
+[2025-03-31T03:42:43.722Z] Controller method exists: getEventBookingStats
+[2025-03-31T03:42:43.724Z] Controller method exists: generateEventReport
+[2025-03-31T03:42:43.727Z] Registering routes
+[2025-03-31T03:42:43.728Z] Registering ticket-types routes
+[2025-03-31T03:42:43.730Z] Registering booking routes
+[2025-03-31T03:42:43.731Z] Registering ticket routes
+[2025-03-31T03:42:43.732Z] Registering stats routes
+[2025-03-31T03:42:43.734Z] All routes registered successfully
+[2025-03-31T03:44:04.495Z] Starting imports for booking routes
+[2025-03-31T03:44:04.498Z] Importing auth middleware
+[2025-03-31T03:44:04.502Z] Attempting to import auth middleware from ../middleware/auth.middleware
+[2025-03-31T03:44:04.504Z] Successfully imported auth middleware
+[2025-03-31T03:44:04.506Z] Importing validation middleware
+[2025-03-31T03:44:04.509Z] Attempting to import validation middleware from ../middleware/validation.middleware
+[2025-03-31T03:44:04.512Z] Successfully imported validation middleware
+[2025-03-31T03:44:04.513Z] Importing booking controller
+[2025-03-31T03:44:04.514Z] Attempting to import booking controller from ../controllers/booking.controller
+[2025-03-31T03:44:04.910Z] Successfully imported booking controller
+[2025-03-31T03:44:04.911Z] MISSING controller method: getEventTicketTypes
+[2025-03-31T03:44:04.912Z] MISSING controller method: createTicketType
+[2025-03-31T03:44:04.913Z] MISSING controller method: updateTicketType
+[2025-03-31T03:44:04.913Z] Controller method exists: createBooking
+[2025-03-31T03:44:04.914Z] Controller method exists: getUserBookings
+[2025-03-31T03:44:04.915Z] Controller method exists: getBooking
+[2025-03-31T03:44:04.916Z] Controller method exists: cancelBooking
+[2025-03-31T03:44:04.917Z] Controller method exists: checkInTicket
+[2025-03-31T03:44:04.918Z] Controller method exists: transferTicket
+[2025-03-31T03:44:04.919Z] Controller method exists: downloadTicketPdf
+[2025-03-31T03:44:04.920Z] Controller method exists: getEventTickets
+[2025-03-31T03:44:04.921Z] Controller method exists: getEventBookingStats
+[2025-03-31T03:44:04.922Z] Controller method exists: generateEventReport
+[2025-03-31T03:44:04.923Z] Registering routes
+[2025-03-31T03:44:04.924Z] Registering ticket-types routes
+[2025-03-31T03:44:04.925Z] Registering booking routes
+[2025-03-31T03:44:04.927Z] Registering ticket routes
+[2025-03-31T03:44:04.928Z] Registering stats routes
+[2025-03-31T03:44:04.930Z] All routes registered successfully
+[2025-03-31T03:46:26.187Z] Starting imports for booking routes
+[2025-03-31T03:46:26.189Z] Importing auth middleware
+[2025-03-31T03:46:26.190Z] Attempting to import auth middleware from ../middleware/auth.middleware
+[2025-03-31T03:46:26.191Z] Successfully imported auth middleware
+[2025-03-31T03:46:26.192Z] Importing validation middleware
+[2025-03-31T03:46:26.193Z] Attempting to import validation middleware from ../middleware/validation.middleware
+[2025-03-31T03:46:26.195Z] Successfully imported validation middleware
+[2025-03-31T03:46:26.196Z] Importing booking controller
+[2025-03-31T03:46:26.197Z] Attempting to import booking controller from ../controllers/booking.controller
+[2025-03-31T03:46:26.642Z] Successfully imported booking controller
+[2025-03-31T03:46:26.644Z] MISSING controller method: getEventTicketTypes
+[2025-03-31T03:46:26.645Z] MISSING controller method: createTicketType
+[2025-03-31T03:46:26.645Z] MISSING controller method: updateTicketType
+[2025-03-31T03:46:26.646Z] Controller method exists: createBooking
+[2025-03-31T03:46:26.647Z] Controller method exists: getUserBookings
+[2025-03-31T03:46:26.648Z] Controller method exists: getBooking
+[2025-03-31T03:46:26.649Z] Controller method exists: cancelBooking
+[2025-03-31T03:46:26.650Z] Controller method exists: checkInTicket
+[2025-03-31T03:46:26.652Z] Controller method exists: transferTicket
+[2025-03-31T03:46:26.654Z] Controller method exists: downloadTicketPdf
+[2025-03-31T03:46:26.655Z] Controller method exists: getEventTickets
+[2025-03-31T03:46:26.656Z] Controller method exists: getEventBookingStats
+[2025-03-31T03:46:26.657Z] Controller method exists: generateEventReport
+[2025-03-31T03:46:26.665Z] Registering routes
+[2025-03-31T03:46:26.666Z] Registering ticket-types routes
+[2025-03-31T03:46:26.668Z] Registering booking routes
+[2025-03-31T03:46:26.669Z] Registering ticket routes
+[2025-03-31T03:46:26.689Z] Registering stats routes
+[2025-03-31T03:46:26.706Z] All routes registered successfully
+[2025-03-31T03:49:39.724Z] Starting imports for booking routes
+[2025-03-31T03:49:39.726Z] Importing auth middleware
+[2025-03-31T03:49:39.727Z] Attempting to import auth middleware from ../middleware/auth.middleware
+[2025-03-31T03:49:39.728Z] Successfully imported auth middleware
+[2025-03-31T03:49:39.729Z] Importing validation middleware
+[2025-03-31T03:49:39.730Z] Attempting to import validation middleware from ../middleware/validation.middleware
+[2025-03-31T03:49:39.736Z] Successfully imported validation middleware
+[2025-03-31T03:49:39.738Z] Importing booking controller
+[2025-03-31T03:49:39.741Z] Attempting to import booking controller from ../controllers/booking.controller
+[2025-03-31T03:49:40.133Z] Successfully imported booking controller
+[2025-03-31T03:49:40.135Z] MISSING controller method: getEventTicketTypes
+[2025-03-31T03:49:40.135Z] MISSING controller method: createTicketType
+[2025-03-31T03:49:40.136Z] MISSING controller method: updateTicketType
+[2025-03-31T03:49:40.137Z] Controller method exists: createBooking
+[2025-03-31T03:49:40.137Z] Controller method exists: getUserBookings
+[2025-03-31T03:49:40.139Z] Controller method exists: getBooking
+[2025-03-31T03:49:40.140Z] Controller method exists: cancelBooking
+[2025-03-31T03:49:40.141Z] Controller method exists: checkInTicket
+[2025-03-31T03:49:40.142Z] Controller method exists: transferTicket
+[2025-03-31T03:49:40.143Z] Controller method exists: downloadTicketPdf
+[2025-03-31T03:49:40.144Z] Controller method exists: getEventTickets
+[2025-03-31T03:49:40.145Z] Controller method exists: getEventBookingStats
+[2025-03-31T03:49:40.146Z] Controller method exists: generateEventReport
+[2025-03-31T03:49:40.147Z] Registering routes
+[2025-03-31T03:49:40.147Z] Registering ticket-types routes
+[2025-03-31T03:49:40.149Z] Registering booking routes
+[2025-03-31T03:49:40.151Z] Registering ticket routes
+[2025-03-31T03:49:40.153Z] Registering stats routes
+[2025-03-31T03:49:40.154Z] All routes registered successfully
+[2025-03-31T03:50:33.564Z] Starting imports for booking routes
+[2025-03-31T03:50:33.572Z] Importing auth middleware
+[2025-03-31T03:50:33.575Z] Attempting to import auth middleware from ../middleware/auth.middleware
+[2025-03-31T03:50:33.576Z] Successfully imported auth middleware
+[2025-03-31T03:50:33.581Z] Importing validation middleware
+[2025-03-31T03:50:33.585Z] Attempting to import validation middleware from ../middleware/validation.middleware
+[2025-03-31T03:50:33.587Z] Successfully imported validation middleware
+[2025-03-31T03:50:33.588Z] Importing booking controller
+[2025-03-31T03:50:33.589Z] Attempting to import booking controller from ../controllers/booking.controller
+[2025-03-31T03:50:33.994Z] Successfully imported booking controller
+[2025-03-31T03:50:33.995Z] MISSING controller method: getEventTicketTypes
+[2025-03-31T03:50:33.997Z] MISSING controller method: createTicketType
+[2025-03-31T03:50:33.998Z] MISSING controller method: updateTicketType
+[2025-03-31T03:50:34.000Z] Controller method exists: createBooking
+[2025-03-31T03:50:34.001Z] Controller method exists: getUserBookings
+[2025-03-31T03:50:34.005Z] Controller method exists: getBooking
+[2025-03-31T03:50:34.007Z] Controller method exists: cancelBooking
+[2025-03-31T03:50:34.009Z] Controller method exists: checkInTicket
+[2025-03-31T03:50:34.010Z] Controller method exists: transferTicket
+[2025-03-31T03:50:34.013Z] Controller method exists: downloadTicketPdf
+[2025-03-31T03:50:34.016Z] Controller method exists: getEventTickets
+[2025-03-31T03:50:34.020Z] Controller method exists: getEventBookingStats
+[2025-03-31T03:50:34.024Z] Controller method exists: generateEventReport
+[2025-03-31T03:50:34.028Z] Registering routes
+[2025-03-31T03:50:34.032Z] Registering ticket-types routes
+[2025-03-31T03:50:34.050Z] Registering booking routes
+[2025-03-31T03:50:34.054Z] Registering ticket routes
+[2025-03-31T03:50:34.057Z] Registering stats routes
+[2025-03-31T03:50:34.060Z] All routes registered successfully
+[2025-03-31T03:51:16.421Z] Starting imports for booking routes
+[2025-03-31T03:51:16.423Z] Importing auth middleware
+[2025-03-31T03:51:16.424Z] Attempting to import auth middleware from ../middleware/auth.middleware
+[2025-03-31T03:51:16.424Z] Successfully imported auth middleware
+[2025-03-31T03:51:16.425Z] Importing validation middleware
+[2025-03-31T03:51:16.426Z] Attempting to import validation middleware from ../middleware/validation.middleware
+[2025-03-31T03:51:16.427Z] Successfully imported validation middleware
+[2025-03-31T03:51:16.428Z] Importing booking controller
+[2025-03-31T03:51:16.429Z] Attempting to import booking controller from ../controllers/booking.controller
+[2025-03-31T03:51:16.702Z] Successfully imported booking controller
+[2025-03-31T03:51:16.703Z] MISSING controller method: getEventTicketTypes
+[2025-03-31T03:51:16.704Z] MISSING controller method: createTicketType
+[2025-03-31T03:51:16.705Z] MISSING controller method: updateTicketType
+[2025-03-31T03:51:16.706Z] Controller method exists: createBooking
+[2025-03-31T03:51:16.707Z] Controller method exists: getUserBookings
+[2025-03-31T03:51:16.708Z] Controller method exists: getBooking
+[2025-03-31T03:51:16.709Z] Controller method exists: cancelBooking
+[2025-03-31T03:51:16.710Z] Controller method exists: checkInTicket
+[2025-03-31T03:51:16.711Z] Controller method exists: transferTicket
+[2025-03-31T03:51:16.712Z] Controller method exists: downloadTicketPdf
+[2025-03-31T03:51:16.713Z] Controller method exists: getEventTickets
+[2025-03-31T03:51:16.715Z] Controller method exists: getEventBookingStats
+[2025-03-31T03:51:16.717Z] Controller method exists: generateEventReport
+[2025-03-31T03:51:16.718Z] Registering routes
+[2025-03-31T03:51:16.719Z] Registering ticket-types routes
+[2025-03-31T03:51:16.720Z] Registering booking routes
+[2025-03-31T03:51:16.722Z] Registering ticket routes
+[2025-03-31T03:51:16.723Z] Registering stats routes
+[2025-03-31T03:51:16.724Z] All routes registered successfully
+[2025-03-31T03:52:53.567Z] Starting imports for booking routes
+[2025-03-31T03:52:53.569Z] Importing auth middleware
+[2025-03-31T03:52:53.569Z] Attempting to import auth middleware from ../middleware/auth.middleware
+[2025-03-31T03:52:53.575Z] Successfully imported auth middleware
+[2025-03-31T03:52:53.576Z] Importing validation middleware
+[2025-03-31T03:52:53.577Z] Attempting to import validation middleware from ../middleware/validation.middleware
+[2025-03-31T03:52:53.578Z] Successfully imported validation middleware
+[2025-03-31T03:52:53.579Z] Importing booking controller
+[2025-03-31T03:52:53.579Z] Attempting to import booking controller from ../controllers/booking.controller
+[2025-03-31T03:52:53.831Z] Successfully imported booking controller
+[2025-03-31T03:52:53.832Z] MISSING controller method: getEventTicketTypes
+[2025-03-31T03:52:53.838Z] MISSING controller method: createTicketType
+[2025-03-31T03:52:53.839Z] MISSING controller method: updateTicketType
+[2025-03-31T03:52:53.842Z] Controller method exists: createBooking
+[2025-03-31T03:52:53.843Z] Controller method exists: getUserBookings
+[2025-03-31T03:52:53.844Z] Controller method exists: getBooking
+[2025-03-31T03:52:53.845Z] Controller method exists: cancelBooking
+[2025-03-31T03:52:53.846Z] Controller method exists: checkInTicket
+[2025-03-31T03:52:53.847Z] Controller method exists: transferTicket
+[2025-03-31T03:52:53.847Z] Controller method exists: downloadTicketPdf
+[2025-03-31T03:52:53.848Z] Controller method exists: getEventTickets
+[2025-03-31T03:52:53.849Z] Controller method exists: getEventBookingStats
+[2025-03-31T03:52:53.849Z] Controller method exists: generateEventReport
+[2025-03-31T03:52:53.850Z] Registering routes
+[2025-03-31T03:52:53.850Z] Registering ticket-types routes
+[2025-03-31T03:52:53.851Z] Registering booking routes
+[2025-03-31T03:52:53.852Z] Registering ticket routes
+[2025-03-31T03:52:53.853Z] Registering stats routes
+[2025-03-31T03:52:53.853Z] All routes registered successfully

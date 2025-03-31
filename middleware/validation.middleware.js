@@ -121,6 +121,184 @@ exports.eventValidationRules = () => {
 };
 
 /**
+ * Ticket type validation rules
+ */
+exports.ticketTypeValidationRules = () => {
+  const { body } = require('express-validator');
+  
+  return [
+    body('name')
+      .notEmpty()
+      .withMessage('Ticket type name is required'),
+      
+    body('price')
+      .isNumeric()
+      .withMessage('Price must be a number')
+      .isFloat({ min: 0 })
+      .withMessage('Price must be a positive number'),
+      
+    body('quantity')
+      .isInt({ min: 1 })
+      .withMessage('Quantity must be at least 1'),
+      
+    body('maxPerUser')
+      .optional()
+      .isInt({ min: 1 })
+      .withMessage('Maximum per user must be at least 1'),
+      
+    body('startSaleDate')
+      .optional()
+      .isISO8601()
+      .withMessage('Invalid start sale date format'),
+      
+    body('endSaleDate')
+      .optional()
+      .isISO8601()
+      .withMessage('Invalid end sale date format')
+      .custom((value, { req }) => {
+        if (req.body.startSaleDate && new Date(value) <= new Date(req.body.startSaleDate)) {
+          throw new Error('End sale date must be after start sale date');
+        }
+        return true;
+      })
+  ];
+};
+
+/**
+ * Booking validation rules
+ */
+exports.bookingValidationRules = () => {
+  const { body } = require('express-validator');
+  
+  return [
+    body('ticketSelections')
+      .isArray({ min: 1 })
+      .withMessage('At least one ticket must be selected'),
+      
+    body('ticketSelections.*.ticketTypeId')
+      .notEmpty()
+      .withMessage('Ticket type ID is required'),
+      
+    body('ticketSelections.*.quantity')
+      .isInt({ min: 1 })
+      .withMessage('Quantity must be at least 1'),
+      
+    body('paymentMethod')
+      .notEmpty()
+      .withMessage('Payment method is required')
+      .isIn(['phonepe', 'credit_card', 'debit_card', 'upi', 'bank_transfer'])
+      .withMessage('Invalid payment method'),
+      
+    body('contactInformation.email')
+      .isEmail()
+      .withMessage('Valid email is required for booking confirmation'),
+      
+    body('contactInformation.phone')
+      .optional()
+      .isMobilePhone()
+      .withMessage('Valid phone number is required')
+  ];
+};
+
+/**
+ * PhonePe payment validation rules
+ */
+exports.phonePePaymentValidationRules = () => {
+  const { body } = require('express-validator');
+  
+  return [
+    body('amount')
+      .isNumeric()
+      .withMessage('Amount must be a number')
+      .isFloat({ min: 1 })
+      .withMessage('Amount must be greater than 0'),
+      
+    body('bookingId')
+      .notEmpty()
+      .withMessage('Booking ID is required'),
+      
+    body('eventName')
+      .optional()
+      .isString()
+      .withMessage('Event name must be a string'),
+      
+    body('returnUrl')
+      .optional()
+      .isURL({ protocols: ['eventapp'] })
+      .withMessage('Return URL must be a valid URL scheme')
+  ];
+};
+
+/**
+ * PhonePe refund validation rules
+ */
+exports.refundValidationRules = () => {
+  const { body } = require('express-validator');
+  
+  return [
+    body('transactionId')
+      .notEmpty()
+      .withMessage('Transaction ID is required'),
+      
+    body('amount')
+      .isNumeric()
+      .withMessage('Amount must be a number')
+      .isFloat({ min: 0.01 })
+      .withMessage('Amount must be greater than 0'),
+      
+    body('reason')
+      .optional()
+      .isString()
+      .withMessage('Reason must be a string')
+  ];
+};
+
+/**
+ * Ticket check-in validation rules
+ */
+exports.ticketCheckInValidationRules = () => {
+  const { body } = require('express-validator');
+  
+  return [
+    body('qrData')
+      .optional()
+      .isString()
+      .withMessage('QR data must be a string'),
+      
+    body('verificationCode')
+      .optional()
+      .isString()
+      .withMessage('Verification code must be a string'),
+      
+    body()
+      .custom(value => {
+        if (!value.qrData && !value.verificationCode) {
+          throw new Error('Either QR data or verification code must be provided');
+        }
+        return true;
+      })
+  ];
+};
+
+/**
+ * Ticket transfer validation rules
+ */
+exports.ticketTransferValidationRules = () => {
+  const { body } = require('express-validator');
+  
+  return [
+    body('recipientEmail')
+      .isEmail()
+      .withMessage('Valid recipient email is required'),
+      
+    body('message')
+      .optional()
+      .isString()
+      .withMessage('Message must be a string')
+  ];
+};
+
+/**
  * Job validation rules
  */
 exports.jobValidationRules = () => {

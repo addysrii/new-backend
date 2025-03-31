@@ -36,84 +36,142 @@ class CloudinaryStorage {
    * @param {Object} file - The file to upload (from multer)
    * @returns {Promise<Object>} - File metadata
    */
-  async uploadFile(file) {
-    try {
-      // Generate a unique public ID to prevent collisions
-      const originalExtension = path.extname(file.originalname);
-      const filename = path.basename(file.originalname, originalExtension);
-      const sanitizedFilename = filename.replace(/[^a-zA-Z0-9]/g, '_');
-      const uniqueId = `${sanitizedFilename}_${Date.now()}_${uuidv4().substring(0, 8)}`;
-      
-      // Determine media type from mimetype
-      const mediaType = file.mimetype.split('/')[0]; // image, video, audio, application
-      
-      // Create folder structure based on media type and date
-      const date = new Date();
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const folder = `chat_uploads/${mediaType}/${year}/${month}`;
-      
-      // Calculate content hash for integrity verification
-      const fileBuffer = await readFile(file.path);
-      const hashSum = crypto.createHash('sha256');
-      hashSum.update(fileBuffer);
-      const contentHash = hashSum.digest('hex');
-      
-      // Set Cloudinary upload options
-      const uploadOptions = {
-        folder,
-        public_id: uniqueId,
-        resource_type: 'auto', // Let Cloudinary detect the resource type
-        overwrite: false,
-        use_filename: true,
-        unique_filename: true,
-        access_mode: 'authenticated', // Require authentication
-        type: 'authenticated', // Private access mode
-        format: path.extname(file.originalname).substring(1) || undefined,
-        transformation: [
-          // Add watermark for traceability (optional)
-          // { overlay: 'meetkats_watermark', gravity: 'south_east', opacity: 30 }
-        ],
-        // Add metadata for tracking
-        context: `alt=${file.originalname}|hash=${contentHash.substring(0, 16)}|uploadedat=${Date.now()}`
-      };
-      
-      // Upload to Cloudinary
-      const uploadResult = await new Promise((resolve, reject) => {
-        cloudinary.uploader.upload(file.path, uploadOptions, (error, result) => {
-          if (error) {
-            reject(error);
-          } else {
-            resolve(result);
-          }
-        });
-      });
-      
-      // Clean up the temp file
-      await unlink(file.path);
-      
-      // Return the file metadata
-      return {
-        url: uploadResult.secure_url,
-        publicId: uploadResult.public_id,
-        contentType: file.mimetype,
-        size: file.size,
-        originalName: file.originalname,
-        contentHash,
-        storageType: 'cloudinary',
-        createdAt: new Date(),
-        assetId: uploadResult.asset_id,
-        resourceType: uploadResult.resource_type,
-        width: uploadResult.width,
-        height: uploadResult.height,
-        format: uploadResult.format,
-        version: uploadResult.version
-      };
-    } catch (error) {
-      logger.error(`Cloudinary upload error: ${error.message}`);
-      throw error;
+ 
+  // In cloudStorage.js (paste-2.txt), update the uploadFile function to check for URLs and handle them appropriately
+
+async uploadFile(file) {
+  try {
+    // Validate input is a proper file object, not a URL string by itself
+    if (!file || (typeof file === 'string' && file.startsWith('http'))) {
+      throw new Error('Invalid file object provided to uploadFile. Expected a multer file object with path property.');
     }
+    
+    // Handle case where req.file might contain a URL instead of a local path
+    if (file.path && typeof file.path === 'string' && file.path.startsWith('http')) {
+      // If it's already a Cloudinary URL, return it without re-uploading
+      if (file.path.includes('cloudinary.com')) {
+        logger.info('File is already a Cloudinary URL, skipping upload');
+        
+        // Extract public ID from URL for potential future operations
+        const urlParts = file.path.split('/');
+        const filenameWithExt = urlParts[urlParts.length - 1];
+        const filename = filenameWithExt.split('.')[0];
+        
+        return {
+          url: file.path,
+          publicId: filename,
+          contentType: file.mimetype || 'image/jpeg',
+          size: file.size || 0,
+          originalName: file.originalname || filenameWithExt,
+          storageType: 'cloudinary',
+          createdAt: new Date()
+        };
+      }
+      
+      // If it's a URL but not from Cloudinary, throw an error
+      throw new Error(`Invalid file path: ${file.path}. Expected a local file path, not a URL.`);
+    }
+    
+    // Check if file exists on disk
+    try {
+      await fs.promises.access(file.path, fs.constants.F_OK);
+    } catch (err) {
+      throw new Error(`File does not exist at path: ${file.path}`);
+    }
+    
+    // Generate a unique public ID to prevent collisions
+    const originalExtension = path.extname(file.originalname);
+    const filename = path.basename(file.originalname, originalExtension);
+    const sanitizedFilename = filename.replace(/[^a-zA-Z0-9]/g, '_');
+    const uniqueId = `${sanitizedFilename}_${Date.now()}_${uuidv4().substring(0, 8)}`;
+    
+    // Rest of the original function...
+    
+    // Determine media type from mimetype
+    const mediaType = file.mimetype.split('/')[0]; // image, video, audio, application
+    
+    // Create folder structure based on media type and date
+    const date = new Date();
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const folder = `chat_uploads/${mediaType}/${year}/${month}`;
+    
+    // Calculate content hash for integrity verification
+    const fileBuffer = await readFile(file.path);
+    const hashSum = crypto.createHash('sha256');
+    hashSum.update(fileBuffer);
+    const contentHash = hashSum.digest('hex');
+    
+    // Set Cloudinary upload options
+    const uploadOptions = {
+      folder,
+      public_id: uniqueId,
+      resource_type: 'auto', // Let Cloudinary detect the resource type
+      overwrite: false,
+      use_filename: true,
+      unique_filename: true,
+      access_mode: 'authenticated', // Require authentication
+      type: 'authenticated', // Private access mode
+      format: path.extname(file.originalname).substring(1) || undefined,
+      // Add metadata for tracking
+      context: `alt=${file.originalname}|hash=${contentHash.substring(0, 16)}|uploadedat=${Date.now()}`
+    };
+    
+    // Upload to Cloudinary
+    const uploadResult = await new Promise((resolve, reject) => {
+      cloudinary.uploader.upload(file.path, uploadOptions, (error, result) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve(result);
+        }
+      });
+    });
+    
+    // Clean up the temp file
+    try {
+      await unlink(file.path);
+    } catch (unlinkError) {
+      // Log but don't fail if temp file can't be deleted
+      logger.warn(`Failed to delete temp file: ${file.path}`, unlinkError);
+    }
+    
+    // Return the file metadata
+    return {
+      url: uploadResult.secure_url,
+      publicId: uploadResult.public_id,
+      contentType: file.mimetype,
+      size: file.size,
+      originalName: file.originalname,
+      contentHash,
+      storageType: 'cloudinary',
+      createdAt: new Date(),
+      assetId: uploadResult.asset_id,
+      resourceType: uploadResult.resource_type,
+      width: uploadResult.width,
+      height: uploadResult.height,
+      format: uploadResult.format,
+      version: uploadResult.version
+    };
+  } catch (error) {
+    logger.error(`Cloudinary upload error: ${error.message}`, {
+      file: file?.originalname || 'unknown',
+      path: file?.path || 'missing',
+      errorStack: error.stack
+    });
+    
+    // Attempt to clean up temp file even on error
+    if (file && file.path && typeof file.path === 'string' && !file.path.startsWith('http')) {
+      try {
+        await unlink(file.path).catch(() => {});
+      } catch (unlinkError) {
+        // Ignore unlink errors
+      }
+    }
+    
+    throw error;
   }
+}
   
   /**
    * Upload a file with enhanced security measures
@@ -124,6 +182,11 @@ class CloudinaryStorage {
    */
   async uploadSecureFile(file, options = {}) {
     try {
+      // Validate input is a proper file object, not a URL
+      if (!file || typeof file === 'string' || !file.path) {
+        throw new Error('Invalid file object provided to uploadSecureFile. Expected a multer file object with path property.');
+      }
+      
       const { userId, chatId, accessControl = {} } = options;
       
       // Basic upload first
@@ -178,7 +241,11 @@ class CloudinaryStorage {
         expiresAt: new Date(Date.now() + 3600 * 1000)
       };
     } catch (error) {
-      logger.error(`Secure file upload error: ${error.message}`);
+      logger.error(`Secure file upload error: ${error.message}`, {
+        file: file?.originalname || 'unknown',
+        path: file?.path || 'missing',
+        errorStack: error.stack
+      });
       throw error;
     }
   }
@@ -280,7 +347,7 @@ class CloudinaryStorage {
         });
         
         if (!secureFile) {
-          logger.security.warn(`No security metadata found for file access: ${publicId}`, { userId });
+          logger.warn(`No security metadata found for file access: ${publicId}`, { userId });
           return false;
         }
         
@@ -288,7 +355,7 @@ class CloudinaryStorage {
         const fileChat = secureFile.chatId;
         
         if (!fileChat) {
-          logger.security.warn(`File has no associated chat: ${publicId}`, { userId });
+          logger.warn(`File has no associated chat: ${publicId}`, { userId });
           return false;
         }
         
@@ -296,13 +363,13 @@ class CloudinaryStorage {
         const isParticipant = await this.isUserInChat(userId, fileChat);
         
         if (!isParticipant) {
-          logger.security.warn(`User is not a participant in the chat: ${publicId}`, { userId, chatId: fileChat });
+          logger.warn(`User is not a participant in the chat: ${publicId}`, { userId, chatId: fileChat });
           return false;
         }
         
         // Check if downloads are allowed
         if (!secureFile.accessControl.allowDownloads) {
-          logger.security.warn(`Downloads are not allowed for this file: ${publicId}`, { userId });
+          logger.warn(`Downloads are not allowed for this file: ${publicId}`, { userId });
           return false;
         }
         
@@ -343,7 +410,7 @@ class CloudinaryStorage {
       }
       
       // Also log for security auditing
-      logger.security.info(`File access: ${action}`, {
+      logger.info(`File access: ${action}`, {
         publicId,
         userId,
         action
@@ -389,6 +456,11 @@ class CloudinaryStorage {
    */
   async deleteFile(publicId) {
     try {
+      // Validate input
+      if (!publicId || typeof publicId !== 'string') {
+        throw new Error('Invalid publicId provided to deleteFile');
+      }
+      
       // Delete from Cloudinary
       const result = await new Promise((resolve, reject) => {
         cloudinary.uploader.destroy(publicId, (error, result) => {
@@ -424,6 +496,11 @@ class CloudinaryStorage {
    */
   async transformMedia(publicId, options = {}) {
     try {
+      // Validate input
+      if (!publicId || typeof publicId !== 'string') {
+        throw new Error('Invalid publicId provided to transformMedia');
+      }
+      
       const { 
         blur = false, 
         pixelate = false,
@@ -499,6 +576,11 @@ class CloudinaryStorage {
    */
   async createSelfDestructingLink(publicId, options = {}) {
     try {
+      // Validate input
+      if (!publicId || typeof publicId !== 'string') {
+        throw new Error('Invalid publicId provided to createSelfDestructingLink');
+      }
+      
       const { 
         userId, 
         expirationSeconds = 60, // Short-lived by default
@@ -543,7 +625,7 @@ class CloudinaryStorage {
       }
       
       // Log link creation
-      logger.security.info(`Self-destructing link created for ${publicId}`, {
+      logger.info(`Self-destructing link created for ${publicId}`, {
         userId,
         publicId,
         expirationSeconds,

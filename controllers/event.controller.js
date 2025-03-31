@@ -14,6 +14,31 @@ const moment = require('moment-timezone');
 const geolib = require('geolib');
 
 /**
+ * Get events for the current user (attending and hosting)
+ * @route GET /api/events/my
+ * @access Private
+ */
+exports.getMyEvents = async (req, res) => {
+  try {
+    // Get events where the user is attending or hosting
+    const myEvents = await Event.find({
+      $or: [
+        { 'attendees.user': req.user.id },
+        { createdBy: req.user.id }
+      ]
+    })
+    .populate('createdBy', 'firstName lastName username profileImage')
+    .populate('attendees.user', 'firstName lastName username profileImage')
+    .sort({ startDateTime: 1 });
+    
+    res.json(myEvents);
+  } catch (error) {
+    console.error('Get my events error:', error);
+    res.status(500).json({ error: 'Server error when retrieving your events' });
+  }
+};
+
+/**
  * Create a new event
  * @route POST /api/events
  * @access Private
@@ -36,8 +61,18 @@ exports.createEvent = async (req, res) => {
       visibility,
       category,
       tags,
-      requireApproval
+      requireApproval,
+      coverImageUrl, // Accept direct URL option
+      coverImageFilename // Accept filename for URL option
     } = req.body;
+    
+    // Debug log
+    console.log('Creating event with params:', { 
+      name, startDateTime, endDateTime, 
+      virtual: virtual || false,
+      hasFile: !!req.file,
+      coverImageUrl: coverImageUrl || 'none'
+    });
     
     // Validate required fields
     if (!name || !startDateTime) {
@@ -91,14 +126,57 @@ exports.createEvent = async (req, res) => {
       newEvent.tags = tags.map(tag => tag.trim().toLowerCase());
     }
     
-    // Handle cover image
+    // Handle cover image - first check for uploaded file
     if (req.file) {
-      // Upload to cloud storage
-      const uploadResult = await cloudStorage.uploadFile(req.file);
-      
+      try {
+        // Validate file object
+        if (typeof req.file === 'string') {
+          console.log('File object is a string:', req.file);
+          return res.status(400).json({ error: 'Invalid file object: expected file object but received string' });
+        }
+        
+        if (!req.file.path) {
+          console.log('File missing path property:', req.file);
+          return res.status(400).json({ error: 'Invalid file object: missing path property' });
+        }
+        
+        // Log file object for debugging
+        console.log('Processing file upload:', {
+          originalname: req.file.originalname,
+          path: req.file.path,
+          mimetype: req.file.mimetype,
+          size: req.file.size
+        });
+        
+        // If file path is a URL, handle it differently
+        if (req.file.path.startsWith('http')) {
+          console.log('File path is already a URL:', req.file.path);
+          newEvent.coverImage = {
+            url: req.file.path,
+            filename: req.file.originalname || 'uploaded-image'
+          };
+        } else {
+          // Upload to cloud storage
+          console.log('Uploading file to cloud storage...');
+          const uploadResult = await cloudStorage.uploadFile(req.file);
+          console.log('Upload result:', uploadResult);
+          
+          newEvent.coverImage = {
+            url: uploadResult.url,
+            filename: req.file.originalname
+          };
+        }
+      } catch (uploadError) {
+        console.error('Event cover image upload error:', uploadError);
+        // Continue creating the event without the cover image
+      }
+    } 
+    // Handle cover image URL provided directly in request body
+    else if (coverImageUrl) {
+      console.log('Using provided coverImageUrl:', coverImageUrl);
       newEvent.coverImage = {
-        url: uploadResult.url,
-        filename: req.file.originalname
+        url: coverImageUrl,
+        filename: coverImageFilename || 'external-image'
       };
     }
     
@@ -128,6 +206,12 @@ exports.createEvent = async (req, res) => {
     const populatedEvent = await Event.findById(newEvent._id)
       .populate('createdBy', 'firstName lastName username profileImage')
       .populate('attendees.user', 'firstName lastName username profileImage');
+    
+    console.log('Event created successfully:', {
+      id: populatedEvent._id,
+      name: populatedEvent.name,
+      hasCoverImage: !!populatedEvent.coverImage
+    });
     
     res.status(201).json(populatedEvent);
   } catch (error) {
@@ -606,7 +690,8 @@ exports.updateEvent = async (req, res) => {
       category,
       tags,
       requireApproval,
-      updateSeries
+      updateSeries,
+      keepExistingImage
     } = req.body;
     
     // Get event
@@ -681,14 +766,30 @@ exports.updateEvent = async (req, res) => {
       event.tags = tags.map(tag => tag.trim().toLowerCase());
     }
     
-    // Handle cover image
+    // Handle cover image update
     if (req.file) {
-      // Upload to cloud storage
-      const uploadResult = await cloudStorage.uploadFile(req.file);
+      // Validate that req.file is a proper file object, not a string URL
+      if (typeof req.file === 'string' || !req.file.path) {
+        return res.status(400).json({ error: 'Invalid file object provided for upload' });
+      }
       
+      try {
+        // Upload to cloud storage
+        const uploadResult = await cloudStorage.uploadFile(req.file);
+        
+        event.coverImage = {
+          url: uploadResult.url,
+          filename: req.file.originalname
+        };
+      } catch (uploadError) {
+        console.error('Event cover image update error:', uploadError);
+        // Continue updating the event without changing the cover image
+      }
+    } else if (req.body.coverImageUrl && !keepExistingImage) {
+      // If a URL is provided in the request body (but not a file)
       event.coverImage = {
-        url: uploadResult.url,
-        filename: req.file.originalname
+        url: req.body.coverImageUrl,
+        filename: req.body.coverImageFilename || 'external-image'
       };
     }
     
@@ -744,7 +845,7 @@ exports.updateEvent = async (req, res) => {
           }
           
           // Copy cover image if provided
-          if (req.file) {
+          if (event.coverImage) {
             futureEvent.coverImage = { ...event.coverImage };
           }
           
@@ -869,6 +970,7 @@ exports.deleteEvent = async (req, res) => {
         });
       }
     } else {
+      // Notify attendees about cancellation
       // Notify attendees about cancellation
       const attendeeIds = event.attendees
         .filter(a => a.status === 'going' && a.user.toString() !== req.user.id)
@@ -1733,7 +1835,7 @@ exports.approveAttendee = async (req, res) => {
       .populate('attendees.user', 'firstName lastName username profileImage');
     
     res.json({
-      success: true,
+success: true,
       message: approved ? 'Attendee approved' : 'Attendee declined',
       attendees: updatedEvent.attendees.filter(a => a.status === 'going')
     });
@@ -2578,6 +2680,7 @@ exports.addEventComment = async (req, res) => {
  * @route GET /api/events/:eventId/comments
  * @access Private
  */
+
 exports.getEventComments = async (req, res) => {
   try {
     const { eventId } = req.params;

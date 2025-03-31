@@ -258,8 +258,9 @@ try {
 }
 
 // Import upload middleware with error handling
+// Import upload middleware with error handling
 console.log('Importing cloudinary configuration...');
-let dpUpload, postUpload, chatUpload, storyUpload, upload, handleMulterError, imageUpload, evidenceUpload;
+let dpUpload, postUpload, chatUpload, storyUpload, upload, handleMulterError, imageUpload, evidenceUpload, eventUpload;
 
 try {
   const cloudinaryConfig = require('./configure/cloudinary');
@@ -269,6 +270,7 @@ try {
   storyUpload = cloudinaryConfig.storyUpload;
   imageUpload = cloudinaryConfig.imageUpload;
   evidenceUpload = cloudinaryConfig.evidenceUpload;
+  eventUpload = cloudinaryConfig.eventUpload; // Add this line to import eventUpload
   upload = cloudinaryConfig.upload;
   handleMulterError = cloudinaryConfig.handleMulterError;
   console.log('Cloudinary configuration imported successfully');
@@ -284,6 +286,7 @@ try {
   storyUpload = { single: () => multerFallback };
   imageUpload = { array: () => multerFallback };
   evidenceUpload = { array: () => multerFallback };
+  eventUpload = { single: () => multerFallback }; // Add this line for fallback
   upload = { single: () => multerFallback };
   handleMulterError = (err, req, res, next) => next(err);
 }
@@ -455,7 +458,8 @@ try {
     ENABLE_METRICS: false
   };
 }
-
+app.use('/api/bookings', require('./routes/bookings.routes'));
+app.use('/api/payments', require('./routes/payments.routes'))
 // AUTH ROUTES
 // ==========================================
 console.log('Setting up auth routes...');
@@ -898,56 +902,53 @@ if (locationController) {
   console.log('Skipping location routes setup - controller not available');
 }
 
+// EVENT ROUTES
 // ==========================================
 // EVENT ROUTES
 // ==========================================
-// Event routes
 console.log('Setting up event routes...');
 if (eventController) {
   try {
-    // Event management
-    app.post('/api/events', authenticateToken, upload.single('coverImage'), eventController.createEvent);
-    app.post('/api/events/recurrent', authenticateToken, upload.single('coverImage'), eventController.createRecurrentEvent);
+    const multer = require('multer'); // Make sure to import multer
+    
+    // First: Define specific non-parameterized routes
+    app.get('/api/events/my', authenticateToken, eventController.getMyEvents);
+    app.post('/api/events/recurrent', authenticateToken, eventUpload.single('coverImage'), eventController.createRecurrentEvent);
+    
+    // Second: Define general routes
     app.get('/api/events', authenticateToken, eventController.getEvents);
+    app.post('/api/events', authenticateToken, eventUpload.single('coverImage'), eventController.createEvent);
+    
+    // Third: Define parameter-based routes
     app.get('/api/events/:eventId', authenticateToken, eventController.getEvent);
-    app.put('/api/events/:eventId', authenticateToken, upload.single('coverImage'), eventController.updateEvent);
+    app.put('/api/events/:eventId', authenticateToken, eventUpload.single('coverImage'), eventController.updateEvent);
     app.delete('/api/events/:eventId', authenticateToken, eventController.deleteEvent);
     
-    // Event responses
-    app.post('/api/events/:eventId/respond', authenticateToken, eventController.respondToEvent);
-    app.get('/api/events/:eventId/attendees', authenticateToken, eventController.getEventAttendees);
-    app.post('/api/events/:eventId/invite', authenticateToken, eventController.inviteToEvent);
-    app.post('/api/events/:eventId/check-in', authenticateToken, eventController.checkInToEvent);
-    
-    // Attendee management
-    app.put('/api/events/:eventId/attendees/:userId/role', authenticateToken, eventController.updateAttendeeRole);
-    app.put('/api/events/:eventId/attendees/:userId/approve', authenticateToken, eventController.approveAttendee);
-    app.delete('/api/events/:eventId/attendees/:userId', authenticateToken, eventController.removeAttendee);
-    
-    // Event check-in
-    app.post('/api/events/:eventId/checkin-code', authenticateToken, eventController.generateCheckInCode);
-    
-    // Event media
-    app.post('/api/events/:eventId/photos', authenticateToken, upload.single('photo'), eventController.addEventPhoto);
-    app.get('/api/events/:eventId/photos', authenticateToken, eventController.getEventPhotos);
-    app.delete('/api/events/:eventId/photos/:photoId', authenticateToken, eventController.removeEventPhoto);
-    
-    // Event analytics and exports
-    app.get('/api/events/:eventId/analytics', authenticateToken, eventController.getEventAnalytics);
-    app.get('/api/events/:eventId/export', authenticateToken, eventController.exportEventAttendees);
-    
-    // Event calendar
-    app.post('/api/events/:eventId/calendar', authenticateToken, eventController.addToCalendar);
-    
-    // Event comments
-    app.post('/api/events/:eventId/comments', authenticateToken, eventController.addEventComment);
-    app.get('/api/events/:eventId/comments', authenticateToken, eventController.getEventComments);
-    app.delete('/api/events/:eventId/comments/:commentId', authenticateToken, eventController.deleteEventComment);
-    
-    // Suggested users and similar events
+    // Fourth: Define nested routes with specific endpoints first
     app.get('/api/events/:eventId/search-users', authenticateToken, eventController.searchUsersForInvite);
     app.get('/api/events/:eventId/suggested-users', authenticateToken, eventController.getSuggestedUsers);
     app.get('/api/events/:eventId/similar', authenticateToken, eventController.getSimilarEvents);
+    app.get('/api/events/:eventId/analytics', authenticateToken, eventController.getEventAnalytics);
+    app.get('/api/events/:eventId/export', authenticateToken, eventController.exportEventAttendees);
+    app.get('/api/events/:eventId/attendees', authenticateToken, eventController.getEventAttendees);
+    app.get('/api/events/:eventId/photos', authenticateToken, eventController.getEventPhotos);
+    app.get('/api/events/:eventId/comments', authenticateToken, eventController.getEventComments);
+    
+    // Event responses and interactions
+    app.post('/api/events/:eventId/respond', authenticateToken, eventController.respondToEvent);
+    app.post('/api/events/:eventId/invite', authenticateToken, eventController.inviteToEvent);
+    app.post('/api/events/:eventId/check-in', authenticateToken, eventController.checkInToEvent);
+    app.post('/api/events/:eventId/checkin-code', authenticateToken, eventController.generateCheckInCode);
+    app.post('/api/events/:eventId/calendar', authenticateToken, eventController.addToCalendar);
+    app.post('/api/events/:eventId/comments', authenticateToken, eventController.addEventComment);
+    app.post('/api/events/:eventId/photos', authenticateToken, eventUpload.single('photo'), eventController.addEventPhoto);
+    
+    // Finally: Define nested routes with parameters
+    app.put('/api/events/:eventId/attendees/:userId/role', authenticateToken, eventController.updateAttendeeRole);
+    app.put('/api/events/:eventId/attendees/:userId/approve', authenticateToken, eventController.approveAttendee);
+    app.delete('/api/events/:eventId/attendees/:userId', authenticateToken, eventController.removeAttendee);
+    app.delete('/api/events/:eventId/photos/:photoId', authenticateToken, eventController.removeEventPhoto);
+    app.delete('/api/events/:eventId/comments/:commentId', authenticateToken, eventController.deleteEventComment);
     
     console.log('Event routes set up successfully');
   } catch (error) {
@@ -956,7 +957,6 @@ if (eventController) {
 } else {
   console.log('Skipping event routes setup - controller not available');
 }
-
 // ==========================================
 // JOB ROUTES
 // ==========================================
