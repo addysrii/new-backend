@@ -124,6 +124,11 @@ exports.requestConnection = async (req, res) => {
  * @route POST /api/connections/accept
  * @access Private
  */
+/**
+ * Accept a connection request
+ * @route POST /api/connections/requests/:requestId/accept
+ * @access Private
+ */
 exports.acceptConnection = async (req, res) => {
   try {
     // Get the request ID from the URL parameter instead of the body
@@ -140,7 +145,73 @@ exports.acceptConnection = async (req, res) => {
       return res.status(404).json({ error: 'Connection request not found' });
     }
     
-    // Rest of your existing implementation...
+    // Check if user is the recipient
+    if (connectionRequest.recipient.toString() !== req.user.id) {
+      return res.status(403).json({ error: 'Cannot accept a request not sent to you' });
+    }
+    
+    // Check if already processed
+    if (connectionRequest.status !== 'pending') {
+      return res.status(400).json({ error: 'This request has already been processed' });
+    }
+    
+    // Update request status
+    connectionRequest.status = 'accepted';
+    connectionRequest.respondedAt = Date.now();
+    
+    await connectionRequest.save();
+    
+    // Create connection
+    const connection = new Connection({
+      user1: connectionRequest.sender,
+      user2: connectionRequest.recipient,
+      connectedAt: Date.now()
+    });
+    
+    await connection.save();
+    
+    // Update users with connection
+    await User.findByIdAndUpdate(connectionRequest.sender, {
+      $addToSet: { connections: connectionRequest.recipient }
+    });
+    
+    await User.findByIdAndUpdate(connectionRequest.recipient, {
+      $addToSet: { connections: connectionRequest.sender }
+    });
+    
+    // Populate and get both users for response
+    const user1 = await User.findById(connectionRequest.sender)
+      .select('firstName lastName username profileImage headline');
+      
+    const user2 = await User.findById(connectionRequest.recipient)
+      .select('firstName lastName username profileImage headline');
+    
+    // Send notification to sender
+    const notification = new Notification({
+      recipient: connectionRequest.sender,
+      type: 'connection_accepted',
+      sender: req.user.id,
+      data: {
+        connectionId: connection._id
+      },
+      timestamp: Date.now()
+    });
+    
+    await notification.save();
+    
+    // Emit socket event
+    socketEvents.emitToUser(connectionRequest.sender.toString(), 'connection_accepted', {
+      connection,
+      by: { id: req.user.id }
+    });
+    
+    res.json({
+      connection,
+      users: {
+        sender: user1,
+        recipient: user2
+      }
+    });
   } catch (error) {
     console.error('Accept connection error:', error);
     res.status(500).json({ error: 'Server error when accepting connection request' });
