@@ -9,10 +9,7 @@ const fs = require('fs');
 const path = require('path');
 
 // Helper function to handle errors
-const handleError = (err, res) => {
-  console.error(err);
-  return res.status(500).json({ error: 'Server error', details: err.message });
-};
+
 
 // Helper function to check ownership or collaboration permissions
 const hasProjectAccess = async (userId, projectId, requiredPermission = 'view') => {
@@ -45,10 +42,26 @@ const hasProjectAccess = async (userId, projectId, requiredPermission = 'view') 
 };
 
 // Project Management
+
+// Helper function to handle errors
+const handleError = (err, res) => {
+  console.error('Server error:', err);
+  return res.status(500).json({ 
+    error: 'Server error', 
+    details: err.message,
+    stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+  });
+};
+
+// Project Management
 exports.createProject = async (req, res) => {
   try {
-    const { title, description, skills, category, visibility } = req.body;
-    
+    const { title, description, category, projectUrl, repoUrl, status, visibility } = req.body;
+
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
     // Process attachments if any
     let attachments = [];
     if (req.files && req.files.length > 0) {
@@ -60,43 +73,62 @@ exports.createProject = async (req, res) => {
         size: file.size
       }));
     }
-    
+
+    // Parse skills safely - handle multiple formats from the client
+    let skillList = [];
+    try {
+      if (req.body.skills) {
+        if (Array.isArray(req.body.skills)) {
+          skillList = req.body.skills;
+        } else if (typeof req.body.skills === 'string') {
+          skillList = JSON.parse(req.body.skills || '[]');
+        }
+      }
+    } catch (error) {
+      console.warn('Error parsing skills:', error.message);
+      // If parsing fails, use empty array
+      skillList = [];
+    }
+
+    // Create project with validated data
     const project = new Project({
       title,
       description,
-      skills: JSON.parse(skills || '[]'),
-      category,
+      skills: skillList,
+      category: category || 'other',
       visibility: visibility || 'private',
       owner: req.user.id,
       attachments,
+      // Include additional fields from the client
+      projectUrl,
+      repoUrl,
+      status,
+      collaborators: [],
       createdAt: new Date(),
       updatedAt: new Date()
     });
-    
+
     await project.save();
-    
-    // If skills were provided, update or create those skills for the user
-    if (skills && skills.length > 0) {
-      const skillList = JSON.parse(skills);
+
+    // Process skills if any
+    if (skillList.length > 0) {
       for (const skillName of skillList) {
-        // Find or create skill
         let skill = await Skill.findOne({ name: skillName.toLowerCase() });
         if (!skill) {
           skill = new Skill({ name: skillName.toLowerCase() });
           await skill.save();
         }
-        
-        // Add skill to user if not already there
-        await User.findByIdAndUpdate(
-          req.user.id, 
-          { $addToSet: { skills: skill._id } }
-        );
+        await User.findByIdAndUpdate(req.user.id, { $addToSet: { skills: skill._id } });
       }
     }
-    
+
     res.status(201).json(project);
   } catch (err) {
-    handleError(err, res);
+    console.error('Error creating project:', err);
+    res.status(500).json({ 
+      error: 'Failed to create project', 
+      details: err.message 
+    });
   }
 };
 
@@ -447,7 +479,8 @@ exports.updateCollaboratorPermissions = async (req, res) => {
 // Achievement Management
 exports.createAchievement = async (req, res) => {
   try {
-    const { title, description, date, skills, visibility } = req.body;
+    // Extract fields from request body
+    const { title, description, date, skills, visibility, metadata } = req.body;
     
     // Process achievement image if provided
     let image = null;
@@ -461,14 +494,32 @@ exports.createAchievement = async (req, res) => {
       };
     }
     
+    // Parse skills safely
+    let skillList = [];
+    try {
+      if (skills) {
+        if (Array.isArray(skills)) {
+          skillList = skills;
+        } else if (typeof skills === 'string') {
+          skillList = JSON.parse(skills || '[]');
+        }
+      }
+    } catch (error) {
+      console.warn('Error parsing skills:', error.message);
+      skillList = [];
+    }
+    
+    // Create achievement object
+    // Create achievement object
     const achievement = new Achievement({
       title,
       description,
       date: new Date(date),
-      skills: JSON.parse(skills || '[]'),
+      skills: skillList,
       visibility: visibility || 'private',
       owner: req.user.id,
       image,
+      metadata: metadata ? JSON.parse(metadata) : undefined,
       createdAt: new Date(),
       updatedAt: new Date()
     });
@@ -476,8 +527,7 @@ exports.createAchievement = async (req, res) => {
     await achievement.save();
     
     // If skills were provided, update or create those skills for the user
-    if (skills && skills.length > 0) {
-      const skillList = JSON.parse(skills);
+    if (skillList && skillList.length > 0) {
       for (const skillName of skillList) {
         // Find or create skill
         let skill = await Skill.findOne({ name: skillName.toLowerCase() });
@@ -496,10 +546,40 @@ exports.createAchievement = async (req, res) => {
     
     res.status(201).json(achievement);
   } catch (err) {
-    handleError(err, res);
+    console.error('Error creating achievement:', err);
+    res.status(500).json({ 
+      error: 'Failed to create achievement', 
+      details: err.message 
+    });
   }
 };
 
+// Helper function to parse metadata
+const parseMetadata = (metadata) => {
+  if (!metadata) return {};
+  
+  try {
+    if (typeof metadata === 'string') {
+      return JSON.parse(metadata);
+    }
+    return metadata;
+  } catch (error) {
+    console.warn('Error parsing metadata:', error);
+    return {};
+  }
+};
+
+// Helper function to safely parse JSON
+const safeJsonParse = (jsonString, defaultValue = []) => {
+  try {
+    if (!jsonString) return defaultValue;
+    if (typeof jsonString !== 'string') return jsonString;
+    return JSON.parse(jsonString);
+  } catch (error) {
+    console.warn('Error parsing JSON:', error);
+    return defaultValue;
+  }
+};
 exports.getAchievements = async (req, res) => {
   try {
     const { userId } = req.query;
