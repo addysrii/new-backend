@@ -71,5 +71,10 @@ router.get('/notification-tokens', authenticateToken, userController.getNotifica
 
 // Data export
 router.get('/export-data', authenticateToken, userController.exportUserData);
+// User statistics
+router.get('/users/:userId/stats', authenticateToken, userController.getUserStats);
 
+// User education
+router.get('/users/:userId/education', authenticateToken, userController.getUserEducation);
 module.exports = router;
+
