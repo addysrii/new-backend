@@ -3,6 +3,7 @@ const { User } = require('../models/User');
 const mongoose = require('mongoose');
 const ObjectId = mongoose.Types.ObjectId;
 const { ProfileView } = require('../models/User');
+const {Achievement,Project} = require('../models/Portfolio')
 const Settings = require('../models/Settings');
 
 /**
@@ -935,7 +936,88 @@ exports.disconnectSocialAccount = async (req, res) => {
     res.status(500).json({ error: 'Server error' });
   }
 };
-
+/**
+ * Get user statistics (projects, connections, achievements)
+ * @route GET /api/users/:userId/stats
+ * @access Private
+ */
+exports.getUserStats = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    // Check if userId is a valid MongoDB ObjectId
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ error: 'Invalid user ID format' });
+    }
+    
+    const user = await User.findById(userId);
+    
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    // Get project count from Project model (you need to create or import this model)
+    const projectCount = await Project.countDocuments({ user: userId });
+    
+    // Get connection count
+    const connectionCount = user.connections ? user.connections.length : 0;
+    
+    // Get achievement count from Achievement model (you need to create or import this model)
+    const achievementCount = await Achievement.countDocuments({ user: userId });
+    
+    res.json({
+      projectCount,
+      connectionCount,
+      achievementCount
+    });
+  } catch (error) {
+    console.error(`Error fetching user stats for ID ${req.params.userId}:`, error);
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+/**
+ * Get user education information
+ * @route GET /api/users/:userId/education
+ * @access Private
+ */
+exports.getUserEducation = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    // Check if userId is a valid MongoDB ObjectId
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ error: 'Invalid user ID format' });
+    }
+    
+    const user = await User.findById(userId)
+      .select('education')
+      .lean();
+    
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    // If the user doesn't have education data, return an empty array
+    const education = user.education || [];
+    
+    // Format and return the education data
+    const formattedEducation = education.map(edu => ({
+      id: edu._id,
+      institution: edu.institution,
+      degree: edu.degree,
+      field: edu.field,
+      startYear: edu.startYear,
+      endYear: edu.endYear,
+      description: edu.description,
+      logoUrl: edu.logoUrl
+    }));
+    
+    res.json(formattedEducation);
+  } catch (error) {
+    console.error(`Error fetching education for user ${req.params.userId}:`, error);
+    res.status(500).json({ error: 'Server error' });
+  }
+};
 /**
  * Get connected social accounts
  * @route GET /api/integrations/social/accounts
