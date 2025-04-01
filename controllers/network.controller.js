@@ -134,6 +134,9 @@ exports.acceptConnection = async (req, res) => {
     // Get the request ID from the URL parameter instead of the body
     const requestId = req.params.requestId;
     
+    console.log('Request to accept connection:', requestId);
+    console.log('Auth user:', JSON.stringify(req.user));
+    
     if (!requestId) {
       return res.status(400).json({ error: 'Connection request ID is required' });
     }
@@ -145,9 +148,36 @@ exports.acceptConnection = async (req, res) => {
       return res.status(404).json({ error: 'Connection request not found' });
     }
     
-    // Check if user is the recipient
-    if (connectionRequest.recipient.toString() !== req.user.id) {
-      return res.status(403).json({ error: 'Cannot accept a request not sent to you' });
+    // Debug information
+    console.log('Found connection request:', {
+      id: connectionRequest._id.toString(),
+      sender: connectionRequest.sender.toString(),
+      recipient: connectionRequest.recipient.toString(),
+      status: connectionRequest.status
+    });
+    
+    console.log('Auth user ID:', req.user.id);
+    console.log('Auth user ID type:', typeof req.user.id);
+    console.log('Recipient ID:', connectionRequest.recipient);
+    console.log('Recipient ID toString:', connectionRequest.recipient.toString());
+    console.log('Recipient ID type:', typeof connectionRequest.recipient);
+    
+    // Normalize IDs for comparison to handle various types
+    const requestRecipientId = connectionRequest.recipient.toString();
+    const currentUserId = req.user.id.toString ? req.user.id.toString() : String(req.user.id);
+    
+    console.log('Comparing normalized IDs:', currentUserId, 'with', requestRecipientId);
+    console.log('Equal?', currentUserId === requestRecipientId);
+    
+    // Check if user is the recipient with more robust comparison
+    if (currentUserId !== requestRecipientId) {
+      return res.status(403).json({ 
+        error: 'Cannot accept a request not sent to you',
+        debug: {
+          userIdFromToken: currentUserId,
+          recipientIdFromDb: requestRecipientId
+        }
+      });
     }
     
     // Check if already processed
@@ -204,6 +234,8 @@ exports.acceptConnection = async (req, res) => {
       connection,
       by: { id: req.user.id }
     });
+    
+    console.log('Connection successfully accepted');
     
     res.json({
       connection,
