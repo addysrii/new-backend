@@ -2074,7 +2074,7 @@ exports.getChat = async (req, res) => {
     }
     
     // Check if user is a participant
-    if (!chat.participants.some(p => p._id.toString() === req.user.id)) {
+    if (!chat.participants.some(p => p._id.toString() === req.user.id.toString())) {
       return res.status(403).json({ error: 'You are not a participant in this chat' });
     }
     
