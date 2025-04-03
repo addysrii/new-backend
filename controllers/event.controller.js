@@ -507,11 +507,20 @@ exports.getEvents = async (req, res) => {
       }
     }
     
+    // Get connections safely
+    let connections = [];
+    try {
+      connections = await getConnections(req.user.id);
+    } catch (error) {
+      console.error('Error getting connections for visibility filter:', error);
+      // Continue with empty connections array
+    }
+    
     // Visibility filter - show public events and events user is invited to
     query.$or = query.$or || [];
     query.$or.push(
       { visibility: 'public' },
-      { visibility: 'connections', 'createdBy': { $in: await getConnections(req.user.id) } },
+      { visibility: 'connections', 'createdBy': { $in: connections } },
       { visibility: 'private', 'invites.user': req.user.id },
       { 'createdBy': req.user.id }
     );
@@ -532,7 +541,9 @@ exports.getEvents = async (req, res) => {
       const eventObj = event.toObject();
       
       // Add user's response
-      const userResponse = event.attendees.find(a => a.user._id.toString() === req.user.id);
+      const userResponse = event.attendees.find(a => 
+        a.user && a.user._id && a.user._id.toString() === req.user.id
+      );
       eventObj.userResponse = userResponse ? userResponse.status : null;
       eventObj.userRole = userResponse ? userResponse.role : null;
       
@@ -605,9 +616,20 @@ exports.getEvent = async (req, res) => {
     
     // Check visibility permissions
     if (event.visibility !== 'public') {
-      const isCreator = event.createdBy._id.toString() === req.user.id;
-      const isInvited = event.invites && event.invites.some(i => i.user._id.toString() === req.user.id);
-      const isConnection = await isUserConnected(req.user.id, event.createdBy._id.toString());
+      const isCreator = event.createdBy && event.createdBy._id && 
+                        event.createdBy._id.toString() === req.user.id;
+      
+      const isInvited = event.invites && event.invites.some(i => 
+        i.user && i.user._id && i.user._id.toString() === req.user.id
+      );
+      
+      let isConnection = false;
+      try {
+        isConnection = await isUserConnected(req.user.id, event.createdBy._id.toString());
+      } catch (error) {
+        console.error('Error checking connection:', error);
+        // Continue with isConnection as false
+      }
       
       if (event.visibility === 'private' && !isCreator && !isInvited) {
         return res.status(403).json({ error: 'You do not have permission to view this event' });
@@ -621,7 +643,9 @@ exports.getEvent = async (req, res) => {
     // Convert to object to add additional fields
     const eventObj = event.toObject();
     
-    const userResponse = event.attendees.find(a => a.user._id.toString() === req.user.id);
+    const userResponse = event.attendees.find(a => 
+      a.user && a.user._id && a.user._id.toString() === req.user.id
+    );
     eventObj.userResponse = userResponse ? userResponse.status : null;
     eventObj.userRole = userResponse ? userResponse.role : null;
     
@@ -654,7 +678,8 @@ exports.getEvent = async (req, res) => {
     
     // For virtual events, check if user can access the link
     if (event.virtual && event.virtualMeetingLink) {
-      const canAccessLink = event.createdBy._id.toString() === req.user.id || 
+      const canAccessLink = event.createdBy && event.createdBy._id && 
+                           event.createdBy._id.toString() === req.user.id || 
                            (userResponse && userResponse.status === 'going');
       
       if (!canAccessLink) {
@@ -702,9 +727,9 @@ exports.updateEvent = async (req, res) => {
     }
     
     // Check if user is creator or has host role
-    const isCreator = event.createdBy.toString() === req.user.id;
-    const isHost = event.attendees.some(a => 
-      a.user.toString() === req.user.id && a.role === 'host'
+    const isCreator = event.createdBy && event.createdBy.toString() === req.user.id;
+    const isHost = event.attendees && event.attendees.some(a => 
+      a.user && a.user.toString() === req.user.id && a.role === 'host'
     );
     
     if (!isCreator && !isHost) {
@@ -2800,16 +2825,26 @@ async function getConnections(userId) {
       return [];
     }
     
-    return user.connections.map(connection => connection.user.toString());
+    // Filter out any invalid connections before mapping to avoid toString() on undefined
+    return user.connections
+      .filter(connection => connection && connection.user) // Make sure connection and connection.user exists
+      .map(connection => connection.user.toString());
   } catch (error) {
     console.error('Get connections error:', error);
     return [];
   }
 }
 
-// Helper function to check if two users are connected
+/**
+ * Helper function to check if two users are connected
+ * Fixed to handle potential errors
+ */
 async function isUserConnected(userId1, userId2) {
   try {
+    if (!userId1 || !userId2) {
+      return false;
+    }
+    
     const connections = await getConnections(userId1);
     return connections.includes(userId2);
   } catch (error) {
@@ -2818,7 +2853,9 @@ async function isUserConnected(userId1, userId2) {
   }
 }
 
-// Helper function to generate recurring dates
+/**
+ * Helper function to generate recurring dates
+ */
 function generateRecurringDates(startDate, endDate, recurrence) {
   const dates = [];
   let currentDate = new Date(startDate);
@@ -2851,3 +2888,5 @@ function generateRecurringDates(startDate, endDate, recurrence) {
   
   return dates;
 }
+
+// Helper function to check if two users are connected
