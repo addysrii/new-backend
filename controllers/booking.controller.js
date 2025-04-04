@@ -1644,7 +1644,7 @@ exports.downloadTicketPdf = async (req, res) => {
    * @route GET /api/bookings/events/:eventId/stats
    * @access Private (Creator only)
    */
-  exports.getEventBookingStats = async (req, res) => {
+ exports.getEventBookingStats = async (req, res) => {
     try {
       const { eventId } = req.params;
       
@@ -1655,7 +1655,7 @@ exports.downloadTicketPdf = async (req, res) => {
       }
       
       // Verify user has permission
-      if (event.createdBy.toString() !== req.user.id && !req.user.isAdmin) {
+      if (event.createdBy.toString() !== req.user.id.toString() && !req.user.isAdmin) {
         return res.status(403).json({ 
           error: 'Only the event creator or admins can view booking statistics' 
         });
@@ -1759,7 +1759,7 @@ exports.downloadTicketPdf = async (req, res) => {
       }
       
       // Verify user has permission
-      if (event.createdBy._id.toString() !== req.user.id && !req.user.isAdmin) {
+      if (event.createdBy._id.toString() !== req.user.id.toString() && !req.user.isAdmin) {
         return res.status(403).json({ 
           error: 'Only the event creator or admins can generate reports' 
         });
