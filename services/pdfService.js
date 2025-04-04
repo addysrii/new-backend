@@ -132,22 +132,18 @@ class PDFService {
           const qrString = JSON.stringify(verificationData);
           console.log('Generating QR code for ticket');
           
-          // Generate the QR code directly to a file
-          const qrTempPath = path.join(__dirname, `../temp/qr-${ticket._id}.png`);
-          await QRCode.toFile(qrTempPath, qrString, {
+          // Generate QR code directly as a data URL - NO TEMPORARY FILE NEEDED
+          const qrDataUrl = await QRCode.toDataURL(qrString, {
             errorCorrectionLevel: 'H',
             margin: 1,
             scale: 8
           });
           
-          console.log('QR code generated at:', qrTempPath);
+          console.log('QR code generated successfully');
           
-          // Add QR code to PDF
-          doc.image(qrTempPath, 50, doc.y, { width: 150 });
+          // Add QR code to PDF directly from data URL
+          doc.image(qrDataUrl, 50, doc.y, { width: 150 });
           
-          // Clean up temp file
-          fs.unlinkSync(qrTempPath);
-          console.log('Cleaned up temporary QR file');
         } catch (err) {
           console.error('QR code generation error:', err);
           doc.text('QR code unavailable', 50, doc.y);
@@ -340,22 +336,18 @@ class PDFService {
           const qrString = JSON.stringify(verificationData);
           console.log('Generating QR code with group data');
           
-          // Generate the QR code directly to a file
-          const qrTempPath = path.join(__dirname, `../temp/qr-${ticket._id}.png`);
-          await QRCode.toFile(qrTempPath, qrString, {
+          // Generate QR code directly as a data URL - NO TEMPORARY FILE NEEDED
+          const qrDataUrl = await QRCode.toDataURL(qrString, {
             errorCorrectionLevel: 'H',
             margin: 1,
             scale: 8
           });
           
-          console.log('QR code generated at:', qrTempPath);
+          console.log('QR code generated successfully');
           
-          // Add QR code to PDF
-          doc.image(qrTempPath, 50, doc.y, { width: 150 });
+          // Add QR code to PDF directly from data URL
+          doc.image(qrDataUrl, 50, doc.y, { width: 150 });
           
-          // Clean up temp file
-          fs.unlinkSync(qrTempPath);
-          console.log('Cleaned up temporary QR file');
         } catch (err) {
           console.error('QR code generation error:', err);
           doc.text('QR code unavailable', 50, doc.y);
@@ -591,19 +583,16 @@ class PDFService {
         secret: ticket.qrSecret
       };
       
-      // Create QR code as base64
-      const qrTempPath = path.join(__dirname, `../temp/qr-${ticket._id}.png`);
-      await QRCode.toFile(qrTempPath, JSON.stringify(verificationData), {
+      // Generate QR code directly as a data URL - NO TEMPORARY FILE NEEDED
+      const qrDataUrl = await QRCode.toDataURL(JSON.stringify(verificationData), {
         errorCorrectionLevel: 'H',
         margin: 1,
         scale: 8
       });
       
-      // Add QR code to PDF
-      doc.image(qrTempPath, 50, doc.y, { width: 150 });
+      // Add QR code to PDF directly from data URL
+      doc.image(qrDataUrl, 50, doc.y, { width: 150 });
       
-      // Clean up temp file
-      fs.unlinkSync(qrTempPath);
     } catch (err) {
       console.error('QR code generation error:', err);
       doc.text('QR code unavailable', 50, doc.y);
@@ -734,19 +723,16 @@ class PDFService {
       // Convert to JSON and generate QR
       const qrString = JSON.stringify(verificationData);
       
-      // Generate the QR code directly to a file
-      const qrTempPath = path.join(__dirname, `../temp/qr-${ticket._id}.png`);
-      await QRCode.toFile(qrTempPath, qrString, {
+      // Generate QR code directly as a data URL - NO TEMPORARY FILE NEEDED
+      const qrDataUrl = await QRCode.toDataURL(qrString, {
         errorCorrectionLevel: 'H',
         margin: 1,
         scale: 8
       });
       
-      // Add QR code to PDF
-      doc.image(qrTempPath, 50, doc.y, { width: 150 });
+      // Add QR code to PDF directly from data URL
+      doc.image(qrDataUrl, 50, doc.y, { width: 150 });
       
-      // Clean up temp file
-      fs.unlinkSync(qrTempPath);
     } catch (err) {
       console.error('QR code generation error:', err);
       doc.text('QR code unavailable', 50, doc.y);
