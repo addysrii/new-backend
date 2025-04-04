@@ -900,9 +900,9 @@ exports.checkInTicket = async (req, res) => {
     
     // Verify user has permission to check-in tickets
     const event = await Event.findById(ticket.event._id);
-    const isEventCreator = event.createdBy.toString() === req.user.id;
+    const isEventCreator = event.createdBy.toString() === req.user.id.toString();
     const isEventHost = event.attendees && event.attendees.some(a => 
-      a.user.toString() === req.user.id && a.role === 'host'
+      a.user.toString() === req.user.id.toString() && a.role === 'host'
     );
     
     if (!isEventCreator && !isEventHost && !req.user.isAdmin) {
@@ -1170,7 +1170,7 @@ exports.checkInTicket = async (req, res) => {
       }
       
       // Verify ownership
-      if (ticket.owner.toString() !== req.user.id) {
+      if (ticket.owner.toString() !== req.user.id.toString()) {
         return res.status(403).json({ error: 'You can only transfer tickets you own' });
       }
       
@@ -1192,7 +1192,7 @@ exports.checkInTicket = async (req, res) => {
       }
       
       // Don't allow transfer to self
-      if (recipient._id.toString() === req.user.id) {
+      if (recipient._id.toString() === req.user.id.toString()) {
         return res.status(400).json({ error: 'Cannot transfer ticket to yourself' });
       }
       
@@ -1294,9 +1294,9 @@ exports.getEventTickets = async (req, res) => {
     }
     
     // Verify user has permission
-     const isEventCreator = event.createdBy.toString() === req.user.id.toString();
+    const isEventCreator = event.createdBy.toString() === req.user.id.toString();
     const isEventHost = event.attendees && event.attendees.some(a => 
-      a.user.toString() === req.user.id && ['host', 'staff'].includes(a.role)
+      a.user.toString() === req.user.id.toString() && ['host', 'staff'].includes(a.role)
     );
     
     if (!isEventCreator && !isEventHost && !req.user.isAdmin) {
@@ -1476,7 +1476,7 @@ exports.getTicketTypes = async (req, res) => {
     
     // Check permissions for viewing inactive tickets
     const isEventCreator = req.user && event.createdBy && 
-                          event.createdBy.toString() === req.user.id;
+                          event.createdBy.toString() === req.user.id.toString();
     const isAdmin = req.user && req.user.isAdmin;
     const hasFullAccess = isEventCreator || isAdmin;
     
@@ -1611,9 +1611,9 @@ exports.downloadTicketPdf = async (req, res) => {
     }
     
     // Verify ownership or admin access
-    const isOwner = ticket.owner._id.toString() === req.user.id;
+    const isOwner = ticket.owner._id.toString() === req.user.id.toString();
     const event = await Event.findById(ticket.event._id);
-    const isEventCreator = event && event.createdBy.toString() === req.user.id;
+    const isEventCreator = event && event.createdBy.toString() === req.user.id.toString();
     
     if (!isOwner && !isEventCreator && !req.user.isAdmin) {
       return res.status(403).json({ error: 'You do not have permission to download this ticket' });
@@ -1639,7 +1639,6 @@ exports.downloadTicketPdf = async (req, res) => {
     res.status(500).json({ error: 'Server error when generating ticket PDF' });
   }
 };
- 
   /**
    * Get event booking statistics
    * @route GET /api/bookings/events/:eventId/stats
