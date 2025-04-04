@@ -160,59 +160,8 @@ exports.createTicketType = async (req, res) => {
  * @route PUT /api/bookings/ticket-types/:ticketTypeId
  * @access Private (Creator only)
  */
-exports.updateTicketType = async (req, res) => {
-  try {
-    const { ticketTypeId } = req.params;
-    const updateData = req.body;
-    
-    // Get ticket type
-    const ticketType = await TicketType.findById(ticketTypeId);
-    if (!ticketType) {
-      return res.status(404).json({ error: 'Ticket type not found' });
-    }
-    
-    // Check if event exists
-    const event = await Event.findById(ticketType.event);
-    if (!event) {
-      return res.status(404).json({ error: 'Event not found' });
-    }
-    1
-    // Check if user has permission (only creator can update ticket types)
-    if (event.createdBy.toString() !== req.user.id.toString()) {
-      return res.status(403).json({ error: 'Only the event creator can update ticket types' });
-    }
-    
-    // Don't allow decreasing quantity below sold amount
-    if (updateData.quantity && updateData.quantity < ticketType.quantitySold) {
-      return res.status(400).json({ 
-        error: 'Cannot decrease quantity below sold amount',
-        quantitySold: ticketType.quantitySold
-      });
-    }
-    
-    // Update fields
-    Object.keys(updateData).forEach(key => {
-      // Skip fields that shouldn't be directly updated
-      if (key !== 'event' && key !== 'quantitySold' && key !== '_id') {
-        ticketType[key] = updateData[key];
-      }
-    });
-    
-    await ticketType.save();
-    
-    res.json(ticketType);
-  } catch (error) {
-    console.error('Update ticket type error:', error);
-    res.status(500).json({ error: 'Server error when updating ticket type' });
-  }
-};
 /**
- * Create a new booking
- * @route POST /api/bookings/events/:eventId/book
- * @access Private
- */
-/**
- * Create a new booking
+ * Create a new booking with a single QR code for multiple tickets
  * @route POST /api/bookings/events/:eventId/book
  * @access Private
  */
@@ -268,16 +217,6 @@ exports.createBooking = async (req, res) => {
       startDateTime: event.startDateTime
     });
     
-    // Comprehensive creator validation
-    if (!event.createdBy) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(500).json({ 
-        error: 'Event is missing creator information',
-        eventId: event._id
-      });
-    }
-    
     // Verify event date is in the future
     const now = new Date();
     const eventStartTime = new Date(event.startDateTime);
@@ -294,7 +233,7 @@ exports.createBooking = async (req, res) => {
     
     // Process each ticket type selection
     let totalAmount = 0;
-    const ticketPromises = [];
+    let totalTicketCount = 0;
     let allTicketTypes = [];
     
     // First check availability for all ticket types
@@ -371,6 +310,7 @@ exports.createBooking = async (req, res) => {
       
       // Add to total amount
       totalAmount += ticketType.price * quantity;
+      totalTicketCount += quantity;
       allTicketTypes.push({ ticketType, quantity });
     }
     
@@ -398,68 +338,64 @@ exports.createBooking = async (req, res) => {
       }
     }
     
-    let booking;
-    // Special handling for free bookings (totalAmount === 0)
-    if (totalAmount === 0) {
-      // For free bookings, set status to confirmed directly
-      booking = new Booking({
-        user: req.user.id,
-        event: eventId,
-        totalAmount: 0,
-        currency: allTicketTypes[0].ticketType.currency, 
-        status: 'confirmed', // Change status to confirmed for free bookings
-        paymentInfo: {
-          method: 'free', // Use 'free' as payment method
-          status: 'completed' // Mark payment as completed
-        },
-        promoCode: promoDetails,
-        contactInformation
-      });
-    } else {
-      // For paid bookings, use the standard pending flow
-      booking = new Booking({
-        user: req.user.id,
-        event: eventId,
-        totalAmount,
-        currency: allTicketTypes[0].ticketType.currency,
-        status: 'pending',
-        paymentInfo: {
-          method: paymentMethod,
-          status: 'pending'
-        },
-        promoCode: promoDetails,
-        contactInformation
-      });
-    }
+    // Create booking
+    const booking = new Booking({
+      user: req.user.id,
+      event: eventId,
+      totalAmount,
+      currency: allTicketTypes[0].ticketType.currency,
+      status: totalAmount === 0 ? 'confirmed' : 'pending',
+      paymentInfo: {
+        method: totalAmount === 0 ? 'free' : paymentMethod,
+        status: totalAmount === 0 ? 'completed' : 'pending'
+      },
+      promoCode: promoDetails,
+      contactInformation,
+      ticketCount: totalTicketCount // Store total ticket count
+    });
     
-    await booking.save({ session });
+    // Generate a common QR secret for all tickets in this booking
+    const commonQrSecret = crypto.randomBytes(20).toString('hex');
     
-    // Create tickets for the booking - with different status based on if it's free
+    // Create a single "group ticket" that represents all tickets
+    const groupTicket = new Ticket({
+      ticketNumber: `GRP-${uuidv4().substring(0, 8).toUpperCase()}`,
+      event: eventId,
+      booking: booking._id,
+      owner: req.user.id,
+      isGroupTicket: true, // Flag to identify this is a group ticket
+      totalTickets: totalTicketCount, // Store how many actual tickets this represents
+      status: totalAmount === 0 ? 'active' : 'pending',
+      qrSecret: commonQrSecret
+    });
+    
+    await groupTicket.save({ session });
+    
+    // Create individual tickets associated with the group ticket
+    const ticketDetails = [];
+    
     for (const { ticketType, quantity } of allTicketTypes) {
-      for (let i = 0; i < quantity; i++) {
-        const ticket = new Ticket({
-          event: eventId,
-          ticketType: ticketType._id,
-          booking: booking._id,
-          owner: req.user.id,
-          price: ticketType.price,
-          currency: ticketType.currency,
-          status: totalAmount === 0 ? 'active' : 'pending' // Set as active for free bookings
-        });
-        
-        ticketPromises.push(ticket.save({ session }));
-      }
-      
       // Update quantity sold
       ticketType.quantitySold += quantity;
       await ticketType.save({ session });
+      
+      // Store ticket type details for the group
+      ticketDetails.push({
+        ticketTypeId: ticketType._id,
+        name: ticketType.name,
+        price: ticketType.price,
+        currency: ticketType.currency,
+        quantity: quantity
+      });
     }
     
-    // Create all tickets
-    const tickets = await Promise.all(ticketPromises);
+    // Store the ticket details with the group ticket
+    groupTicket.ticketDetails = ticketDetails;
+    await groupTicket.save({ session });
     
-    // Update booking with ticket IDs
-    booking.tickets = tickets.map(ticket => ticket._id);
+    // Update booking with the group ticket
+    booking.tickets = [groupTicket._id];
+    booking.groupTicket = true; // Flag that this booking uses a group ticket
     await booking.save({ session });
     
     // Commit transaction
@@ -492,7 +428,8 @@ exports.createBooking = async (req, res) => {
           bookingNumber: booking.bookingNumber,
           totalAmount: 0,
           currency: booking.currency,
-          status: 'confirmed'
+          status: 'confirmed',
+          ticketCount: totalTicketCount
         }
       });
     }
@@ -522,7 +459,8 @@ exports.createBooking = async (req, res) => {
                 id: booking._id,
                 bookingNumber: booking.bookingNumber,
                 totalAmount,
-                currency: booking.currency
+                currency: booking.currency,
+                ticketCount: totalTicketCount
               },
               payment: {
                 method: 'phonepe',
@@ -550,7 +488,7 @@ exports.createBooking = async (req, res) => {
         });
       }
     } else {
-      // For other payment methods or free bookings
+      // For other payment methods
       return res.status(201).json({
         success: true,
         booking: {
@@ -558,7 +496,8 @@ exports.createBooking = async (req, res) => {
           bookingNumber: booking.bookingNumber,
           totalAmount,
           currency: booking.currency,
-          status: booking.status
+          status: booking.status,
+          ticketCount: totalTicketCount
         }
       });
     }
