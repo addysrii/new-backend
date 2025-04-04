@@ -178,7 +178,7 @@ exports.updateTicketType = async (req, res) => {
     if (!event) {
       return res.status(404).json({ error: 'Event not found' });
     }
-    1
+    
     // Check if user has permission (only creator can update ticket types)
     if (event.createdBy.toString() !== req.user.id.toString()) {
       return res.status(403).json({ error: 'Only the event creator can update ticket types' });
@@ -660,10 +660,10 @@ exports.getBooking = async (req, res) => {
     
     // Verify ownership or admin access
     const isOwner = booking.user.toString() === req.user.id.toString();
-    console.log(req.user.id.toString())
-    console.log(booking.user.toString())
+    console.log(req.user.id.toString());
+    console.log(booking.user.toString());
     const isEventCreator = booking.event.createdBy && 
-                          booking.event.createdBy.toString() === req.user.id;
+                          booking.event.createdBy.toString() === req.user.id.toString();
     
     if (!isOwner && !isEventCreator && !req.user.isAdmin) {
       return res.status(403).json({ error: 'You do not have permission to view this booking' });
@@ -840,7 +840,7 @@ exports.cancelBooking = async (req, res) => {
     });
     
     // Send socket event
-    socketEvents.emitToUser(req.user.id, 'booking_cancelled', {
+    socketEvents.emitToUser(req.user.id.toString(), 'booking_cancelled', {
       bookingId: booking._id,
       eventName: event.name,
       refunded: !!refundResult
@@ -877,6 +877,7 @@ exports.cancelBooking = async (req, res) => {
     res.status(500).json({ error: 'Server error when cancelling booking' });
   }
 };
+
 /**
  * Verify and check in a ticket
  * @route POST /api/bookings/tickets/:ticketId/check-in
