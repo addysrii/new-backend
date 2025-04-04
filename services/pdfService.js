@@ -113,37 +113,47 @@ class PDFService {
         
         // Add QR code
         try {
-          // Generate verification data for QR code if missing
-          if (!ticket.qrSecret) {
-            console.log('No QR secret found, generating new one');
-            ticket.qrSecret = crypto.randomBytes(20).toString('hex');
-            // Save the ticket with new QR secret
+          // Check if QR code already exists in the ticket
+          if (ticket.qrCode) {
+            console.log('Using existing QR code from ticket');
+            // Use the existing QR code
+            doc.image(ticket.qrCode, 50, doc.y, { width: 150 });
+          } else {
+            // Generate verification data for QR code if missing
+            if (!ticket.qrSecret) {
+              console.log('No QR secret found, generating new one');
+              ticket.qrSecret = crypto.randomBytes(20).toString('hex');
+              // Save the ticket with new QR secret
+              await ticket.save();
+            }
+            
+            const verificationData = {
+              id: ticket._id.toString(),
+              ticketNumber: ticket.ticketNumber,
+              event: ticket.event._id.toString(),
+              secret: ticket.qrSecret
+            };
+            
+            // Convert to JSON and generate QR
+            const qrString = JSON.stringify(verificationData);
+            console.log('Generating QR code for ticket since no existing QR code found');
+            
+            // Generate QR code directly as a data URL - NO TEMPORARY FILE NEEDED
+            const qrDataUrl = await QRCode.toDataURL(qrString, {
+              errorCorrectionLevel: 'H',
+              margin: 1,
+              scale: 8
+            });
+            
+            console.log('QR code generated successfully');
+            
+            // Save the generated QR code to the ticket for future use
+            ticket.qrCode = qrDataUrl;
             await ticket.save();
+            
+            // Add QR code to PDF directly from data URL
+            doc.image(qrDataUrl, 50, doc.y, { width: 150 });
           }
-          
-          const verificationData = {
-            id: ticket._id.toString(),
-            ticketNumber: ticket.ticketNumber,
-            event: ticket.event._id.toString(),
-            secret: ticket.qrSecret
-          };
-          
-          // Convert to JSON and generate QR
-          const qrString = JSON.stringify(verificationData);
-          console.log('Generating QR code for ticket');
-          
-          // Generate QR code directly as a data URL - NO TEMPORARY FILE NEEDED
-          const qrDataUrl = await QRCode.toDataURL(qrString, {
-            errorCorrectionLevel: 'H',
-            margin: 1,
-            scale: 8
-          });
-          
-          console.log('QR code generated successfully');
-          
-          // Add QR code to PDF directly from data URL
-          doc.image(qrDataUrl, 50, doc.y, { width: 150 });
-          
         } catch (err) {
           console.error('QR code generation error:', err);
           doc.text('QR code unavailable', 50, doc.y);
@@ -310,44 +320,54 @@ class PDFService {
         
         // Add QR code
         try {
-          // Generate verification data for QR code if missing
-          if (!ticket.qrSecret) {
-            console.log('No QR secret found, generating new one');
-            ticket.qrSecret = crypto.randomBytes(20).toString('hex');
-            // Save the ticket with new QR secret
+          // Check if QR code already exists in the ticket
+          if (ticket.qrCode) {
+            console.log('Using existing QR code from group ticket');
+            // Use the existing QR code
+            doc.image(ticket.qrCode, 50, doc.y, { width: 150 });
+          } else {
+            // Generate verification data for QR code if missing
+            if (!ticket.qrSecret) {
+              console.log('No QR secret found, generating new one');
+              ticket.qrSecret = crypto.randomBytes(20).toString('hex');
+              // Save the ticket with new QR secret
+              await ticket.save();
+            }
+            
+            // Create a special verification data that includes group ticket info
+            const verificationData = {
+              id: ticket._id.toString(),
+              ticketNumber: ticket.ticketNumber,
+              event: ticket.event._id.toString(),
+              secret: ticket.qrSecret,
+              isGroupTicket: true,
+              totalTickets: ticket.totalTickets,
+              ticketTypes: ticket.ticketDetails ? ticket.ticketDetails.map(d => ({
+                name: d.name,
+                quantity: d.quantity
+              })) : []
+            };
+            
+            // Convert to JSON and generate QR
+            const qrString = JSON.stringify(verificationData);
+            console.log('Generating QR code with group data since no existing QR code found');
+            
+            // Generate QR code directly as a data URL - NO TEMPORARY FILE NEEDED
+            const qrDataUrl = await QRCode.toDataURL(qrString, {
+              errorCorrectionLevel: 'H',
+              margin: 1,
+              scale: 8
+            });
+            
+            console.log('QR code generated successfully');
+            
+            // Save the generated QR code to the ticket for future use
+            ticket.qrCode = qrDataUrl;
             await ticket.save();
+            
+            // Add QR code to PDF directly from data URL
+            doc.image(qrDataUrl, 50, doc.y, { width: 150 });
           }
-          
-          // Create a special verification data that includes group ticket info
-          const verificationData = {
-            id: ticket._id.toString(),
-            ticketNumber: ticket.ticketNumber,
-            event: ticket.event._id.toString(),
-            secret: ticket.qrSecret,
-            isGroupTicket: true,
-            totalTickets: ticket.totalTickets,
-            ticketTypes: ticket.ticketDetails ? ticket.ticketDetails.map(d => ({
-              name: d.name,
-              quantity: d.quantity
-            })) : []
-          };
-          
-          // Convert to JSON and generate QR
-          const qrString = JSON.stringify(verificationData);
-          console.log('Generating QR code with group data');
-          
-          // Generate QR code directly as a data URL - NO TEMPORARY FILE NEEDED
-          const qrDataUrl = await QRCode.toDataURL(qrString, {
-            errorCorrectionLevel: 'H',
-            margin: 1,
-            scale: 8
-          });
-          
-          console.log('QR code generated successfully');
-          
-          // Add QR code to PDF directly from data URL
-          doc.image(qrDataUrl, 50, doc.y, { width: 150 });
-          
         } catch (err) {
           console.error('QR code generation error:', err);
           doc.text('QR code unavailable', 50, doc.y);
@@ -568,31 +588,40 @@ class PDFService {
     
     // Add QR code
     try {
-      // Generate verification data for QR code if missing
-      if (!ticket.qrSecret) {
-        ticket.qrSecret = crypto.randomBytes(20).toString('hex');
-        // Save the ticket with new QR secret
+      // Check if the ticket already has a QR code
+      if (ticket.qrCode) {
+        console.log(`Using existing QR code for ticket ${ticket.ticketNumber}`);
+        doc.image(ticket.qrCode, 50, doc.y, { width: 150 });
+      } else {
+        // Generate verification data for QR code if missing
+        if (!ticket.qrSecret) {
+          ticket.qrSecret = crypto.randomBytes(20).toString('hex');
+          // Save the ticket with new QR secret
+          await ticket.save();
+        }
+        
+        // Generate verification data for QR code
+        const verificationData = {
+          id: ticket._id.toString(),
+          ticketNumber: ticket.ticketNumber,
+          event: ticket.event._id.toString(),
+          secret: ticket.qrSecret
+        };
+        
+        // Generate QR code directly as a data URL - NO TEMPORARY FILE NEEDED
+        const qrDataUrl = await QRCode.toDataURL(JSON.stringify(verificationData), {
+          errorCorrectionLevel: 'H',
+          margin: 1,
+          scale: 8
+        });
+        
+        // Store the QR code for future use
+        ticket.qrCode = qrDataUrl;
         await ticket.save();
+        
+        // Add QR code to PDF directly from data URL
+        doc.image(qrDataUrl, 50, doc.y, { width: 150 });
       }
-      
-      // Generate verification data for QR code
-      const verificationData = {
-        id: ticket._id.toString(),
-        ticketNumber: ticket.ticketNumber,
-        event: ticket.event._id.toString(),
-        secret: ticket.qrSecret
-      };
-      
-      // Generate QR code directly as a data URL - NO TEMPORARY FILE NEEDED
-      const qrDataUrl = await QRCode.toDataURL(JSON.stringify(verificationData), {
-        errorCorrectionLevel: 'H',
-        margin: 1,
-        scale: 8
-      });
-      
-      // Add QR code to PDF directly from data URL
-      doc.image(qrDataUrl, 50, doc.y, { width: 150 });
-      
     } catch (err) {
       console.error('QR code generation error:', err);
       doc.text('QR code unavailable', 50, doc.y);
@@ -699,40 +728,49 @@ class PDFService {
     
     // Add QR code
     try {
-      // Generate verification data for QR code if missing
-      if (!ticket.qrSecret) {
-        ticket.qrSecret = crypto.randomBytes(20).toString('hex');
-        // Save the ticket with new QR secret
+      // Check if the ticket already has a QR code
+      if (ticket.qrCode) {
+        console.log(`Using existing QR code for group ticket ${ticket.ticketNumber}`);
+        doc.image(ticket.qrCode, 50, doc.y, { width: 150 });
+      } else {
+        // Generate verification data for QR code if missing
+        if (!ticket.qrSecret) {
+          ticket.qrSecret = crypto.randomBytes(20).toString('hex');
+          // Save the ticket with new QR secret
+          await ticket.save();
+        }
+        
+        // Create a special verification data that includes group ticket info
+        const verificationData = {
+          id: ticket._id.toString(),
+          ticketNumber: ticket.ticketNumber,
+          event: ticket.event._id.toString(),
+          secret: ticket.qrSecret,
+          isGroupTicket: true,
+          totalTickets: ticket.totalTickets,
+          ticketTypes: ticket.ticketDetails ? ticket.ticketDetails.map(d => ({
+            name: d.name,
+            quantity: d.quantity
+          })) : []
+        };
+        
+        // Convert to JSON and generate QR
+        const qrString = JSON.stringify(verificationData);
+        
+        // Generate QR code directly as a data URL - NO TEMPORARY FILE NEEDED
+        const qrDataUrl = await QRCode.toDataURL(qrString, {
+          errorCorrectionLevel: 'H',
+          margin: 1,
+          scale: 8
+        });
+        
+        // Store the QR code for future use
+        ticket.qrCode = qrDataUrl;
         await ticket.save();
+        
+        // Add QR code to PDF directly from data URL
+        doc.image(qrDataUrl, 50, doc.y, { width: 150 });
       }
-      
-      // Create a special verification data that includes group ticket info
-      const verificationData = {
-        id: ticket._id.toString(),
-        ticketNumber: ticket.ticketNumber,
-        event: ticket.event._id.toString(),
-        secret: ticket.qrSecret,
-        isGroupTicket: true,
-        totalTickets: ticket.totalTickets,
-        ticketTypes: ticket.ticketDetails ? ticket.ticketDetails.map(d => ({
-          name: d.name,
-          quantity: d.quantity
-        })) : []
-      };
-      
-      // Convert to JSON and generate QR
-      const qrString = JSON.stringify(verificationData);
-      
-      // Generate QR code directly as a data URL - NO TEMPORARY FILE NEEDED
-      const qrDataUrl = await QRCode.toDataURL(qrString, {
-        errorCorrectionLevel: 'H',
-        margin: 1,
-        scale: 8
-      });
-      
-      // Add QR code to PDF directly from data URL
-      doc.image(qrDataUrl, 50, doc.y, { width: 150 });
-      
     } catch (err) {
       console.error('QR code generation error:', err);
       doc.text('QR code unavailable', 50, doc.y);
@@ -927,6 +965,126 @@ class PDFService {
     });
   }
   
+  /**
+   * Get a ticket by ID and ensure it has a QR code
+   * @param {String} ticketId - Ticket ID
+   * @returns {Promise<Object>} - Ticket with QR code
+   */
+  async ensureTicketHasQrCode(ticketId) {
+    // Find the ticket and make sure it's fully populated
+    const ticket = await require('../models/Booking').Ticket.findById(ticketId)
+      .populate('event')
+      .populate('owner', 'firstName lastName email')
+      .populate('ticketType', 'name price currency');
+    
+    if (!ticket) {
+      throw new Error(`Ticket not found: ${ticketId}`);
+    }
+    
+    // If the ticket already has a QR code, return it immediately
+    if (ticket.qrCode) {
+      console.log(`Ticket ${ticketId} already has a QR code`);
+      return ticket;
+    }
+    
+    // No QR code found, let's generate one
+    console.log(`Ticket ${ticketId} missing QR code, generating now`);
+    
+    // Make sure there's a QR secret
+    if (!ticket.qrSecret) {
+      ticket.qrSecret = crypto.randomBytes(20).toString('hex');
+      console.log(`Generated new QR secret for ticket ${ticketId}`);
+    }
+    
+    // Create appropriate verification data based on ticket type
+    let verificationData;
+    
+    if (ticket.isGroupTicket) {
+      // Group ticket requires additional data
+      verificationData = {
+        id: ticket._id.toString(),
+        ticketNumber: ticket.ticketNumber,
+        event: ticket.event._id.toString(),
+        secret: ticket.qrSecret,
+        isGroupTicket: true,
+        totalTickets: ticket.totalTickets,
+        ticketTypes: ticket.ticketDetails ? ticket.ticketDetails.map(d => ({
+          name: d.name,
+          quantity: d.quantity
+        })) : []
+      };
+    } else {
+      // Standard individual ticket
+      verificationData = {
+        id: ticket._id.toString(),
+        ticketNumber: ticket.ticketNumber,
+        event: ticket.event._id.toString(),
+        secret: ticket.qrSecret
+      };
+    }
+    
+    // Convert to JSON and generate QR
+    const qrString = JSON.stringify(verificationData);
+    
+    try {
+      // Generate QR code directly as a data URL
+      const qrDataUrl = await QRCode.toDataURL(qrString, {
+        errorCorrectionLevel: 'H',
+        margin: 1,
+        scale: 8
+      });
+      
+      // Save the QR code to the ticket
+      ticket.qrCode = qrDataUrl;
+      await ticket.save();
+      
+      console.log(`Successfully generated and saved QR code for ticket ${ticketId}`);
+      return ticket;
+    } catch (error) {
+      console.error(`Failed to generate QR code for ticket ${ticketId}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get a booking by ID and ensure all tickets have QR codes
+   * @param {String} bookingId - Booking ID
+   * @returns {Promise<Object>} - Booking with all tickets having QR codes
+   */
+  async ensureBookingTicketsHaveQrCodes(bookingId) {
+    // Find the booking with populated tickets
+    const booking = await require('../models/Booking').Booking.findById(bookingId)
+      .populate({
+        path: 'tickets',
+        select: 'ticketNumber status qrCode qrSecret isGroupTicket totalTickets ticketDetails',
+      });
+    
+    if (!booking) {
+      throw new Error(`Booking not found: ${bookingId}`);
+    }
+    
+    // Check each ticket
+    const ticketsToUpdate = booking.tickets.filter(ticket => !ticket.qrCode);
+    
+    console.log(`Booking ${bookingId} has ${booking.tickets.length} tickets, ${ticketsToUpdate.length} need QR codes`);
+    
+    // Generate QR codes for all missing tickets
+    if (ticketsToUpdate.length > 0) {
+      for (const ticket of ticketsToUpdate) {
+        await this.ensureTicketHasQrCode(ticket._id);
+      }
+      
+      // Refresh the booking with updated tickets
+      return await require('../models/Booking').Booking.findById(bookingId)
+        .populate({
+          path: 'tickets',
+          select: 'ticketNumber status qrCode qrSecret isGroupTicket totalTickets ticketDetails',
+        });
+    }
+    
+    return booking;
+  }
+
   /**
    * Helper method to format location for display
    * @param {Object|string} location - Location data or string
