@@ -211,6 +211,11 @@ exports.updateTicketType = async (req, res) => {
  * @route POST /api/bookings/events/:eventId/book
  * @access Private
  */
+/**
+ * Create a new booking
+ * @route POST /api/bookings/events/:eventId/book
+ * @access Private
+ */
 exports.createBooking = async (req, res) => {
   // Use a database transaction for data integrity
   const session = await mongoose.startSession();
@@ -309,11 +314,6 @@ exports.createBooking = async (req, res) => {
         session.endSession();
         return res.status(404).json({ error: `Ticket type not found: ${ticketTypeId}` });
       }
-      if (!ticketType) {
-        await session.abortTransaction();
-        session.endSession();
-        return res.status(404).json({ error: `Ticket type not found: ${ticketTypeId}` });
-      }
       
       // Ensure ticketType.event exists
       if (!ticketType.event) {
@@ -398,24 +398,43 @@ exports.createBooking = async (req, res) => {
       }
     }
     
-    // Create booking
-    const booking = new Booking({
-      user: req.user.id,
-      event: eventId,
-      totalAmount,
-      currency: allTicketTypes[0].ticketType.currency, // Use currency from first ticket type
-      status: 'pending',
-      paymentInfo: {
-        method: paymentMethod,
-        status: 'pending'
-      },
-      promoCode: promoDetails,
-      contactInformation
-    });
+    let booking;
+    // Special handling for free bookings (totalAmount === 0)
+    if (totalAmount === 0) {
+      // For free bookings, set status to confirmed directly
+      booking = new Booking({
+        user: req.user.id,
+        event: eventId,
+        totalAmount: 0,
+        currency: allTicketTypes[0].ticketType.currency, 
+        status: 'confirmed', // Change status to confirmed for free bookings
+        paymentInfo: {
+          method: 'free', // Use 'free' as payment method
+          status: 'completed' // Mark payment as completed
+        },
+        promoCode: promoDetails,
+        contactInformation
+      });
+    } else {
+      // For paid bookings, use the standard pending flow
+      booking = new Booking({
+        user: req.user.id,
+        event: eventId,
+        totalAmount,
+        currency: allTicketTypes[0].ticketType.currency,
+        status: 'pending',
+        paymentInfo: {
+          method: paymentMethod,
+          status: 'pending'
+        },
+        promoCode: promoDetails,
+        contactInformation
+      });
+    }
     
     await booking.save({ session });
     
-    // Create tickets for the booking
+    // Create tickets for the booking - with different status based on if it's free
     for (const { ticketType, quantity } of allTicketTypes) {
       for (let i = 0; i < quantity; i++) {
         const ticket = new Ticket({
@@ -425,7 +444,7 @@ exports.createBooking = async (req, res) => {
           owner: req.user.id,
           price: ticketType.price,
           currency: ticketType.currency,
-          status: 'pending' // Set as pending until payment is confirmed
+          status: totalAmount === 0 ? 'active' : 'pending' // Set as active for free bookings
         });
         
         ticketPromises.push(ticket.save({ session }));
@@ -447,7 +466,38 @@ exports.createBooking = async (req, res) => {
     await session.commitTransaction();
     session.endSession();
     
-    // Handle different payment methods
+    // For free bookings, we can skip payment processing and return success immediately
+    if (totalAmount === 0) {
+      // Consider sending confirmation email for free bookings
+      try {
+        // Optional: Send email confirmation
+        const emailService = require('../services/emailService');
+        await emailService.sendEmail({
+          to: contactInformation.email || req.user.email,
+          subject: `Booking Confirmed: ${event.name}`,
+          text: `Your booking (#${booking.bookingNumber}) for ${event.name} has been confirmed. Your free ticket(s) are ready.`,
+          html: `<h1>Booking Confirmed</h1>
+                <p>Your booking (#${booking.bookingNumber}) for ${event.name} has been confirmed.</p>
+                <p>Your free ticket(s) are ready. You can view them in the app.</p>`
+        });
+      } catch (emailError) {
+        console.error('Error sending confirmation email:', emailError);
+        // Don't fail the booking just because the email failed
+      }
+      
+      return res.status(200).json({
+        success: true,
+        booking: {
+          id: booking._id,
+          bookingNumber: booking.bookingNumber,
+          totalAmount: 0,
+          currency: booking.currency,
+          status: 'confirmed'
+        }
+      });
+    }
+    
+    // Handle different payment methods for paid bookings
     if (paymentMethod === 'phonepe') {
       // PhonePe payment initiation logic
       try {
