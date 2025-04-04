@@ -861,90 +861,88 @@ exports.checkInTicket = async (req, res) => {
     }
   };
   
-  /**
-   * Get all tickets for an event (admin/creator)
-   * @route GET /api/bookings/events/:eventId/tickets
-   * @access Private (Creator/Admin only)
-   */
-  exports.getEventTickets = async (req, res) => {
-    try {
-      const { eventId } = req.params;
-      const { status, checkedIn } = req.query;
-      
-      // Get event
-      const event = await Event.findById(eventId);
-      if (!event) {
-        return res.status(404).json({ error: 'Event not found' });
-      }
-      
-      // Verify user has permission
-      const isEventCreator = event.createdBy.toString() === req.user.id;
-      const isEventHost = event.attendees && event.attendees.some(a => 
-        a.user.toString() === req.user.id && a.role === 'host'
-      );
-      
-      if (!isEventCreator && !isEventHost && !req.user.isAdmin) {
-        return res.status(403).json({ 
-          error: 'Only event creators, hosts, or admins can view all tickets' 
-        });
-      }
-      
-      // Build query
-      const query = { event: eventId };
-      
-      if (status) {
-        query.status = status;
-      }
-      
-      if (checkedIn === 'true') {
-        query.checkedIn = true;
-      } else if (checkedIn === 'false') {
-        query.checkedIn = false;
-      }
-      
-      // Get tickets
-      const tickets = await Ticket.find(query)
-        .populate('owner', 'firstName lastName email profileImage')
-        .populate('ticketType', 'name price')
-        .populate('booking', 'bookingNumber')
-        .sort({ createdAt: -1 });
-      
-      // Get stats
-      const stats = {
-        total: tickets.length,
-        checkedIn: tickets.filter(t => t.checkedIn).length,
-        active: tickets.filter(t => t.status === 'active').length,
-        used: tickets.filter(t => t.status === 'used').length,
-        cancelled: tickets.filter(t => t.status === 'cancelled').length,
-        byType: {}
-      };
-      
-      // Count by ticket type
-      tickets.forEach(ticket => {
-        const typeName = ticket.ticketType ? ticket.ticketType.name : 'Unknown';
-        if (!stats.byType[typeName]) {
-          stats.byType[typeName] = {
-            total: 0,
-            checkedIn: 0
-          };
-        }
-        
-        stats.byType[typeName].total++;
-        if (ticket.checkedIn) {
-          stats.byType[typeName].checkedIn++;
-        }
-      });
-      
-      res.json({
-        tickets,
-        stats
-      });
-    } catch (error) {
-      console.error('Get event tickets error:', error);
-      res.status(500).json({ error: 'Server error when retrieving tickets' });
+ /**
+ * Get all ticket types for an event
+ * @route GET /api/events/:eventId/ticket-types
+ * @access Public
+ */
+exports.getTicketTypes = async (req, res) => {
+  try {
+    const { eventId } = req.params;
+    const { includeInactive } = req.query;
+    
+    // Check if event exists
+    const event = await Event.findById(eventId);
+    if (!event) {
+      return res.status(404).json({ error: 'Event not found' });
     }
-  };
-  
+    
+    // Build query
+    const query = { event: eventId };
+    
+    // Only show active ticket types unless specifically requested to show all
+    // or the user is the event creator/admin
+    if (!includeInactive || includeInactive !== 'true') {
+      query.isActive = true;
+    } else if (includeInactive === 'true' && req.user) {
+      // Verify user has permission to view inactive ticket types
+      const isEventCreator = event.createdBy.toString() === req.user.id;
+      
+      if (!isEventCreator && !req.user.isAdmin) {
+        query.isActive = true; // Non-creators can only see active types
+      }
+    } else {
+      query.isActive = true; // Default to active only
+    }
+    
+    // Check if tickets are currently on sale by filtering by date range
+    const now = new Date();
+    query.startSaleDate = { $lte: now };
+    query.$or = [
+      { endSaleDate: { $exists: false } }, // No end date
+      { endSaleDate: null },
+      { endSaleDate: { $gte: now } } // End date not passed
+    ];
+    
+    // Get all ticket types for the event
+    const ticketTypes = await TicketType.find(query).sort('price');
+    
+    // Add availability info to each ticket type
+    const enhancedTicketTypes = ticketTypes.map(ticketType => {
+      const ticketObj = ticketType.toObject();
+      
+      // Calculate availability
+      const available = ticketType.quantity - ticketType.quantitySold;
+      const isSoldOut = available <= 0;
+      
+      // Calculate if on sale
+      const isOnSale = ticketType.startSaleDate <= now && 
+                      (!ticketType.endSaleDate || ticketType.endSaleDate >= now);
+      
+      // Calculate percentage sold
+      const percentageSold = ticketType.quantity > 0 
+                            ? Math.round((ticketType.quantitySold / ticketType.quantity) * 100) 
+                            : 0;
+      
+      return {
+        ...ticketObj,
+        available,
+        isSoldOut,
+        isOnSale,
+        percentageSold,
+        // Format price for display
+        priceFormatted: ticketType.price === 0 ? 'Free' : 
+                      `${ticketType.price} ${ticketType.currency}`
+      };
+    });
+    
+    res.json(enhancedTicketTypes);
+  } catch (error) {
+    console.error('Get ticket types error:', error);
+    res.status(500).json({ error: 'Server error when retrieving ticket types' });
+  }
+};
+ 
   /**
    * Download ticket as PDF
    * @route GET /api/bookings/tickets/:ticketId/pdf
