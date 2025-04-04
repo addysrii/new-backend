@@ -1542,49 +1542,55 @@ exports.getTicketTypes = async (req, res) => {
   }
 };
   
-  /**
-   * Download ticket as PDF
-   * @route GET /api/bookings/tickets/:ticketId/pdf
-   * @access Private
-   */
-  exports.downloadTicketPdf = async (req, res) => {
-    try {
-      const { ticketId } = req.params;
-      
-      // Get ticket
-      const ticket = await Ticket.findById(ticketId)
-        .populate('event')
-        .populate('ticketType')
-        .populate('owner', 'firstName lastName');
-      
-      if (!ticket) {
-        return res.status(404).json({ error: 'Ticket not found' });
-      }
-      
-      // Verify ownership or admin access
-      const isOwner = ticket.owner._id.toString() === req.user.id;
-      const event = await Event.findById(ticket.event._id);
-      const isEventCreator = event && event.createdBy.toString() === req.user.id;
-      
-      if (!isOwner && !isEventCreator && !req.user.isAdmin) {
-        return res.status(403).json({ error: 'You do not have permission to download this ticket' });
-      }
-      
-      // Generate PDF
-      const pdfBuffer = await pdfService.generateTicketPdf(ticket);
-      
-      // Set response headers
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="ticket-${ticket.ticketNumber}.pdf"`);
-      
-      // Send PDF
-      res.send(pdfBuffer);
-    } catch (error) {
-      console.error('Download ticket PDF error:', error);
-      res.status(500).json({ error: 'Server error when generating ticket PDF' });
+/**
+ * Download ticket as PDF
+ * @route GET /api/bookings/tickets/:ticketId/pdf
+ * @access Private
+ */
+exports.downloadTicketPdf = async (req, res) => {
+  try {
+    const { ticketId } = req.params;
+    
+    // Get ticket
+    const ticket = await Ticket.findById(ticketId)
+      .populate('event')
+      .populate('ticketType')
+      .populate('owner', 'firstName lastName');
+    
+    if (!ticket) {
+      return res.status(404).json({ error: 'Ticket not found' });
     }
-  };
-  
+    
+    // Verify ownership or admin access
+    const isOwner = ticket.owner._id.toString() === req.user.id;
+    const event = await Event.findById(ticket.event._id);
+    const isEventCreator = event && event.createdBy.toString() === req.user.id;
+    
+    if (!isOwner && !isEventCreator && !req.user.isAdmin) {
+      return res.status(403).json({ error: 'You do not have permission to download this ticket' });
+    }
+    
+    // Generate PDF - use different function for group tickets
+    let pdfBuffer;
+    if (ticket.isGroupTicket) {
+      pdfBuffer = await pdfService.generateGroupTicketPdf(ticket);
+    } else {
+      pdfBuffer = await pdfService.generateTicketPdf(ticket);
+    }
+    
+    // Set response headers
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 
+      `attachment; filename="${ticket.isGroupTicket ? 'group-' : ''}ticket-${ticket.ticketNumber}.pdf"`);
+    
+    // Send PDF
+    res.send(pdfBuffer);
+  } catch (error) {
+    console.error('Download ticket PDF error:', error);
+    res.status(500).json({ error: 'Server error when generating ticket PDF' });
+  }
+};
+ 
   /**
    * Get event booking statistics
    * @route GET /api/bookings/events/:eventId/stats
