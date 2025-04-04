@@ -229,7 +229,7 @@ exports.createBooking = async (req, res) => {
     const { eventId } = req.params;
     const { 
       ticketSelections, 
-      paymentMethod,
+      paymentMethod: requestPaymentMethod,
       promoCode,
       contactInformation,
       returnUrl
@@ -257,28 +257,6 @@ exports.createBooking = async (req, res) => {
       return res.status(404).json({ error: 'Event not found' });
     }
     
-    // Detailed logging for debugging
-    console.log('Event details:', {
-      eventId: event._id,
-      eventName: event.name,
-      createdBy: event.createdBy,
-      startDateTime: event.startDateTime
-    });
-    
-    // Verify event date is in the future
-    const now = new Date();
-    const eventStartTime = new Date(event.startDateTime);
-    
-    if (eventStartTime < now) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({ 
-        error: 'Cannot book tickets for past events',
-        eventStart: eventStartTime,
-        currentTime: now
-      });
-    }
-    
     // Process each ticket type selection
     let totalAmount = 0;
     let totalTicketCount = 0;
@@ -302,7 +280,7 @@ exports.createBooking = async (req, res) => {
         return res.status(404).json({ error: `Ticket type not found: ${ticketTypeId}` });
       }
       
-      // Ensure ticketType.event exists
+      // Validate ticket type details and availability
       if (!ticketType.event) {
         await session.abortTransaction();
         session.endSession();
@@ -315,6 +293,9 @@ exports.createBooking = async (req, res) => {
         session.endSession();
         return res.status(400).json({ error: 'Ticket type does not belong to this event' });
       }
+      
+      // Additional ticket type validation logic
+      const now = new Date();
       
       // Check if tickets are on sale
       if (ticketType.startSaleDate > now || 
@@ -362,58 +343,51 @@ exports.createBooking = async (req, res) => {
       allTicketTypes.push({ ticketType, quantity });
     }
     
-    // Apply promo code if provided
-    let promoDiscount = 0;
-    let promoDetails = null;
-    
-    if (promoCode) {
-      // This would be replaced with actual promo code validation logic
-      const validPromoCode = {
-        code: promoCode,
-        discountPercentage: 10, // Example: 10% discount
-        isValid: true
-      };
-      
-      if (validPromoCode.isValid) {
-        promoDiscount = totalAmount * (validPromoCode.discountPercentage / 100);
-        totalAmount -= promoDiscount;
-        
-        promoDetails = {
-          code: validPromoCode.code,
-          discountAmount: promoDiscount,
-          discountPercentage: validPromoCode.discountPercentage
-        };
-      }
-    }
-    
-    // Extensive logging for booking creation
-    console.log('Booking Creation Details:', {
+    // Comprehensive logging for debugging
+    console.log('Booking Creation Debug:', {
       totalAmount,
       totalTicketCount,
-      isFreeBooking: totalAmount === 0,
-      paymentMethod: totalAmount === 0 ? 'free' : paymentMethod
+      requestPaymentMethod,
+      userId: req.user.id,
+      eventId
     });
     
-    // Determine booking status and payment status
+    // Determine booking and payment details
     const isFreeBooking = totalAmount === 0;
-    const bookingStatus = isFreeBooking ? 'confirmed' : 'pending';
-    const paymentStatus = isFreeBooking ? 'completed' : 'pending';
-    const paymentMethod = isFreeBooking ? 'free' : paymentMethod;
+    
+    // Determine payment method and status
+    const finalPaymentMethod = isFreeBooking 
+      ? 'free' 
+      : (requestPaymentMethod || 'pending');
+    
+    const bookingStatus = isFreeBooking 
+      ? 'confirmed' 
+      : (finalPaymentMethod === 'pending' ? 'pending' : 'initiate')
+      const paymentStatus = isFreeBooking 
+      ? 'completed' 
+      : (finalPaymentMethod === 'pending' ? 'pending' : 'processing');
+    
+    // Enhanced logging of final status
+    console.log('Booking Status Details:', {
+      isFreeBooking,
+      finalPaymentMethod,
+      bookingStatus,
+      paymentStatus
+    });
     
     // Create booking with explicit status setting
     const booking = new Booking({
       user: req.user.id,
       event: eventId,
       totalAmount,
-      currency: allTicketTypes[0].ticketType.currency,
-      status: bookingStatus, // Explicitly set based on free/paid
+      currency: allTicketTypes[0].ticketType.currency || 'INR',
+      status: bookingStatus,
       paymentInfo: {
-        method: paymentMethod,
-        status: paymentStatus // Explicitly set based on free/paid
+        method: finalPaymentMethod,
+        status: paymentStatus
       },
-      promoCode: promoDetails,
       contactInformation,
-      ticketCount: totalTicketCount // Store total ticket count
+      ticketCount: totalTicketCount
     });
     
     // Generate a common QR secret for all tickets in this booking
@@ -425,8 +399,8 @@ exports.createBooking = async (req, res) => {
       event: eventId,
       booking: booking._id,
       owner: req.user.id,
-      isGroupTicket: true, // Flag to identify this is a group ticket
-      totalTickets: totalTicketCount, // Store how many actual tickets this represents
+      isGroupTicket: true,
+      totalTickets: totalTicketCount,
       status: isFreeBooking ? 'active' : 'pending',
       qrSecret: commonQrSecret
     });
@@ -457,7 +431,7 @@ exports.createBooking = async (req, res) => {
     
     // Update booking with the group ticket
     booking.tickets = [groupTicket._id];
-    booking.groupTicket = true; // Flag that this booking uses a group ticket
+    booking.groupTicket = true;
     await booking.save({ session });
     
     // Additional logging after saving
@@ -475,8 +449,6 @@ exports.createBooking = async (req, res) => {
     // For free bookings, send confirmation email
     if (isFreeBooking) {
       try {
-        // Optional: Send email confirmation
-        const emailService = require('../services/emailService');
         await emailService.sendEmail({
           to: contactInformation.email || req.user.email,
           subject: `Booking Confirmed: ${event.name}`,
@@ -490,25 +462,31 @@ exports.createBooking = async (req, res) => {
       }
     }
     
-    // Prepare response based on booking type
+    // Prepare response
+    const responseBooking = {
+      id: booking._id,
+      bookingNumber: booking.bookingNumber,
+      totalAmount,
+      currency: booking.currency,
+      status: booking.status,
+      paymentStatus: booking.paymentInfo.status,
+      ticketCount: totalTicketCount
+    };
+    
+    // Handle different scenarios based on booking type
     if (isFreeBooking) {
       return res.status(200).json({
         success: true,
         booking: {
-          id: booking._id,
-          bookingNumber: booking.bookingNumber,
-          totalAmount: 0,
-          currency: booking.currency,
+          ...responseBooking,
           status: 'confirmed',
-          paymentStatus: 'completed',
-          ticketCount: totalTicketCount
+          paymentStatus: 'completed'
         }
       });
     }
     
-    // Handle different payment methods for paid bookings
-    if (paymentMethod === 'phonepe') {
-      // PhonePe payment initiation logic
+    // Payment method specific handling (e.g., PhonePe)
+    if (finalPaymentMethod === 'phonepe') {
       try {
         const paymentData = {
           amount: totalAmount,
@@ -527,13 +505,7 @@ exports.createBooking = async (req, res) => {
         return paymentResponse.success 
           ? res.status(200).json({
               success: true,
-              booking: {
-                id: booking._id,
-                bookingNumber: booking.bookingNumber,
-                totalAmount,
-                currency: booking.currency,
-                ticketCount: totalTicketCount
-              },
+              booking: responseBooking,
               payment: {
                 method: 'phonepe',
                 transactionId: paymentResponse.transactionId,
@@ -543,36 +515,23 @@ exports.createBooking = async (req, res) => {
           : res.status(400).json({
               success: false,
               message: paymentResponse.message || 'Failed to initialize payment',
-              booking: {
-                id: booking._id,
-                bookingNumber: booking.bookingNumber
-              }
+              booking: responseBooking
             });
       } catch (paymentError) {
         console.error('Payment initiation error:', paymentError);
         return res.status(500).json({
           success: false,
           message: 'Error initializing payment',
-          booking: {
-            id: booking._id,
-            bookingNumber: booking.bookingNumber
-          }
+          booking: responseBooking
         });
       }
-    } else {
-      // For other payment methods
-      return res.status(201).json({
-        success: true,
-        booking: {
-          id: booking._id,
-          bookingNumber: booking.bookingNumber,
-          totalAmount,
-          currency: booking.currency,
-          status: booking.status,
-          ticketCount: totalTicketCount
-        }
-      });
     }
+    
+    // For other payment methods
+    return res.status(201).json({
+      success: true,
+      booking: responseBooking
+    });
   } catch (error) {
     // Ensure transaction is always aborted and session ended in case of an error
     try {
