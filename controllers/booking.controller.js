@@ -1129,7 +1129,7 @@ exports.getEventTickets = async (req, res) => {
     }
     
     // Verify user has permission
-    const isEventCreator = event.createdBy.toString() === req.user.id;
+     const isEventCreator = event.createdBy.toString() === req.user.id.toString();
     const isEventHost = event.attendees && event.attendees.some(a => 
       a.user.toString() === req.user.id && ['host', 'staff'].includes(a.role)
     );
