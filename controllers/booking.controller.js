@@ -700,7 +700,7 @@ exports.cancelBooking = async (req, res) => {
     }
     
     // Verify ownership
-    if (booking.user.toString() !== req.user.id) {
+    if (booking.user.toString() !== req.user.id.toString()) {
       await session.abortTransaction();
       session.endSession();
       return res.status(403).json({ error: 'You can only cancel your own bookings' });
