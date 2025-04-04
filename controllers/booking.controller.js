@@ -1259,18 +1259,52 @@ exports.getEventTickets = async (req, res) => {
 };
 exports.getTicketTypes = async (req, res) => {
   try {
+    // Add request details logging
+    console.log('====== START getTicketTypes ======');
+    console.log('Request URL:', req.originalUrl);
+    console.log('Request method:', req.method);
+    console.log('Request headers:', JSON.stringify(
+      Object.keys(req.headers).reduce((acc, key) => {
+        // Mask sensitive information like auth tokens
+        if (key.toLowerCase() === 'authorization') {
+          acc[key] = req.headers[key].substring(0, 15) + '...';
+        } else {
+          acc[key] = req.headers[key];
+        }
+        return acc;
+      }, {})
+    ));
+    
     const { eventId } = req.params;
     const { includeInactive, includeFuture } = req.query;
     
     console.log(`Getting ticket types for event: ${eventId}`);
     console.log(`Query params: includeInactive=${includeInactive}, includeFuture=${includeFuture}`);
     
+    if (!eventId) {
+      console.log('ERROR: Missing eventId parameter');
+      return res.status(400).json({ error: 'Event ID is required' });
+    }
+    
+    // Log user authentication status
+    console.log('User authenticated:', !!req.user);
+    if (req.user) {
+      console.log('User ID:', req.user.id);
+      console.log('User roles:', req.user.isAdmin ? 'Admin' : 'Regular user');
+    }
+    
     // Check if event exists
+    console.log('Checking if event exists...');
     const event = await Event.findById(eventId);
     if (!event) {
-      console.log(`Event not found: ${eventId}`);
+      console.log(`ERROR: Event not found: ${eventId}`);
       return res.status(404).json({ error: 'Event not found' });
     }
+    console.log('Event found:', {
+      id: event._id,
+      name: event.name || 'Unnamed',
+      createdBy: event.createdBy
+    });
     
     // Build query
     const query = { event: eventId };
@@ -1281,7 +1315,7 @@ exports.getTicketTypes = async (req, res) => {
     const isAdmin = req.user && req.user.isAdmin;
     const hasFullAccess = isEventCreator || isAdmin;
     
-    console.log(`User permissions: isEventCreator=${isEventCreator}, isAdmin=${isAdmin}`);
+    console.log(`User permissions: isEventCreator=${isEventCreator}, isAdmin=${isAdmin}, hasFullAccess=${hasFullAccess}`);
     
     // Only show active ticket types unless specifically requested AND user has permission
     if (includeInactive !== 'true' || !hasFullAccess) {
@@ -1306,20 +1340,38 @@ exports.getTicketTypes = async (req, res) => {
       ];
     }
     
-    console.log('Executing query:', JSON.stringify(query, null, 2));
+    console.log('Final query:', JSON.stringify(query, null, 2));
+    
+    // First try a basic query to make sure connection works
+    console.log('Testing basic database connection...');
+    const basicTest = await TicketType.findOne({});
+    console.log('Basic DB query result:', basicTest ? 'Success - found at least one ticket type' : 'No ticket types found in the entire database');
     
     // Get all ticket types for the event
+    console.log('Executing final query...');
     const ticketTypes = await TicketType.find(query).sort('price');
-    console.log(`Found ${ticketTypes.length} ticket types`);
+    console.log(`Found ${ticketTypes.length} ticket types matching query criteria`);
     
-    // If no tickets found with filters, and user has permissions, 
-    // check if tickets exist without date filters
-    if (ticketTypes.length === 0 && hasFullAccess) {
-      console.log('No tickets found with filters, checking for any tickets');
-      const allTickets = await TicketType.find({ event: eventId });
-      if (allTickets.length > 0) {
-        console.log(`Found ${allTickets.length} tickets without filters`);
-        console.log('First ticket details:', JSON.stringify(allTickets[0], null, 2));
+    // If no tickets found with filters, check if any tickets exist at all for this event
+    if (ticketTypes.length === 0) {
+      console.log('No tickets found with filters, checking for any tickets for this event...');
+      const allEventTickets = await TicketType.find({ event: eventId });
+      console.log(`Found ${allEventTickets.length} tickets for this event without filters`);
+      
+      if (allEventTickets.length > 0) {
+        // Log details about why these tickets might be excluded
+        allEventTickets.forEach((ticket, index) => {
+          console.log(`Ticket ${index + 1}:`, {
+            id: ticket._id,
+            name: ticket.name,
+            isActive: ticket.isActive,
+            startSaleDate: ticket.startSaleDate,
+            endSaleDate: ticket.endSaleDate,
+            would_pass_date_filter: includeFuture === 'true' ? true : 
+                                   (ticket.startSaleDate <= new Date() && 
+                                   (!ticket.endSaleDate || ticket.endSaleDate >= new Date()))
+          });
+        });
       }
     }
     
@@ -1355,10 +1407,22 @@ exports.getTicketTypes = async (req, res) => {
       };
     });
     
+    console.log(`Returning ${enhancedTicketTypes.length} enhanced ticket types`);
+    console.log('====== END getTicketTypes ======');
+    
     res.json(enhancedTicketTypes);
   } catch (error) {
-    console.error('Get ticket types error:', error);
-    res.status(500).json({ error: 'Server error when retrieving ticket types' });
+    console.error('====== ERROR in getTicketTypes ======');
+    console.error('Error name:', error.name);
+    console.error('Error message:', error.message);
+    console.error('Error stack:', error.stack);
+    console.error('Query params:', req.query);
+    console.error('====== END ERROR ======');
+    
+    res.status(500).json({ 
+      error: 'Server error when retrieving ticket types',
+      details: error.message
+    });
   }
 };
   
