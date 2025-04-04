@@ -186,7 +186,7 @@ exports.bookingValidationRules = () => {
     body('paymentMethod')
       .notEmpty()
       .withMessage('Payment method is required')
-      .isIn(['phonepe', 'credit_card', 'debit_card', 'upi', 'bank_transfer'])
+      .isIn(['phonepe', 'credit_card', 'debit_card', 'upi', 'bank_transfer','free'])
       .withMessage('Invalid payment method'),
       
     body('contactInformation.email')
