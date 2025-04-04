@@ -542,7 +542,7 @@ exports.getEvents = async (req, res) => {
       
       // Add user's response
       const userResponse = event.attendees.find(a => 
-        a.user && a.user._id && a.user._id.toString() === req.user.id
+        a.user && a.user._id && a.user._id.toString() === req.user.id.toString()
       );
       eventObj.userResponse = userResponse ? userResponse.status : null;
       eventObj.userRole = userResponse ? userResponse.role : null;
@@ -620,12 +620,12 @@ exports.getEvent = async (req, res) => {
                       event.createdBy._id.toString() === req.user.id.toString();
       
       const isInvited = event.invites && event.invites.some(i => 
-        i.user && i.user._id && i.user._id.toString() === req.user.id
+        i.user && i.user._id && i.user._id.toString() === req.user.id.toString()
       );
       
       let isConnection = false;
       try {
-        isConnection = await isUserConnected(req.user.id, event.createdBy._id.toString());
+        isConnection = await isUserConnected(req.user.id.toString(), event.createdBy._id.toString());
       } catch (error) {
         console.error('Error checking connection:', error);
         // Continue with isConnection as false
@@ -644,7 +644,7 @@ exports.getEvent = async (req, res) => {
     const eventObj = event.toObject();
     
     const userResponse = event.attendees.find(a => 
-      a.user && a.user._id && a.user._id.toString() === req.user.id
+      a.user && a.user._id && a.user._id.toString() === req.user.id.toString()
     );
     eventObj.userResponse = userResponse ? userResponse.status : null;
     eventObj.userRole = userResponse ? userResponse.role : null;
@@ -679,7 +679,7 @@ exports.getEvent = async (req, res) => {
     // For virtual events, check if user can access the link
     if (event.virtual && event.virtualMeetingLink) {
       const canAccessLink = event.createdBy && event.createdBy._id && 
-                           event.createdBy._id.toString() === req.user.id || 
+                           event.createdBy._id.toString() === req.user.id.toString() || 
                            (userResponse && userResponse.status === 'going');
       
       if (!canAccessLink) {
@@ -727,9 +727,9 @@ exports.updateEvent = async (req, res) => {
     }
     
     // Check if user is creator or has host role
-    const isCreator = event.createdBy && event.createdBy.toString() === req.user.id;
+    const isCreator = event.createdBy && event.createdBy.toString() === req.user.id.toString();
     const isHost = event.attendees && event.attendees.some(a => 
-      a.user && a.user.toString() === req.user.id && a.role === 'host'
+      a.user && a.user.toString() === req.user.id.toString() && a.role === 'host'
     );
     
     if (!isCreator && !isHost) {
@@ -820,7 +820,7 @@ exports.updateEvent = async (req, res) => {
     
     // Mark as updated
     event.updatedAt = Date.now();
-    event.updatedBy = req.user.id;
+    event.updatedBy = req.user.id.toString();
     
     await event.save();
     
@@ -876,7 +876,7 @@ exports.updateEvent = async (req, res) => {
           
           // Mark as updated
           futureEvent.updatedAt = Date.now();
-          futureEvent.updatedBy = req.user.id;
+          futureEvent.updatedBy = req.user.id.toString();
           
           return futureEvent.save();
         });
@@ -892,7 +892,7 @@ exports.updateEvent = async (req, res) => {
     
     // Notify attendees about updates
     const attendeeIds = event.attendees
-      .filter(a => a.status === 'going' && a.user.toString() !== req.user.id)
+      .filter(a => a.status === 'going' && a.user.toString() !== req.user.id.toString())
       .map(a => a.user.toString());
     
     if (attendeeIds.length > 0) {
@@ -900,7 +900,7 @@ exports.updateEvent = async (req, res) => {
       const notifications = attendeeIds.map(userId => ({
         recipient: userId,
         type: 'event_updated',
-        sender: req.user.id,
+        sender: req.user.id.toString(),
         data: {
           eventId: event._id,
           eventName: event.name
@@ -915,7 +915,7 @@ exports.updateEvent = async (req, res) => {
         socketEvents.emitToUser(userId, 'event_updated', {
           eventId: event._id,
           eventName: event.name,
-          updatedBy: req.user.id
+          updatedBy: req.user.id.toString()
         });
       });
     }
@@ -926,7 +926,6 @@ exports.updateEvent = async (req, res) => {
     res.status(500).json({ error: 'Server error when updating event' });
   }
 };
-
 /**
  * Delete an event
  * @route DELETE /api/events/:eventId
@@ -945,7 +944,7 @@ exports.deleteEvent = async (req, res) => {
     }
     
     // Check if user is creator
-    if (event.createdBy.toString() !== req.user.id) {
+    if (event.createdBy.toString() !== req.user.id.toString()) {
       return res.status(403).json({ error: 'Only the event creator can delete this event' });
     }
     
@@ -964,7 +963,7 @@ exports.deleteEvent = async (req, res) => {
       
       events.forEach(seriesEvent => {
         seriesEvent.attendees
-          .filter(a => a.status === 'going' && a.user.toString() !== req.user.id)
+          .filter(a => a.status === 'going' && a.user.toString() !== req.user.id.toString())
           .forEach(a => allAttendees.add(a.user.toString()));
       });
       
@@ -972,7 +971,7 @@ exports.deleteEvent = async (req, res) => {
       const notifications = Array.from(allAttendees).map(userId => ({
         recipient: userId,
         type: 'event_cancelled',
-        sender: req.user.id,
+        sender: req.user.id.toString(),
         data: {
           eventId: event._id,
           eventName: event.name,
@@ -990,15 +989,14 @@ exports.deleteEvent = async (req, res) => {
             eventId: event._id,
             eventName: event.name,
             isSeries: true,
-            cancelledBy: req.user.id
+            cancelledBy: req.user.id.toString()
           });
         });
       }
     } else {
       // Notify attendees about cancellation
-      // Notify attendees about cancellation
       const attendeeIds = event.attendees
-        .filter(a => a.status === 'going' && a.user.toString() !== req.user.id)
+        .filter(a => a.status === 'going' && a.user.toString() !== req.user.id.toString())
         .map(a => a.user.toString());
       
       if (attendeeIds.length > 0) {
@@ -1006,7 +1004,7 @@ exports.deleteEvent = async (req, res) => {
         const notifications = attendeeIds.map(userId => ({
           recipient: userId,
           type: 'event_cancelled',
-          sender: req.user.id,
+          sender: req.user.id.toString(),
           data: {
             eventId: event._id,
             eventName: event.name
@@ -1021,7 +1019,7 @@ exports.deleteEvent = async (req, res) => {
           socketEvents.emitToUser(userId, 'event_cancelled', {
             eventId: event._id,
             eventName: event.name,
-            cancelledBy: req.user.id
+            cancelledBy: req.user.id.toString()
           });
         });
       }
@@ -1078,9 +1076,9 @@ exports.respondToEvent = async (req, res) => {
     }
     
     // Check if event requires approval
-    const isCreator = event.createdBy.toString() === req.user.id;
+    const isCreator = event.createdBy.toString() === req.user.id.toString();
     const isHost = event.attendees.some(a => 
-      a.user.toString() === req.user.id && a.role === 'host'
+      a.user.toString() === req.user.id.toString() && a.role === 'host'
     );
     
     let pendingApproval = false;
@@ -1094,7 +1092,7 @@ exports.respondToEvent = async (req, res) => {
       const goingCount = event.attendees.filter(a => a.status === 'going').length;
       
       // Find existing response to see if user was already counted
-      const existingResponse = event.attendees.find(a => a.user.toString() === req.user.id);
+      const existingResponse = event.attendees.find(a => a.user.toString() === req.user.id.toString());
       const userAlreadyGoing = existingResponse && existingResponse.status === 'going';
       
       // If at capacity and user wasn't already going, reject
@@ -1104,7 +1102,7 @@ exports.respondToEvent = async (req, res) => {
     }
     
     // Look for existing attendee entry
-    const attendeeIndex = event.attendees.findIndex(a => a.user.toString() === req.user.id);
+    const attendeeIndex = event.attendees.findIndex(a => a.user.toString() === req.user.id.toString());
     
     if (attendeeIndex !== -1) {
       // Update existing entry
@@ -1124,7 +1122,7 @@ exports.respondToEvent = async (req, res) => {
     
     // If user was invited, mark the invitation as responded
     if (event.invites && event.invites.length > 0) {
-      const inviteIndex = event.invites.findIndex(i => i.user.toString() === req.user.id);
+      const inviteIndex = event.invites.findIndex(i => i.user.toString() === req.user.id.toString());
       
       if (inviteIndex !== -1) {
         event.invites[inviteIndex].status = 'responded';
@@ -1146,11 +1144,11 @@ exports.respondToEvent = async (req, res) => {
     );
     
     // Notify event creator if not self
-    if (event.createdBy.toString() !== req.user.id) {
+    if (event.createdBy.toString() !== req.user.id.toString()) {
       await Notification.create({
         recipient: event.createdBy,
         type: pendingApproval ? 'event_response_pending' : 'event_response',
-        sender: req.user.id,
+        sender: req.user.id.toString(),
         data: {
           eventId,
           eventName: event.name,
@@ -1164,7 +1162,7 @@ exports.respondToEvent = async (req, res) => {
         eventId,
         eventName: event.name,
         status: pendingApproval ? 'pending' : status,
-        userId: req.user.id
+        userId: req.user.id.toString()
       });
     }
     
@@ -1174,7 +1172,7 @@ exports.respondToEvent = async (req, res) => {
       .populate('attendees.user', 'firstName lastName username profileImage');
     
     // Add user's response
-    const userResponse = updatedEvent.attendees.find(a => a.user._id.toString() === req.user.id);
+    const userResponse = updatedEvent.attendees.find(a => a.user._id.toString() === req.user.id.toString());
     
     res.json({
       event: updatedEvent,
@@ -1189,7 +1187,6 @@ exports.respondToEvent = async (req, res) => {
     res.status(500).json({ error: 'Server error when responding to event' });
   }
 };
-
 /**
  * Get event attendees
  * @route GET /api/events/:eventId/attendees
@@ -1210,8 +1207,8 @@ exports.getEventAttendees = async (req, res) => {
     }
     
     // Check visibility permissions
-    const isParticipant = event.attendees.some(a => a.user._id.toString() === req.user.id);
-    const isCreator = event.createdBy.toString() === req.user.id;
+    const isParticipant = event.attendees.some(a => a.user._id.toString() === req.user.id.toString());
+    const isCreator = event.createdBy.toString() === req.user.id.toString();
     
     if (!isParticipant && !isCreator && event.visibility === 'private') {
       return res.status(403).json({ error: 'You do not have permission to view attendees' });
@@ -1233,7 +1230,7 @@ exports.getEventAttendees = async (req, res) => {
     
     // Get pending approval requests (for creator/hosts only)
     const isHost = event.attendees.some(a => 
-      a.user._id.toString() === req.user.id && a.role === 'host'
+      a.user._id.toString() === req.user.id.toString() && a.role === 'host'
     );
     
     const pendingApprovals = (isCreator || isHost) ? 
@@ -1276,9 +1273,9 @@ exports.inviteToEvent = async (req, res) => {
     }
     
     // Check if user has permission to invite
-    const isCreator = event.createdBy.toString() === req.user.id;
+    const isCreator = event.createdBy.toString() === req.user.id.toString();
     const isHost = event.attendees.some(a => 
-      a.user.toString() === req.user.id && a.role === 'host'
+      a.user.toString() === req.user.id.toString() && a.role === 'host'
     );
     
     if (!isCreator && !isHost) {
@@ -1311,10 +1308,10 @@ exports.inviteToEvent = async (req, res) => {
     
     validUserIds.forEach(userId => {
       // Check if user is already invited
-      const alreadyInvited = event.invites.some(i => i.user.toString() === userId);
+      const alreadyInvited = event.invites.some(i => i.user.toString() === userId.toString());
       
       // Check if user is already an attendee
-      const alreadyAttending = event.attendees.some(a => a.user.toString() === userId);
+      const alreadyAttending = event.attendees.some(a => a.user.toString() === userId.toString());
       
       if (!alreadyInvited && !alreadyAttending) {
         // Add invite
@@ -1399,7 +1396,7 @@ exports.checkInToEvent = async (req, res) => {
     
     // Check if user is on the attendee list and status is 'going'
     const isAttending = event.attendees.some(a => 
-      a.user.toString() === req.user.id && a.status === 'going'
+      a.user.toString() === req.user.id.toString() && a.status === 'going'
     );
     
     if (!isAttending) {
@@ -1483,7 +1480,7 @@ exports.checkInToEvent = async (req, res) => {
     await event.save();
     
     // Notify event creator if not self
-    if (event.createdBy._id.toString() !== req.user.id) {
+    if (event.createdBy._id.toString() !== req.user.id.toString()) {
       await Notification.create({
         recipient: event.createdBy._id,
         type: 'event_checkin',
@@ -1516,7 +1513,6 @@ exports.checkInToEvent = async (req, res) => {
     res.status(500).json({ error: 'Server error during event check-in' });
   }
 };
-
 /**
  * Get event analytics
  * @route GET /api/events/:eventId/analytics
@@ -1534,9 +1530,9 @@ exports.getEventAnalytics = async (req, res) => {
     }
     
     // Check if user has permission to view analytics
-    const isCreator = event.createdBy.toString() === req.user.id;
+    const isCreator = event.createdBy.toString() === req.user.id.toString();
     const isHost = event.attendees.some(a => 
-      a.user.toString() === req.user.id && a.role === 'host'
+      a.user.toString() === req.user.id.toString() && a.role === 'host'
     );
     
     if (!isCreator && !isHost) {
@@ -1683,7 +1679,7 @@ exports.updateAttendeeRole = async (req, res) => {
     }
     
     // Check if user has permission to update roles
-    const isCreator = event.createdBy.toString() === req.user.id;
+    const isCreator = event.createdBy.toString() === req.user.id.toString();
     
     if (!isCreator) {
       return res.status(403).json({ error: 'Only the event creator can update attendee roles' });
@@ -1757,9 +1753,9 @@ exports.approveAttendee = async (req, res) => {
     }
     
     // Check if user has permission to approve attendees
-    const isCreator = event.createdBy.toString() === req.user.id;
+    const isCreator = event.createdBy.toString() === req.user.id.toString();
     const isHost = event.attendees.some(a => 
-      a.user.toString() === req.user.id && a.role === 'host'
+      a.user.toString() === req.user.id.toString() && a.role === 'host'
     );
     
     if (!isCreator && !isHost) {
@@ -1860,7 +1856,7 @@ exports.approveAttendee = async (req, res) => {
       .populate('attendees.user', 'firstName lastName username profileImage');
     
     res.json({
-success: true,
+      success: true,
       message: approved ? 'Attendee approved' : 'Attendee declined',
       attendees: updatedEvent.attendees.filter(a => a.status === 'going')
     });
@@ -1887,11 +1883,11 @@ exports.removeAttendee = async (req, res) => {
     }
     
     // Check if user has permission to remove attendees
-    const isCreator = event.createdBy.toString() === req.user.id;
+    const isCreator = event.createdBy.toString() === req.user.id.toString();
     const isHost = event.attendees.some(a => 
-      a.user.toString() === req.user.id && a.role === 'host'
+      a.user.toString() === req.user.id.toString() && a.role === 'host'
     );
-    const isSelf = userId === req.user.id;
+    const isSelf = userId === req.user.id.toString();
     
     if (!isCreator && !isHost && !isSelf) {
       return res.status(403).json({ error: 'You do not have permission to remove this attendee' });
@@ -1971,9 +1967,9 @@ exports.generateCheckInCode = async (req, res) => {
     }
     
     // Check if user has permission to generate code
-    const isCreator = event.createdBy.toString() === req.user.id;
+    const isCreator = event.createdBy.toString() === req.user.id.toString();
     const isHost = event.attendees.some(a => 
-      a.user.toString() === req.user.id && a.role === 'host'
+      a.user.toString() === req.user.id.toString() && a.role === 'host'
     );
     
     if (!isCreator && !isHost) {
@@ -2021,9 +2017,9 @@ exports.exportEventAttendees = async (req, res) => {
     }
     
     // Check if user has permission to export data
-    const isCreator = event.createdBy.toString() === req.user.id;
+    const isCreator = event.createdBy.toString() === req.user.id.toString();
     const isHost = event.attendees.some(a => 
-      a.user.toString() === req.user.id && a.role === 'host'
+      a.user.toString() === req.user.id.toString() && a.role === 'host'
     );
     
     if (!isCreator && !isHost) {
