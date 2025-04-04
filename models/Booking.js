@@ -168,6 +168,57 @@ const TicketSchema = new Schema({
   }
 });
 
+// Add pre-save hook to generate QR code if it doesn't exist
+TicketSchema.pre('save', async function(next) {
+  // Only generate QR code if it doesn't exist and we have a qrSecret
+  if (!this.qrCode && this.qrSecret) {
+    try {
+      // Create appropriate verification data based on ticket type
+      let verificationData;
+      
+      if (this.isGroupTicket) {
+        // For group tickets, include group-specific information
+        verificationData = {
+          id: this._id.toString(),
+          ticketNumber: this.ticketNumber,
+          event: this.event.toString(),
+          secret: this.qrSecret,
+          isGroupTicket: true,
+          totalTickets: this.totalTickets,
+          ticketTypes: this.ticketDetails ? this.ticketDetails.map(d => ({
+            name: d.name,
+            quantity: d.quantity
+          })) : []
+        };
+      } else {
+        // For regular tickets
+        verificationData = {
+          id: this._id.toString(),
+          ticketNumber: this.ticketNumber,
+          event: this.event.toString(),
+          secret: this.qrSecret
+        };
+      }
+      
+      // Convert to JSON and generate QR code
+      const qrString = JSON.stringify(verificationData);
+      
+      // Generate QR code as data URL
+      this.qrCode = await QRCode.toDataURL(qrString, {
+        errorCorrectionLevel: 'H',
+        margin: 1,
+        scale: 8
+      });
+      
+      console.log(`QR code automatically generated for ticket: ${this.ticketNumber}`);
+    } catch (error) {
+      console.error(`Error generating QR code for ticket ${this.ticketNumber}:`, error);
+      // Continue with saving even if QR code generation fails
+    }
+  }
+  next();
+});
+
 const BookingSchema = new Schema({
   bookingNumber: {
     type: String,
@@ -211,20 +262,20 @@ const BookingSchema = new Schema({
   },
   status: {
     type: String,
-    enum: ['pending', 'confirmed', 'cancelled', 'refunded'],
+    enum: ['pending', 'confirmed', 'cancelled', 'refunded', 'initiate'],
     default: 'pending'
   },
   paymentInfo: {
     method: {
       type: String,
-      enum: ['credit_card', 'debit_card', 'paypal', 'apple_pay', 'google_pay', 'bank_transfer', 'cash', 'free', 'phonepe']
+      enum: ['credit_card', 'debit_card', 'paypal', 'apple_pay', 'google_pay', 'bank_transfer', 'cash', 'free', 'phonepe', 'pending']
     },
     transactionId: String,
     transactionDate: Date,
     lastFour: String, // Last four digits of card if applicable
     status: {
       type: String,
-      enum: ['pending', 'completed', 'failed', 'refunded']
+      enum: ['pending', 'completed', 'failed', 'refunded', 'processing']
     },
     refundTransactionId: String,
     refundDate: Date
