@@ -386,16 +386,30 @@ exports.createBooking = async (req, res) => {
       }
     }
     
-    // Create booking
+    // Extensive logging for booking creation
+    console.log('Booking Creation Details:', {
+      totalAmount,
+      totalTicketCount,
+      isFreeBooking: totalAmount === 0,
+      paymentMethod: totalAmount === 0 ? 'free' : paymentMethod
+    });
+    
+    // Determine booking status and payment status
+    const isFreeBooking = totalAmount === 0;
+    const bookingStatus = isFreeBooking ? 'confirmed' : 'pending';
+    const paymentStatus = isFreeBooking ? 'completed' : 'pending';
+    const paymentMethod = isFreeBooking ? 'free' : paymentMethod;
+    
+    // Create booking with explicit status setting
     const booking = new Booking({
       user: req.user.id,
       event: eventId,
       totalAmount,
       currency: allTicketTypes[0].ticketType.currency,
-      status: totalAmount === 0 ? 'confirmed' : 'pending',
+      status: bookingStatus, // Explicitly set based on free/paid
       paymentInfo: {
-        method: totalAmount === 0 ? 'free' : paymentMethod,
-        status: totalAmount === 0 ? 'completed' : 'pending'
+        method: paymentMethod,
+        status: paymentStatus // Explicitly set based on free/paid
       },
       promoCode: promoDetails,
       contactInformation,
@@ -413,7 +427,7 @@ exports.createBooking = async (req, res) => {
       owner: req.user.id,
       isGroupTicket: true, // Flag to identify this is a group ticket
       totalTickets: totalTicketCount, // Store how many actual tickets this represents
-      status: totalAmount === 0 ? 'active' : 'pending',
+      status: isFreeBooking ? 'active' : 'pending',
       qrSecret: commonQrSecret
     });
     
@@ -446,13 +460,20 @@ exports.createBooking = async (req, res) => {
     booking.groupTicket = true; // Flag that this booking uses a group ticket
     await booking.save({ session });
     
+    // Additional logging after saving
+    console.log('Saved Booking Details:', {
+      bookingId: booking._id,
+      status: booking.status,
+      paymentStatus: booking.paymentInfo.status,
+      paymentMethod: booking.paymentInfo.method
+    });
+    
     // Commit transaction
     await session.commitTransaction();
     session.endSession();
     
-    // For free bookings, we can skip payment processing and return success immediately
-    if (totalAmount === 0) {
-      // Consider sending confirmation email for free bookings
+    // For free bookings, send confirmation email
+    if (isFreeBooking) {
       try {
         // Optional: Send email confirmation
         const emailService = require('../services/emailService');
@@ -466,9 +487,11 @@ exports.createBooking = async (req, res) => {
         });
       } catch (emailError) {
         console.error('Error sending confirmation email:', emailError);
-        // Don't fail the booking just because the email failed
       }
-      
+    }
+    
+    // Prepare response based on booking type
+    if (isFreeBooking) {
       return res.status(200).json({
         success: true,
         booking: {
@@ -477,6 +500,7 @@ exports.createBooking = async (req, res) => {
           totalAmount: 0,
           currency: booking.currency,
           status: 'confirmed',
+          paymentStatus: 'completed',
           ticketCount: totalTicketCount
         }
       });
