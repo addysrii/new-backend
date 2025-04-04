@@ -835,32 +835,157 @@ exports.cancelBooking = async (req, res) => {
  * @access Private (Staff/Admin/Host only)
  */
 exports.checkInTicket = async (req, res) => {
-    try {
-      const { ticketId } = req.params;
-      const { qrData, verificationCode } = req.body;
-      
-      // Get ticket
-      const ticket = await Ticket.findById(ticketId)
-        .populate('event')
-        .populate('ticketType')
-        .populate('owner', 'firstName lastName email profileImage');
-      
-      if (!ticket) {
-        return res.status(404).json({ error: 'Ticket not found' });
-      }
-      
-      // Verify user has permission to check-in tickets
-      const event = await Event.findById(ticket.event._id);
-      const isEventCreator = event.createdBy.toString() === req.user.id;
-      const isEventHost = event.attendees && event.attendees.some(a => 
-        a.user.toString() === req.user.id && a.role === 'host'
-      );
-      
-      if (!isEventCreator && !isEventHost && !req.user.isAdmin) {
-        return res.status(403).json({ 
-          error: 'Only event creators, hosts, or admins can check in tickets' 
+  try {
+    const { ticketId } = req.params;
+    const { qrData, verificationCode } = req.body;
+    
+    // Get ticket
+    const ticket = await Ticket.findById(ticketId)
+      .populate('event')
+      .populate('ticketType')
+      .populate('owner', 'firstName lastName email profileImage');
+    
+    if (!ticket) {
+      return res.status(404).json({ error: 'Ticket not found' });
+    }
+    
+    // Verify user has permission to check-in tickets
+    const event = await Event.findById(ticket.event._id);
+    const isEventCreator = event.createdBy.toString() === req.user.id;
+    const isEventHost = event.attendees && event.attendees.some(a => 
+      a.user.toString() === req.user.id && a.role === 'host'
+    );
+    
+    if (!isEventCreator && !isEventHost && !req.user.isAdmin) {
+      return res.status(403).json({ 
+        error: 'Only event creators, hosts, or admins can check in tickets' 
+      });
+    }
+    
+    // Handle differently based on whether it's a group ticket or individual ticket
+    if (ticket.isGroupTicket) {
+      // Check if group ticket is already used
+      if (ticket.status === 'used') {
+        return res.status(400).json({ 
+          error: 'This group ticket has already been used',
+          checkedInAt: ticket.checkedInAt
         });
       }
+      
+      // Check if ticket is cancelled or refunded
+      if (['cancelled', 'refunded', 'expired'].includes(ticket.status)) {
+        return res.status(400).json({ error: `This group ticket is ${ticket.status}` });
+      }
+      
+      // Verify ticket data if QR code was scanned
+      let isVerified = false;
+      
+      if (qrData) {
+        try {
+          // Parse QR data
+          const parsedQrData = JSON.parse(qrData);
+          
+          // Verify ticket data matches
+          isVerified = parsedQrData.id === ticket._id.toString() && 
+                      parsedQrData.ticketNumber === ticket.ticketNumber &&
+                      parsedQrData.secret === ticket.qrSecret;
+                      
+          // Also verify it's actually a group ticket
+          if (!parsedQrData.isGroupTicket) {
+            return res.status(400).json({ error: 'QR code is not for a group ticket' });
+          }
+        } catch (err) {
+          return res.status(400).json({ error: 'Invalid QR code data' });
+        }
+      } else if (verificationCode) {
+        // Check against verification code (if used instead of QR)
+        isVerified = verificationCode === ticket.qrSecret.substr(0, 6);
+      } else {
+        return res.status(400).json({ error: 'QR data or verification code is required' });
+      }
+      
+      if (!isVerified) {
+        return res.status(400).json({ error: 'Ticket verification failed' });
+      }
+      
+      // Check that event time is valid for check-in
+      const now = new Date();
+      const eventTime = new Date(ticket.event.startDateTime);
+      const hoursBefore = (eventTime - now) / (1000 * 60 * 60);
+      
+      // Allow check-in from 2 hours before event starts until event end time
+      if (hoursBefore > 2) {
+        return res.status(400).json({ 
+          error: 'Check-in is not available yet. Opens 2 hours before event start.',
+          opensAt: new Date(eventTime.getTime() - 2 * 60 * 60 * 1000)
+        });
+      }
+      
+      if (ticket.event.endDateTime && now > new Date(ticket.event.endDateTime)) {
+        return res.status(400).json({ error: 'Event has ended, check-in is closed' });
+      }
+      
+      // Perform the check-in for the entire group ticket
+      ticket.status = 'used';
+      ticket.checkedIn = true;
+      ticket.checkedInAt = now;
+      ticket.checkedInBy = req.user.id;
+      
+      await ticket.save();
+      
+      // Send notification to ticket owner
+      await Notification.create({
+        recipient: ticket.owner._id,
+        type: 'ticket_checked_in',
+        data: {
+          ticketId: ticket._id,
+          ticketNumber: ticket.ticketNumber,
+          eventId: ticket.event._id,
+          eventName: ticket.event.name,
+          isGroupTicket: true,
+          totalTickets: ticket.totalTickets
+        },
+        timestamp: Date.now()
+      });
+      
+      // Send socket event
+      socketEvents.emitToUser(ticket.owner._id.toString(), 'ticket_checked_in', {
+        ticketId: ticket._id,
+        eventName: ticket.event.name,
+        isGroupTicket: true
+      });
+      
+      // Format ticket details for response
+      const ticketDetails = ticket.ticketDetails.map(detail => ({
+        ticketType: detail.name,
+        quantity: detail.quantity,
+        price: `${detail.price} ${detail.currency}`
+      }));
+      
+      // Return success response with group ticket details
+      res.json({
+        success: true,
+        ticket: {
+          id: ticket._id,
+          ticketNumber: ticket.ticketNumber,
+          status: ticket.status,
+          checkedInAt: ticket.checkedInAt,
+          isGroupTicket: true,
+          totalTickets: ticket.totalTickets
+        },
+        ticketDetails: ticketDetails,
+        owner: {
+          name: `${ticket.owner.firstName} ${ticket.owner.lastName}`,
+          email: ticket.owner.email,
+          profileImage: ticket.owner.profileImage
+        },
+        event: {
+          id: ticket.event._id,
+          name: ticket.event.name
+        }
+      });
+    } else {
+      // This is the regular individual ticket flow
       
       // Check if ticket is already used
       if (ticket.status === 'used') {
@@ -964,11 +1089,13 @@ exports.checkInTicket = async (req, res) => {
           name: ticket.event.name
         }
       });
-    } catch (error) {
-      console.error('Check in ticket error:', error);
-      res.status(500).json({ error: 'Server error when checking in ticket' });
     }
-  };
+  } catch (error) {
+    console.error('Check in ticket error:', error);
+    res.status(500).json({ error: 'Server error when checking in ticket' });
+  }
+};
+
   
   /**
    * Transfer a ticket to another user
