@@ -10,6 +10,214 @@ class PDFService {
    * @param {Object} ticket - Ticket data
    * @returns {Promise<Buffer>} - PDF buffer
    */
+  async generateGroupTicketPdf(ticket) {
+  return new Promise(async (resolve, reject) => {
+    try {
+      console.log(`Generating PDF for group ticket: ${ticket.ticketNumber}`);
+      
+      // Create a document
+      const doc = new PDFDocument({
+        size: 'A4',
+        layout: 'portrait',
+        margin: 50,
+        info: {
+          Title: `Group Ticket ${ticket.ticketNumber}`,
+          Author: 'Event Booking System',
+          Subject: `Group Ticket for ${ticket.event.name}`
+        }
+      });
+      
+      // Buffer to store PDF
+      const chunks = [];
+      doc.on('data', chunk => chunks.push(chunk));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      
+      // Add logo (replace with your app logo path)
+      const logoPath = path.join(__dirname, '../public/images/logo.png');
+      if (fs.existsSync(logoPath)) {
+        doc.image(logoPath, 50, 50, { width: 100 });
+      }
+      
+      // Add event details
+      doc.fontSize(24).font('Helvetica-Bold').text(ticket.event.name, 50, 150);
+      doc.fontSize(14).font('Helvetica').text('GROUP TICKET', 50, 185);
+      
+      doc.moveDown(1);
+      
+      // Event details
+      const eventDate = moment(ticket.event.startDateTime).format('MMMM D, YYYY');
+      const eventTime = moment(ticket.event.startDateTime).format('h:mm A');
+      const location = ticket.event.location ? ticket.event.location.name : 'Online Event';
+      
+      doc.fontSize(12).text(`Date: ${eventDate}`);
+      doc.fontSize(12).text(`Time: ${eventTime}`);
+      doc.fontSize(12).text(`Location: ${location}`);
+      
+      if (ticket.event.location && ticket.event.location.address) {
+        doc.fontSize(12).text(`Address: ${ticket.event.location.address}`);
+        if (ticket.event.location.city && ticket.event.location.state) {
+          doc.fontSize(12).text(`${ticket.event.location.city}, ${ticket.event.location.state} ${ticket.event.location.postalCode || ''}`);
+        }
+      }
+      
+      doc.moveDown(2);
+      
+      // Group ticket info
+      doc.fontSize(16).font('Helvetica-Bold').text('Group Ticket Information');
+      doc.moveDown(0.5);
+      doc.fontSize(12).font('Helvetica');
+      doc.text(`Ticket Number: ${ticket.ticketNumber}`);
+      doc.text(`Total Tickets: ${ticket.totalTickets}`);
+      
+      // Show details of tickets in the group
+      doc.moveDown(1);
+      doc.fontSize(14).font('Helvetica-Bold').text('Ticket Details');
+      
+      if (ticket.ticketDetails && ticket.ticketDetails.length > 0) {
+        // Create a table for ticket details
+        const ticketDetailsTableTop = doc.y + 10;
+        const ticketDetailsTableLeft = 50;
+        const colWidths = [180, 80, 80, 80];
+        
+        // Table header
+        doc.fontSize(10).font('Helvetica-Bold');
+        doc.text('Ticket Type', ticketDetailsTableLeft, ticketDetailsTableTop);
+        doc.text('Price', ticketDetailsTableLeft + colWidths[0], ticketDetailsTableTop);
+        doc.text('Quantity', ticketDetailsTableLeft + colWidths[0] + colWidths[1], ticketDetailsTableTop);
+        doc.text('Subtotal', ticketDetailsTableLeft + colWidths[0] + colWidths[1] + colWidths[2], ticketDetailsTableTop);
+        
+        doc.moveTo(ticketDetailsTableLeft, ticketDetailsTableTop + 15)
+           .lineTo(ticketDetailsTableLeft + colWidths.reduce((a, b) => a + b, 0), ticketDetailsTableTop + 15)
+           .stroke();
+        
+        // Table rows
+        let yPos = ticketDetailsTableTop + 25;
+        let totalAmount = 0;
+        
+        ticket.ticketDetails.forEach(detail => {
+          const subtotal = detail.price * detail.quantity;
+          totalAmount += subtotal;
+          
+          doc.fontSize(10).font('Helvetica');
+          doc.text(detail.name, ticketDetailsTableLeft, yPos);
+          doc.text(`${detail.price} ${detail.currency}`, ticketDetailsTableLeft + colWidths[0], yPos);
+          doc.text(detail.quantity.toString(), ticketDetailsTableLeft + colWidths[0] + colWidths[1], yPos);
+          doc.text(`${subtotal} ${detail.currency}`, ticketDetailsTableLeft + colWidths[0] + colWidths[1] + colWidths[2], yPos);
+          
+          yPos += 20;
+        });
+        
+        // Total row
+        doc.moveTo(ticketDetailsTableLeft, yPos)
+           .lineTo(ticketDetailsTableLeft + colWidths.reduce((a, b) => a + b, 0), yPos)
+           .stroke();
+        
+        yPos += 15;
+        doc.fontSize(10).font('Helvetica-Bold');
+        doc.text('Total:', ticketDetailsTableLeft + colWidths[0] + colWidths[1], yPos);
+        doc.text(`${totalAmount} ${ticket.ticketDetails[0].currency}`, ticketDetailsTableLeft + colWidths[0] + colWidths[1] + colWidths[2], yPos);
+      } else {
+        doc.text('No ticket details available', 50, doc.y + 10);
+      }
+      
+      doc.moveDown(2);
+      
+      // Attendee info
+      doc.fontSize(14).font('Helvetica-Bold').text('Attendee');
+      doc.fontSize(12).font('Helvetica');
+      doc.text(`Name: ${ticket.owner.firstName} ${ticket.owner.lastName}`);
+      doc.moveDown(2);
+      
+      // Add QR code
+      try {
+        // Ensure temp directory exists
+        ensureTempDirExists();
+        
+        // Generate verification data for QR code if missing
+        if (!ticket.qrSecret) {
+          console.log('No QR secret found, generating new one');
+          ticket.qrSecret = crypto.randomBytes(20).toString('hex');
+          // Save the ticket with new QR secret
+          await ticket.save();
+        }
+        
+        // Create a special verification data that includes group ticket info
+        const verificationData = {
+          id: ticket._id.toString(),
+          ticketNumber: ticket.ticketNumber,
+          event: ticket.event._id.toString(),
+          secret: ticket.qrSecret,
+          isGroupTicket: true,
+          totalTickets: ticket.totalTickets,
+          ticketTypes: ticket.ticketDetails.map(d => ({
+            name: d.name,
+            quantity: d.quantity
+          }))
+        };
+        
+        // Convert to JSON and generate QR
+        const qrString = JSON.stringify(verificationData);
+        console.log('Generating QR code with group data');
+        
+        // Generate the QR code directly to a file
+        const qrTempPath = path.join(__dirname, `../temp/qr-${ticket._id}.png`);
+        await QRCode.toFile(qrTempPath, qrString, {
+          errorCorrectionLevel: 'H',
+          margin: 1,
+          scale: 8
+        });
+        
+        console.log('QR code generated at:', qrTempPath);
+        
+        // Add QR code to PDF
+        doc.image(qrTempPath, 50, doc.y, { width: 150 });
+        
+        // Clean up temp file
+        fs.unlinkSync(qrTempPath);
+        console.log('Cleaned up temporary QR file');
+      } catch (err) {
+        console.error('QR code generation error:', err);
+        doc.text('QR code unavailable', 50, doc.y);
+        doc.text('Error: ' + err.message, 50, doc.y + 20);
+      }
+      
+      // Add check-in instructions
+      doc.fontSize(12).text('Present this QR code at the event entrance for check-in.', 210, doc.y - 75);
+      doc.fontSize(10).text('This group ticket admits all tickets listed above.', 210, doc.y + 15);
+      
+      // Add verification code (part of QR secret)
+      if (ticket.qrSecret) {
+        const verificationCode = ticket.qrSecret.substring(0, 6).toUpperCase();
+        doc.fontSize(12).font('Helvetica-Bold').text(`Verification Code: ${verificationCode}`, 210, doc.y + 30);
+        doc.fontSize(10).font('Helvetica').text('Use this code if QR scanning is unavailable', 210, doc.y + 15);
+      }
+      
+      // Add footer with event details and terms
+      const pageHeight = doc.page.height;
+      doc.fontSize(8).font('Helvetica').text(
+        'This group ticket is issued subject to the terms and conditions of the event organizer.',
+        50, pageHeight - 100, { width: 500 }
+      );
+      
+      doc.fontSize(8).text(
+        `Generated on ${moment().format('MMMM D, YYYY [at] h:mm A')}`,
+        50, pageHeight - 80
+      );
+      
+      doc.fontSize(8).text(
+        'This ticket serves as proof of purchase for all the tickets listed above. No refunds or exchanges unless otherwise stated by the event policy.',
+        50, pageHeight - 60, { width: 500 }
+      );
+      
+      // Finalize PDF
+      doc.end();
+      console.log('Group ticket PDF generation completed');
+    } catch (error) {
+      console.error('Error generating group ticket PDF:', error);
+      reject(error);
+    }
+  });
+}
   async generateTicketPdf(ticket) {
     return new Promise(async (resolve, reject) => {
       try {
