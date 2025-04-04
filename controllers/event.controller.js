@@ -617,7 +617,7 @@ exports.getEvent = async (req, res) => {
     // Check visibility permissions
     if (event.visibility !== 'public') {
       const isCreator = event.createdBy && event.createdBy._id && 
-                        event.createdBy._id.toString() === req.user.id;
+                      event.createdBy._id.toString() === req.user.id.toString();
       
       const isInvited = event.invites && event.invites.some(i => 
         i.user && i.user._id && i.user._id.toString() === req.user.id
