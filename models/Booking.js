@@ -16,24 +16,7 @@ const TicketTypeSchema = new Schema({
     ref: 'Event',
     required: true
   },
-  isGroupTicket: {
-    type: Boolean,
-    default: false
-  },
-  totalTickets: {
-    type: Number,
-    default: 1
-  },
-  ticketDetails: [{
-    ticketTypeId: {
-      type: Schema.Types.ObjectId,
-      ref: 'TicketType'
-    },
-    name: String,
-    price: Number,
-    currency: String,
-    quantity: Number
-  }],
+  
   description: {
     type: String,
     trim: true
@@ -75,7 +58,6 @@ const TicketTypeSchema = new Schema({
   }
 });
 
-// Individual Ticket Schema
 const TicketSchema = new Schema({
   ticketNumber: {
     type: String,
@@ -90,8 +72,7 @@ const TicketSchema = new Schema({
   },
   ticketType: {
     type: Schema.Types.ObjectId,
-    ref: 'TicketType',
-    required: true
+    ref: 'TicketType'
   },
   booking: {
     type: Schema.Types.ObjectId,
@@ -105,11 +86,11 @@ const TicketSchema = new Schema({
   },
   price: {
     type: Number,
-    required: true
+    default: 0
   },
   currency: {
     type: String,
-    required: true
+    default: 'USD'
   },
   status: {
     type: String,
@@ -118,7 +99,7 @@ const TicketSchema = new Schema({
   },
   isTransferable: {
     type: Boolean,
-    default: false
+    default: true
   },
   qrCode: {
     type: String // URL or base64 of QR code
@@ -132,6 +113,26 @@ const TicketSchema = new Schema({
     row: String,
     number: String
   },
+  // Fields for group tickets
+  isGroupTicket: {
+    type: Boolean,
+    default: false
+  },
+  totalTickets: {
+    type: Number,
+    default: 1
+  },
+  ticketDetails: [{
+    ticketTypeId: {
+      type: Schema.Types.ObjectId,
+      ref: 'TicketType'
+    },
+    name: String,
+    price: Number,
+    currency: String,
+    quantity: Number
+  }],
+  // End of group ticket fields
   additionalDetails: {
     type: Schema.Types.Mixed
   },
@@ -142,35 +143,31 @@ const TicketSchema = new Schema({
   checkedInAt: {
     type: Date
   },
+  checkedInBy: {
+    type: Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  transferHistory: [{
+    from: {
+      type: Schema.Types.ObjectId,
+      ref: 'User'
+    },
+    to: {
+      type: Schema.Types.ObjectId,
+      ref: 'User'
+    },
+    date: {
+      type: Date,
+      default: Date.now
+    },
+    message: String
+  }],
   createdAt: {
     type: Date,
     default: Date.now
   }
 });
 
-// Generate QR code when ticket is created
-TicketSchema.pre('save', async function(next) {
-  try {
-    if (!this.qrCode) {
-      // Create verification data for QR code
-      const verificationData = {
-        id: this._id,
-        ticketNumber: this.ticketNumber,
-        event: this.event,
-        secret: this.qrSecret
-      };
-      
-      // Convert to JSON and generate QR
-      const qrString = JSON.stringify(verificationData);
-      this.qrCode = await QRCode.toDataURL(qrString);
-    }
-    next();
-  } catch (error) {
-    next(error);
-  }
-});
-
-// Booking Schema (a collection of tickets purchased together)
 const BookingSchema = new Schema({
   bookingNumber: {
     type: String,
@@ -192,13 +189,25 @@ const BookingSchema = new Schema({
     type: Schema.Types.ObjectId,
     ref: 'Ticket'
   }],
+  // Added for group tickets - flag to indicate this booking uses a group ticket
+  groupTicket: {
+    type: Boolean,
+    default: false
+  },
+  // Added field to store total ticket count
+  ticketCount: {
+    type: Number,
+    default: 0
+  },
   totalAmount: {
     type: Number,
-    required: true
+    required: true,
+    default: 0
   },
   currency: {
     type: String,
-    required: true
+    required: true,
+    default: 'USD'
   },
   status: {
     type: String,
@@ -208,7 +217,7 @@ const BookingSchema = new Schema({
   paymentInfo: {
     method: {
       type: String,
-      enum: ['credit_card', 'debit_card', 'paypal', 'apple_pay', 'google_pay', 'bank_transfer','cash',"free"]
+      enum: ['credit_card', 'debit_card', 'paypal', 'apple_pay', 'google_pay', 'bank_transfer', 'cash', 'free', 'phonepe']
     },
     transactionId: String,
     transactionDate: Date,
@@ -216,7 +225,9 @@ const BookingSchema = new Schema({
     status: {
       type: String,
       enum: ['pending', 'completed', 'failed', 'refunded']
-    }
+    },
+    refundTransactionId: String,
+    refundDate: Date
   },
   promoCode: {
     code: String,
@@ -227,6 +238,10 @@ const BookingSchema = new Schema({
     email: String,
     phone: String
   },
+  cancellationReason: String,
+  cancelledAt: Date,
+  refundAmount: Number,
+  refundDate: Date,
   createdAt: {
     type: Date,
     default: Date.now
@@ -237,7 +252,6 @@ const BookingSchema = new Schema({
   }
 });
 
-// Add index for better query performance
 BookingSchema.index({ user: 1, event: 1 });
 BookingSchema.index({ bookingNumber: 1 });
 TicketSchema.index({ ticketNumber: 1 });
