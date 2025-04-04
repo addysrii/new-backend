@@ -9,6 +9,8 @@ const pdfService = require('../services/pdfService.js');
 const emailService = require('../services/emailService.js');
 const mongoose = require('mongoose');
 const crypto = require('crypto');
+const { v4: uuidv4 } = require('uuid');
+const QRCode = require('qrcode');
 const moment = require('moment-timezone');
 
 /**
@@ -160,6 +162,52 @@ exports.createTicketType = async (req, res) => {
  * @route PUT /api/bookings/ticket-types/:ticketTypeId
  * @access Private (Creator only)
  */
+exports.updateTicketType = async (req, res) => {
+  try {
+    const { ticketTypeId } = req.params;
+    const updateData = req.body;
+    
+    // Get ticket type
+    const ticketType = await TicketType.findById(ticketTypeId);
+    if (!ticketType) {
+      return res.status(404).json({ error: 'Ticket type not found' });
+    }
+    
+    // Check if event exists
+    const event = await Event.findById(ticketType.event);
+    if (!event) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+    1
+    // Check if user has permission (only creator can update ticket types)
+    if (event.createdBy.toString() !== req.user.id.toString()) {
+      return res.status(403).json({ error: 'Only the event creator can update ticket types' });
+    }
+    
+    // Don't allow decreasing quantity below sold amount
+    if (updateData.quantity && updateData.quantity < ticketType.quantitySold) {
+      return res.status(400).json({ 
+        error: 'Cannot decrease quantity below sold amount',
+        quantitySold: ticketType.quantitySold
+      });
+    }
+    
+    // Update fields
+    Object.keys(updateData).forEach(key => {
+      // Skip fields that shouldn't be directly updated
+      if (key !== 'event' && key !== 'quantitySold' && key !== '_id') {
+        ticketType[key] = updateData[key];
+      }
+    });
+    
+    await ticketType.save();
+    
+    res.json(ticketType);
+  } catch (error) {
+    console.error('Update ticket type error:', error);
+    res.status(500).json({ error: 'Server error when updating ticket type' });
+  }
+};
 /**
  * Create a new booking with a single QR code for multiple tickets
  * @route POST /api/bookings/events/:eventId/book
