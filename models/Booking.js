@@ -11,6 +11,12 @@ const TicketTypeSchema = new Schema({
     required: true,
     trim: true
   },
+  event: {
+    type: Schema.Types.ObjectId,
+    ref: 'Event',
+    required: true
+  },
+  
   description: {
     type: String,
     trim: true
@@ -90,7 +96,7 @@ const TicketSchema = new Schema({
   },
   status: {
     type: String,
-    enum: ['active', 'used', 'cancelled', 'refunded', 'expired'],
+    enum: ['active', 'used', 'cancelled', 'refunded', 'expired', 'pending'],
     default: 'active'
   },
   isTransferable: {
@@ -185,7 +191,7 @@ const BookingSchema = new Schema({
   paymentInfo: {
     method: {
       type: String,
-      enum: ['credit_card', 'debit_card', 'paypal', 'apple_pay', 'google_pay', 'bank_transfer', 'cash']
+      enum: ['credit_card', 'debit_card', 'paypal', 'apple_pay', 'google_pay', 'bank_transfer','cash',"free"]
     },
     transactionId: String,
     transactionDate: Date,
