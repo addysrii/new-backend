@@ -16,7 +16,24 @@ const TicketTypeSchema = new Schema({
     ref: 'Event',
     required: true
   },
-  
+  isGroupTicket: {
+    type: Boolean,
+    default: false
+  },
+  totalTickets: {
+    type: Number,
+    default: 1
+  },
+  ticketDetails: [{
+    ticketTypeId: {
+      type: Schema.Types.ObjectId,
+      ref: 'TicketType'
+    },
+    name: String,
+    price: Number,
+    currency: String,
+    quantity: Number
+  }],
   description: {
     type: String,
     trim: true
