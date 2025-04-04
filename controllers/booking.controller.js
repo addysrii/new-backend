@@ -1644,107 +1644,120 @@ exports.downloadTicketPdf = async (req, res) => {
    * @route GET /api/bookings/events/:eventId/stats
    * @access Private (Creator only)
    */
- exports.getEventBookingStats = async (req, res) => {
-    try {
-      const { eventId } = req.params;
-      
-      // Get event
-      const event = await Event.findById(eventId);
-      if (!event) {
-        return res.status(404).json({ error: 'Event not found' });
-      }
-      
-      // Verify user has permission
-      if (event.createdBy.toString() !== req.user.id.toString() && !req.user.isAdmin) {
-        return res.status(403).json({ 
-          error: 'Only the event creator or admins can view booking statistics' 
-        });
-      }
-      
-      // Get ticket types
-      const ticketTypes = await TicketType.find({ event: eventId });
-      
-      // Get all bookings for the event
-      const bookings = await Booking.find({ 
-        event: eventId,
-        status: { $in: ['confirmed', 'refunded'] }
-      }).populate('user', 'firstName lastName');
-      
-      // Get all tickets for the event
-      const tickets = await Ticket.find({ event: eventId });
-      
-      // Calculate total revenue
-      const totalRevenue = bookings.reduce((sum, booking) => {
-        if (booking.status === 'refunded' && booking.refundAmount) {
-          return sum + (booking.totalAmount - booking.refundAmount);
-        }
-        return sum + booking.totalAmount;
-      }, 0);
-      
-      // Calculate stats by ticket type
-      const typeStats = ticketTypes.map(type => {
-        const typeTickets = tickets.filter(t => t.ticketType.toString() === type._id.toString());
-        
-        return {
-          id: type._id,
-          name: type.name,
-          price: type.price,
-          currency: type.currency,
-          quantity: type.quantity,
-          sold: type.quantitySold,
-          available: type.quantity - type.quantitySold,
-          revenue: typeTickets.length * type.price,
-          percentageSold: type.quantity > 0 ? (type.quantitySold / type.quantity * 100).toFixed(1) : 0
-        };
-      });
-      
-      // Calculate sales by date
-      const salesByDate = {};
-      bookings.forEach(booking => {
-        const dateStr = moment(booking.createdAt).format('YYYY-MM-DD');
-        if (!salesByDate[dateStr]) {
-          salesByDate[dateStr] = {
-            count: 0,
-            revenue: 0
-          };
-        }
-        salesByDate[dateStr].count++;
-        salesByDate[dateStr].revenue += booking.totalAmount;
-      });
-      
-      // Convert to array and sort by date
-      const salesTimeline = Object.keys(salesByDate).map(date => ({
-        date,
-        count: salesByDate[date].count,
-        revenue: salesByDate[date].revenue
-      })).sort((a, b) => new Date(a.date) - new Date(b.date));
-      
-      // Total stats
-      const stats = {
-        totalBookings: bookings.length,
-        totalTickets: tickets.length,
-        totalRevenue,
-        ticketsCheckedIn: tickets.filter(t => t.checkedIn).length,
-        ticketsCancelled: tickets.filter(t => t.status === 'cancelled').length,
-        currency: ticketTypes[0] ? ticketTypes[0].currency : 'USD',
-        checkinRate: tickets.length > 0 ? 
-          (tickets.filter(t => t.checkedIn).length / tickets.length * 100).toFixed(1) : 0,
-        typeStats,
-        salesTimeline
-      };
-      
-      res.json(stats);
-    } catch (error) {
-      console.error('Get event booking stats error:', error);
-      res.status(500).json({ error: 'Server error when retrieving booking statistics' });
+/**
+ * Get event booking statistics
+ * @route GET /api/bookings/events/:eventId/stats
+ * @access Private (Creator only)
+ */
+exports.getEventBookingStats = async (req, res) => {
+  try {
+    const { eventId } = req.params;
+    
+    // Get event
+    const event = await Event.findById(eventId);
+    if (!event) {
+      return res.status(404).json({ error: 'Event not found' });
     }
-  };
-  
-  /**
-   * Generate an event report
-   * @route GET /api/bookings/events/:eventId/report
-   * @access Private (Creator only)
-   */
+    
+    // Verify user has permission
+    if (event.createdBy.toString() !== req.user.id.toString() && !req.user.isAdmin) {
+      return res.status(403).json({ 
+        error: 'Only the event creator or admins can view booking statistics' 
+      });
+    }
+    
+    // Get ticket types
+    const ticketTypes = await TicketType.find({ event: eventId });
+    
+    // Get all bookings for the event
+    const bookings = await Booking.find({ 
+      event: eventId,
+      status: { $in: ['confirmed', 'refunded'] }
+    }).populate('user', 'firstName lastName');
+    
+    // Get all tickets for the event
+    const tickets = await Ticket.find({ event: eventId });
+    
+    // Calculate total revenue
+    const totalRevenue = bookings.reduce((sum, booking) => {
+      if (booking.status === 'refunded' && booking.refundAmount) {
+        return sum + (booking.totalAmount - booking.refundAmount);
+      }
+      return sum + booking.totalAmount;
+    }, 0);
+    
+    // Calculate stats by ticket type
+    const typeStats = ticketTypes.map(type => {
+      const typeTickets = tickets.filter(t => 
+        t.ticketType && t.ticketType.toString() === type._id.toString()
+      );
+      
+      return {
+        id: type._id,
+        name: type.name,
+        price: type.price,
+        currency: type.currency || 'USD', // Provide a default currency
+        quantity: type.quantity,
+        sold: type.quantitySold,
+        available: type.quantity - type.quantitySold,
+        revenue: typeTickets.length * type.price,
+        percentageSold: type.quantity > 0 
+          ? Number(((type.quantitySold / type.quantity) * 100).toFixed(1)) 
+          : 0
+      };
+    });
+    
+    // Calculate sales by date
+    const salesByDate = {};
+    bookings.forEach(booking => {
+      const dateStr = moment(booking.createdAt).format('YYYY-MM-DD');
+      if (!salesByDate[dateStr]) {
+        salesByDate[dateStr] = {
+          count: 0,
+          revenue: 0
+        };
+      }
+      salesByDate[dateStr].count++;
+      salesByDate[dateStr].revenue += booking.totalAmount;
+    });
+    
+    // Convert to array and sort by date
+    const salesTimeline = Object.keys(salesByDate).map(date => ({
+      date,
+      count: salesByDate[date].count,
+      revenue: salesByDate[date].revenue
+    })).sort((a, b) => new Date(a.date) - new Date(b.date));
+    
+    // Determine default currency
+    const defaultCurrency = typeStats.length > 0 
+      ? (typeStats[0].currency || 'USD') 
+      : 'USD';
+    
+    // Total stats
+    const stats = {
+      totalBookings: bookings.length,
+      totalTickets: tickets.length,
+      totalRevenue,
+      ticketsCheckedIn: tickets.filter(t => t.checkedIn).length,
+      ticketsCancelled: tickets.filter(t => t.status === 'cancelled').length,
+      currency: defaultCurrency,
+      checkinRate: tickets.length > 0 
+        ? Number(((tickets.filter(t => t.checkedIn).length / tickets.length) * 100).toFixed(1))
+        : 0,
+      typeStats,
+      salesTimeline
+    };
+    
+    res.json(stats);
+  } catch (error) {
+    console.error('Get event booking stats error:', error);
+    res.status(500).json({ 
+      error: 'Server error when retrieving booking statistics',
+      details: error.message,
+      stack: error.stack 
+    });
+  }
+};
   exports.generateEventReport = async (req, res) => {
     try {
       const { eventId } = req.params;
