@@ -911,10 +911,19 @@ exports.cancelBooking = async (req, res) => {
  * @route POST /api/bookings/tickets/:ticketId/check-in
  * @access Private (Staff/Admin/Host only)
  */
+
+/**
+ * Verify and check in a ticket
+ * @route POST /api/bookings/tickets/:ticketId/check-in
+ * @access Private (Staff/Admin/Host only)
+ */
 exports.checkInTicket = async (req, res) => {
   try {
     const { ticketId } = req.params;
     const { qrData, verificationCode } = req.body;
+    
+    console.log(`Check-in attempt for ticket: ${ticketId}`);
+    console.log('Request body:', JSON.stringify(req.body));
     
     // Get ticket
     const ticket = await Ticket.findById(ticketId)
@@ -923,6 +932,7 @@ exports.checkInTicket = async (req, res) => {
       .populate('owner', 'firstName lastName email profileImage');
     
     if (!ticket) {
+      console.log(`Ticket not found: ${ticketId}`);
       return res.status(404).json({ error: 'Ticket not found' });
     }
     
@@ -956,11 +966,30 @@ exports.checkInTicket = async (req, res) => {
       
       // Verify ticket data if QR code was scanned
       let isVerified = false;
+      let parsedQrData = null;
       
       if (qrData) {
         try {
-          // Parse QR data
-          const parsedQrData = JSON.parse(qrData);
+          // Parse QR data with better error handling
+          console.log('QR data received:', qrData);
+          
+          try {
+            // First attempt to parse
+            parsedQrData = JSON.parse(qrData);
+          } catch (parseError) {
+            console.error('QR parse error:', parseError);
+            
+            // Try to clean the data if it might be malformed
+            if (typeof qrData === 'string') {
+              const cleanedData = qrData.trim();
+              parsedQrData = JSON.parse(cleanedData);
+            } else {
+              throw new Error('Invalid QR code format');
+            }
+          }
+          
+          // Log parsed data
+          console.log('Parsed QR data:', parsedQrData);
           
           // Verify ticket data matches
           isVerified = parsedQrData.id === ticket._id.toString() && 
@@ -971,12 +1000,19 @@ exports.checkInTicket = async (req, res) => {
           if (!parsedQrData.isGroupTicket) {
             return res.status(400).json({ error: 'QR code is not for a group ticket' });
           }
+          
+          console.log('Verification result:', isVerified);
         } catch (err) {
-          return res.status(400).json({ error: 'Invalid QR code data' });
+          console.error('QR verification error:', err);
+          return res.status(400).json({ error: 'Invalid QR code data', details: err.message });
         }
       } else if (verificationCode) {
         // Check against verification code (if used instead of QR)
-        isVerified = verificationCode === ticket.qrSecret.substr(0, 6);
+        const codeToVerify = verificationCode.toUpperCase();
+        const ticketCode = ticket.qrSecret.substring(0, 6).toUpperCase();
+        
+        console.log(`Verifying code: ${codeToVerify} against ${ticketCode}`);
+        isVerified = codeToVerify === ticketCode;
       } else {
         return res.status(400).json({ error: 'QR data or verification code is required' });
       }
@@ -1079,22 +1115,53 @@ exports.checkInTicket = async (req, res) => {
       
       // Verify ticket data if QR code was scanned
       let isVerified = false;
+      let parsedQrData = null;
       
       if (qrData) {
         try {
-          // Parse QR data
-          const parsedQrData = JSON.parse(qrData);
+          // Parse QR data with better error handling
+          console.log('QR data received for individual ticket:', qrData);
+          
+          try {
+            // First attempt to parse
+            parsedQrData = JSON.parse(qrData);
+          } catch (parseError) {
+            console.error('QR parse error:', parseError);
+            
+            // Try to clean the data if it might be malformed
+            if (typeof qrData === 'string') {
+              const cleanedData = qrData.trim();
+              parsedQrData = JSON.parse(cleanedData);
+            } else {
+              throw new Error('Invalid QR code format');
+            }
+          }
+          
+          // Log parsed data
+          console.log('Parsed QR data for individual ticket:', parsedQrData);
           
           // Verify ticket data matches
           isVerified = parsedQrData.id === ticket._id.toString() && 
                       parsedQrData.ticketNumber === ticket.ticketNumber &&
                       parsedQrData.secret === ticket.qrSecret;
+                      
+          // Make sure this is not a group ticket QR trying to be used as individual
+          if (parsedQrData.isGroupTicket) {
+            return res.status(400).json({ error: 'This is a group ticket QR code, please use the group ticket scanner' });
+          }
+          
+          console.log('Individual ticket verification result:', isVerified);
         } catch (err) {
-          return res.status(400).json({ error: 'Invalid QR code data' });
+          console.error('Individual ticket QR verification error:', err);
+          return res.status(400).json({ error: 'Invalid QR code data', details: err.message });
         }
       } else if (verificationCode) {
         // Check against verification code (if used instead of QR)
-        isVerified = verificationCode === ticket.qrSecret.substr(0, 6);
+        const codeToVerify = verificationCode.toUpperCase();
+        const ticketCode = ticket.qrSecret.substring(0, 6).toUpperCase();
+        
+        console.log(`Verifying individual ticket code: ${codeToVerify} against ${ticketCode}`);
+        isVerified = codeToVerify === ticketCode;
       } else {
         return res.status(400).json({ error: 'QR data or verification code is required' });
       }
@@ -1155,7 +1222,7 @@ exports.checkInTicket = async (req, res) => {
           status: ticket.status,
           checkedInAt: ticket.checkedInAt
         },
-        ticketType: ticket.ticketType.name,
+        ticketType: ticket.ticketType ? ticket.ticketType.name : 'Standard Ticket',
         owner: {
           name: `${ticket.owner.firstName} ${ticket.owner.lastName}`,
           email: ticket.owner.email,
@@ -1169,10 +1236,13 @@ exports.checkInTicket = async (req, res) => {
     }
   } catch (error) {
     console.error('Check in ticket error:', error);
-    res.status(500).json({ error: 'Server error when checking in ticket' });
+    res.status(500).json({ 
+      error: 'Server error when checking in ticket', 
+      details: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 };
-
   
   /**
    * Transfer a ticket to another user
