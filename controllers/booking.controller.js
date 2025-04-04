@@ -213,6 +213,11 @@ exports.updateTicketType = async (req, res) => {
  * @route POST /api/bookings/events/:eventId/book
  * @access Private
  */
+/**
+ * Create a new booking with a single QR code for multiple tickets
+ * @route POST /api/bookings/events/:eventId/book
+ * @access Private
+ */
 exports.createBooking = async (req, res) => {
   // Use a database transaction for data integrity
   const session = await mongoose.startSession();
@@ -362,8 +367,9 @@ exports.createBooking = async (req, res) => {
     
     const bookingStatus = isFreeBooking 
       ? 'confirmed' 
-      : (finalPaymentMethod === 'pending' ? 'pending' : 'initiate')
-      const paymentStatus = isFreeBooking 
+      : (finalPaymentMethod === 'pending' ? 'pending' : 'initiate');
+    
+    const paymentStatus = isFreeBooking 
       ? 'completed' 
       : (finalPaymentMethod === 'pending' ? 'pending' : 'processing');
     
@@ -427,6 +433,44 @@ exports.createBooking = async (req, res) => {
     
     // Store the ticket details with the group ticket
     groupTicket.ticketDetails = ticketDetails;
+    
+    // IMPORTANT: Generate QR code at booking time to ensure it exists
+    try {
+      // Create verification data for QR code
+      const verificationData = {
+        id: groupTicket._id.toString(),
+        ticketNumber: groupTicket.ticketNumber,
+        event: groupTicket.event.toString(),
+        secret: groupTicket.qrSecret,
+        isGroupTicket: true,
+        totalTickets: groupTicket.totalTickets,
+        ticketTypes: groupTicket.ticketDetails ? groupTicket.ticketDetails.map(d => ({
+          name: d.name,
+          quantity: d.quantity
+        })) : []
+      };
+      
+      // Convert to JSON and generate QR
+      const qrString = JSON.stringify(verificationData);
+      console.log('Generating QR code for group ticket at booking time');
+      
+      // Generate QR code directly as a data URL
+      const qrDataUrl = await QRCode.toDataURL(qrString, {
+        errorCorrectionLevel: 'H',
+        margin: 1,
+        scale: 8
+      });
+      
+      // Set the qrCode property on the ticket
+      groupTicket.qrCode = qrDataUrl;
+      console.log('Successfully generated QR code at booking time');
+    } catch (qrError) {
+      console.error('Error generating QR code at booking time:', qrError);
+      // Continue with booking process even if QR generation fails
+      // We'll try again when the ticket is viewed or downloaded
+    }
+    
+    // Save the group ticket with the QR code
     await groupTicket.save({ session });
     
     // Update booking with the group ticket
@@ -439,7 +483,8 @@ exports.createBooking = async (req, res) => {
       bookingId: booking._id,
       status: booking.status,
       paymentStatus: booking.paymentInfo.status,
-      paymentMethod: booking.paymentInfo.method
+      paymentMethod: booking.paymentInfo.method,
+      hasQrCode: !!groupTicket.qrCode
     });
     
     // Commit transaction
