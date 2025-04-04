@@ -1619,12 +1619,8 @@ exports.getTicketTypes = async (req, res) => {
   }
 };
   
-/**
- * Download ticket as PDF
- * @route GET /api/bookings/tickets/:ticketId/pdf
- * @access Private
- */
-/**
+
+  /**
  * Download ticket as PDF
  * @route GET /api/bookings/tickets/:ticketId/pdf
  * @access Private
@@ -1744,11 +1740,6 @@ exports.downloadTicketPdf = async (req, res) => {
     });
   }
 };
-  /**
-   * Get event booking statistics
-   * @route GET /api/bookings/events/:eventId/stats
-   * @access Private (Creator only)
-   */
 /**
  * Get event booking statistics
  * @route GET /api/bookings/events/:eventId/stats
