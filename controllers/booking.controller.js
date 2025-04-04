@@ -1260,45 +1260,71 @@ exports.getEventTickets = async (req, res) => {
 exports.getTicketTypes = async (req, res) => {
   try {
     const { eventId } = req.params;
-    const { includeInactive } = req.query;
+    const { includeInactive, includeFuture } = req.query;
+    
+    console.log(`Getting ticket types for event: ${eventId}`);
+    console.log(`Query params: includeInactive=${includeInactive}, includeFuture=${includeFuture}`);
     
     // Check if event exists
     const event = await Event.findById(eventId);
     if (!event) {
+      console.log(`Event not found: ${eventId}`);
       return res.status(404).json({ error: 'Event not found' });
     }
     
     // Build query
     const query = { event: eventId };
     
-    // Only show active ticket types unless specifically requested to show all
-    // or the user is the event creator/admin
-    if (!includeInactive || includeInactive !== 'true') {
+    // Check permissions for viewing inactive tickets
+    const isEventCreator = req.user && event.createdBy && 
+                          event.createdBy.toString() === req.user.id;
+    const isAdmin = req.user && req.user.isAdmin;
+    const hasFullAccess = isEventCreator || isAdmin;
+    
+    console.log(`User permissions: isEventCreator=${isEventCreator}, isAdmin=${isAdmin}`);
+    
+    // Only show active ticket types unless specifically requested AND user has permission
+    if (includeInactive !== 'true' || !hasFullAccess) {
       query.isActive = true;
-    } else if (includeInactive === 'true' && req.user) {
-      // Verify user has permission to view inactive ticket types
-      const isEventCreator = event.createdBy.toString() === req.user.id;
-      
-      if (!isEventCreator && !req.user.isAdmin) {
-        query.isActive = true; // Non-creators can only see active types
-      }
-    } else {
-      query.isActive = true; // Default to active only
     }
     
-    // Check if tickets are currently on sale by filtering by date range
-    const now = new Date();
-    query.startSaleDate = { $lte: now };
-    query.$or = [
-      { endSaleDate: { $exists: false } }, // No end date
-      { endSaleDate: null },
-      { endSaleDate: { $gte: now } } // End date not passed
-    ];
+    // Filter by sales date only if not requesting to include future tickets
+    if (includeFuture !== 'true') {
+      const now = new Date();
+      console.log(`Current date: ${now.toISOString()}`);
+      
+      // Only include tickets that are currently on sale
+      query.$and = [
+        { startSaleDate: { $lte: now } },
+        {
+          $or: [
+            { endSaleDate: { $exists: false } },
+            { endSaleDate: null },
+            { endSaleDate: { $gte: now } }
+          ]
+        }
+      ];
+    }
+    
+    console.log('Executing query:', JSON.stringify(query, null, 2));
     
     // Get all ticket types for the event
     const ticketTypes = await TicketType.find(query).sort('price');
+    console.log(`Found ${ticketTypes.length} ticket types`);
+    
+    // If no tickets found with filters, and user has permissions, 
+    // check if tickets exist without date filters
+    if (ticketTypes.length === 0 && hasFullAccess) {
+      console.log('No tickets found with filters, checking for any tickets');
+      const allTickets = await TicketType.find({ event: eventId });
+      if (allTickets.length > 0) {
+        console.log(`Found ${allTickets.length} tickets without filters`);
+        console.log('First ticket details:', JSON.stringify(allTickets[0], null, 2));
+      }
+    }
     
     // Add availability info to each ticket type
+    const now = new Date();
     const enhancedTicketTypes = ticketTypes.map(ticketType => {
       const ticketObj = ticketType.toObject();
       
@@ -1307,12 +1333,14 @@ exports.getTicketTypes = async (req, res) => {
       const isSoldOut = available <= 0;
       
       // Calculate if on sale
-      const isOnSale = ticketType.startSaleDate <= now && 
-                      (!ticketType.endSaleDate || ticketType.endSaleDate >= now);
+      const startSaleDate = new Date(ticketType.startSaleDate);
+      const endSaleDate = ticketType.endSaleDate ? new Date(ticketType.endSaleDate) : null;
+      const isOnSale = startSaleDate <= now && 
+                      (!endSaleDate || endSaleDate >= now);
       
       // Calculate percentage sold
-      const percentageSold = ticketType.quantity > 0 
-                            ? Math.round((ticketType.quantitySold / ticketType.quantity) * 100) 
+      const percentageSold = ticketType.quantity > 0
+                            ? Math.round((ticketType.quantitySold / ticketType.quantity) * 100)
                             : 0;
       
       return {
@@ -1322,8 +1350,8 @@ exports.getTicketTypes = async (req, res) => {
         isOnSale,
         percentageSold,
         // Format price for display
-        priceFormatted: ticketType.price === 0 ? 'Free' : 
-                      `${ticketType.price} ${ticketType.currency}`
+        priceFormatted: ticketType.price === 0 ? 'Free' :
+                      `${ticketType.currency || '₹'} ${ticketType.price}`
       };
     });
     
