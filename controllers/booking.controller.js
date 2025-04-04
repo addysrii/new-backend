@@ -1624,17 +1624,25 @@ exports.getTicketTypes = async (req, res) => {
  * @route GET /api/bookings/tickets/:ticketId/pdf
  * @access Private
  */
+/**
+ * Download ticket as PDF
+ * @route GET /api/bookings/tickets/:ticketId/pdf
+ * @access Private
+ */
 exports.downloadTicketPdf = async (req, res) => {
   try {
     const { ticketId } = req.params;
     
-    // Get ticket
+    console.log(`Download ticket PDF request for ticket ID: ${ticketId}`);
+    
+    // Get ticket with all necessary data
     const ticket = await Ticket.findById(ticketId)
       .populate('event')
       .populate('ticketType')
       .populate('owner', 'firstName lastName');
     
     if (!ticket) {
+      console.log(`Ticket not found: ${ticketId}`);
       return res.status(404).json({ error: 'Ticket not found' });
     }
     
@@ -1644,27 +1652,96 @@ exports.downloadTicketPdf = async (req, res) => {
     const isEventCreator = event && event.createdBy.toString() === req.user.id.toString();
     
     if (!isOwner && !isEventCreator && !req.user.isAdmin) {
+      console.log(`Permission denied for user ${req.user.id} to download ticket ${ticketId}`);
       return res.status(403).json({ error: 'You do not have permission to download this ticket' });
     }
     
-    // Generate PDF - use different function for group tickets
-    let pdfBuffer;
-    if (ticket.isGroupTicket) {
-      pdfBuffer = await pdfService.generateGroupTicketPdf(ticket);
-    } else {
-      pdfBuffer = await pdfService.generateTicketPdf(ticket);
+    // Check if the ticket has a QR code, if not ensure it's created
+    if (!ticket.qrCode && ticket.qrSecret) {
+      try {
+        console.log(`Ticket ${ticketId} missing QR code but has QR secret, generating QR code now`);
+        // Create appropriate verification data based on ticket type
+        let verificationData;
+        
+        if (ticket.isGroupTicket) {
+          verificationData = {
+            id: ticket._id.toString(),
+            ticketNumber: ticket.ticketNumber,
+            event: ticket.event._id.toString(),
+            secret: ticket.qrSecret,
+            isGroupTicket: true,
+            totalTickets: ticket.totalTickets,
+            ticketTypes: ticket.ticketDetails ? ticket.ticketDetails.map(d => ({
+              name: d.name,
+              quantity: d.quantity
+            })) : []
+          };
+        } else {
+          verificationData = {
+            id: ticket._id.toString(),
+            ticketNumber: ticket.ticketNumber,
+            event: ticket.event._id.toString(),
+            secret: ticket.qrSecret
+          };
+        }
+        
+        // Generate and save QR code
+        const qrString = JSON.stringify(verificationData);
+        console.log('Generating QR code for PDF download');
+        
+        const qrDataUrl = await QRCode.toDataURL(qrString, {
+          errorCorrectionLevel: 'H',
+          margin: 1,
+          scale: 8
+        });
+        
+        // Save the QR code to the ticket
+        ticket.qrCode = qrDataUrl;
+        await ticket.save();
+        console.log(`QR code generated and saved for ticket ${ticketId}`);
+      } catch (qrError) {
+        console.error('Error generating QR code before PDF:', qrError);
+        // Continue with PDF generation even if QR generation fails
+      }
+    } else if (!ticket.qrSecret) {
+      // If there's no QR secret, generate one
+      console.log(`Ticket ${ticketId} missing QR secret, generating now`);
+      ticket.qrSecret = crypto.randomBytes(20).toString('hex');
+      await ticket.save();
     }
     
-    // Set response headers
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', 
-      `attachment; filename="${ticket.isGroupTicket ? 'group-' : ''}ticket-${ticket.ticketNumber}.pdf"`);
-    
-    // Send PDF
-    res.send(pdfBuffer);
+    // Generate PDF - use different function for group tickets
+    console.log(`Generating PDF for ${ticket.isGroupTicket ? 'group' : 'individual'} ticket ${ticketId}`);
+    let pdfBuffer;
+    try {
+      if (ticket.isGroupTicket) {
+        pdfBuffer = await pdfService.generateGroupTicketPdf(ticket);
+      } else {
+        pdfBuffer = await pdfService.generateTicketPdf(ticket);
+      }
+      
+      console.log(`PDF successfully generated for ticket ${ticketId}, size: ${pdfBuffer.length} bytes`);
+      
+      // Set response headers
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', 
+        `attachment; filename="${ticket.isGroupTicket ? 'group-' : ''}ticket-${ticket.ticketNumber}.pdf"`);
+      
+      // Send PDF
+      res.send(pdfBuffer);
+    } catch (pdfError) {
+      console.error(`Error generating PDF for ticket ${ticketId}:`, pdfError);
+      return res.status(500).json({ 
+        error: 'Error generating PDF', 
+        details: pdfError.message 
+      });
+    }
   } catch (error) {
     console.error('Download ticket PDF error:', error);
-    res.status(500).json({ error: 'Server error when generating ticket PDF' });
+    res.status(500).json({ 
+      error: 'Server error when generating ticket PDF',
+      details: error.message
+    });
   }
 };
   /**
