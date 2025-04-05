@@ -1135,7 +1135,7 @@ if (portfolioController) {
     app.get('/api/recommendations/given', authenticateToken, portfolioController.getGivenRecommendations);
     app.put('/api/recommendations/:recommendationId', authenticateToken, portfolioController.updateRecommendation);
     app.delete('/api/recommendations/:recommendationId', authenticateToken, portfolioController.deleteRecommendation);
-pp.get('/api/portfolio/summary', authenticate, portfolioController.getPortfolioSummary);
+    app.get('/api/portfolio/summary', authenticateTocken, portfolioController.getPortfolioSummary);
     console.log('Portfolio routes set up successfully');
   } catch (error) {
     console.error('Error setting up portfolio routes:', error);
