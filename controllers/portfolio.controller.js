@@ -739,7 +739,7 @@ exports.getPortfolioSummary = async (req, res) => {
     }
     
     // Check if requesting other user's profile with limited visibility
-    const isOwnProfile = userId === req.user.id.toString();
+    const isOwnProfile = userId === req.user.id;
     if (!isOwnProfile && user.profileVisibility !== 'public') {
       return res.status(403).json({ error: 'This profile is not public' });
     }
