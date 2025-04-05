@@ -717,7 +717,169 @@ exports.updateAchievement = async (req, res) => {
     handleError(err, res);
   }
 };
+// Add this to your existing controller file
 
+/**
+ * Get portfolio summary for a user
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+exports.getPortfolioSummary = async (req, res) => {
+  try {
+    // Get userId from query params or use current user's id
+    const userId = req.query.userId || req.user.id;
+    
+    // Check if user exists
+    const user = await User.findById(userId)
+      .populate('skills')
+      .select('username email profileImage bio location website socialLinks profileVisibility skills');
+    
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    // Check if requesting other user's profile with limited visibility
+    const isOwnProfile = userId === req.user.id.toString();
+    if (!isOwnProfile && user.profileVisibility !== 'public') {
+      return res.status(403).json({ error: 'This profile is not public' });
+    }
+    
+    // Base visibility filter
+    const visibilityFilter = isOwnProfile ? {} : { visibility: 'public' };
+    
+    // Fetch projects
+    const projects = await Project.find({ 
+      owner: userId,
+      ...visibilityFilter
+    })
+    .populate('owner', 'username email profileImage')
+    .populate('collaborators.user', 'username email profileImage')
+    .sort({ updatedAt: -1 })
+    .limit(5);
+    
+    // Fetch achievements
+    const achievements = await Achievement.find({ 
+      owner: userId,
+      ...visibilityFilter
+    })
+    .populate('owner', 'username email profileImage')
+    .populate('endorsements.user', 'username email profileImage')
+    .sort({ date: -1 })
+    .limit(5);
+    
+    // Fetch active streaks
+    const now = new Date();
+    const streaks = await Streak.find({
+      owner: userId,
+      ...visibilityFilter,
+      $or: [
+        { endDate: { $exists: false } },
+        { endDate: null },
+        { endDate: { $gt: now } }
+      ]
+    })
+    .populate('owner', 'username email profileImage')
+    .sort({ updatedAt: -1 })
+    .limit(3);
+    
+    // For each streak, get the most recent check-ins
+    const streaksWithCheckIns = await Promise.all(streaks.map(async (streak) => {
+      const checkIns = await StreakCheckIn.find({ streak: streak._id })
+        .sort({ date: -1 })
+        .limit(3);
+      
+      return {
+        ...streak.toObject(),
+        recentCheckIns: checkIns
+      };
+    }));
+    
+    // Fetch received recommendations
+    const recommendations = await Recommendation.find({ to: userId })
+      .populate('from', 'username email profileImage')
+      .sort({ createdAt: -1 })
+      .limit(5);
+    
+    // Get skill endorsements
+    const skillsWithEndorsements = user.skills.map(skill => {
+      const endorsements = user.skillEndorsements ? user.skillEndorsements.filter(
+        e => e.skill.toString() === skill._id.toString()
+      ) : [];
+      
+      return {
+        _id: skill._id,
+        name: skill.name,
+        endorsementCount: endorsements.length
+      };
+    });
+    
+    // Get project stats
+    const projectStats = {
+      total: await Project.countDocuments({ owner: userId }),
+      public: await Project.countDocuments({ owner: userId, visibility: 'public' }),
+      collaborations: await Project.countDocuments({ 'collaborators.user': userId })
+    };
+    
+    // Get achievement stats
+    const achievementStats = {
+      total: await Achievement.countDocuments({ owner: userId }),
+      public: await Achievement.countDocuments({ owner: userId, visibility: 'public' }),
+      endorsed: await Achievement.countDocuments({ 
+        owner: userId, 
+        'endorsements.0': { $exists: true } 
+      })
+    };
+    
+    // Get streak stats
+    const streakStats = {
+      active: await Streak.countDocuments({
+        owner: userId,
+        $or: [
+          { endDate: { $exists: false } },
+          { endDate: null },
+          { endDate: { $gt: now } }
+        ]
+      }),
+      completed: await Streak.countDocuments({
+        owner: userId,
+        endDate: { $lt: now }
+      }),
+      totalCheckIns: await StreakCheckIn.countDocuments({
+        user: userId
+      })
+    };
+    
+    // Construct the portfolio summary
+    const portfolioSummary = {
+      user: {
+        _id: user._id,
+        username: user.username,
+        email: isOwnProfile ? user.email : undefined,
+        profileImage: user.profileImage,
+        bio: user.bio,
+        location: user.location,
+        website: user.website,
+        socialLinks: user.socialLinks,
+        skillCount: user.skills.length
+      },
+      stats: {
+        projects: projectStats,
+        achievements: achievementStats,
+        streaks: streakStats,
+        recommendations: recommendations.length
+      },
+      skills: skillsWithEndorsements,
+      recentProjects: projects,
+      recentAchievements: achievements,
+      activeStreaks: streaksWithCheckIns,
+      recommendations: isOwnProfile || user.profileVisibility === 'public' ? recommendations : []
+    };
+    
+    res.json(portfolioSummary);
+  } catch (err) {
+    handleError(err, res);
+  }
+};
 exports.deleteAchievement = async (req, res) => {
   try {
     const { achievementId } = req.params;
