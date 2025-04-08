@@ -182,7 +182,8 @@ app.use(cors({
     'ionic://localhost', // For ionic framework
     '*' // During development, allow all origins (remove in production)
   ],
-  credentials: true
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 
 // Session setup
