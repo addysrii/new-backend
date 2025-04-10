@@ -81,27 +81,35 @@ exports.createStory = async (req, res) => {
   }
 };
 
+// Modify your getStories method to include debugging
 exports.getStories = async (req, res) => {
   try {
     const { userId } = req.query;
+    console.log('Getting stories. User ID provided:', userId);
     
     // Get the current user's connections and close friends
     const currentUser = await User.findById(req.user.id).select('connections closeFriends');
+    console.log('Current user found:', !!currentUser);
+    console.log('Number of connections:', currentUser.connections.length);
+    console.log('Number of close friends:', currentUser.closeFriends.length);
     
     // If userId is provided, get stories for that specific user
     if (userId) {
       // Check if the user is viewing their own stories
       const isOwnStories = userId === req.user.id;
+      console.log('User is viewing their own stories:', isOwnStories);
       
       // Check if the user is a connection
       const isConnection = currentUser.connections.some(
         conn => conn.user.toString() === userId
       );
+      console.log('Viewed user is a connection:', isConnection);
       
       // Check if the user is a close friend
       const isCloseFriend = currentUser.closeFriends.some(
         friend => friend.toString() === userId
       );
+      console.log('Viewed user is a close friend:', isCloseFriend);
       
       // Build the query based on the relationships
       let query = { owner: userId };
@@ -120,15 +128,25 @@ exports.getStories = async (req, res) => {
         }
       }
       
+      console.log('Story query:', JSON.stringify(query));
+      
       const stories = await Story.find(query)
         .populate('owner', 'username email profileImage')
         .sort({ createdAt: -1 });
+      
+      console.log('Number of stories found:', stories.length);
+      
+      // Check if there are any stories that might be filtered due to expiration
+      const allStories = await Story.find({ owner: userId }).select('_id isExpired expiresAt');
+      console.log('Total stories by this user (including expired):', allStories.length);
+      console.log('Expired stories:', allStories.filter(s => s.isExpired || new Date() > s.expiresAt).length);
       
       return res.json(stories);
     }
     
     // If no userId is provided, get stories from connections and close friends
     const connectionIds = currentUser.connections.map(conn => conn.user);
+    console.log('Number of connections to fetch stories from:', connectionIds.length);
     
     // Get all stories from connections (public and connections visibility)
     const connectionStories = await Story.find({
@@ -136,14 +154,20 @@ exports.getStories = async (req, res) => {
       visibility: { $in: ['public', 'connections'] }
     }).populate('owner', 'username email profileImage');
     
+    console.log('Number of connection stories found:', connectionStories.length);
+    
     // Get all stories from close friends (all visibilities)
     const closeFriendStories = await Story.find({
       owner: { $in: currentUser.closeFriends }
     }).populate('owner', 'username email profileImage');
     
+    console.log('Number of close friend stories found:', closeFriendStories.length);
+    
     // Combine and sort the stories
     const allStories = [...connectionStories, ...closeFriendStories]
       .sort((a, b) => b.createdAt - a.createdAt);
+    
+    console.log('Total combined stories before deduplication:', allStories.length);
     
     // Remove duplicates
     const uniqueStories = [];
@@ -156,12 +180,14 @@ exports.getStories = async (req, res) => {
       }
     }
     
+    console.log('Final number of unique stories:', uniqueStories.length);
+    
     res.json(uniqueStories);
   } catch (err) {
+    console.error('Error in getStories:', err);
     handleError(err, res);
   }
 };
-
 exports.getStory = async (req, res) => {
   try {
     const { storyId } = req.params;
