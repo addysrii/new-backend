@@ -132,6 +132,10 @@ storySchema.virtual('expired').get(function() {
 });
 
 // Middleware to check if story has expired before serving
+// Add this to your Story model file
+
+// Original middleware
+/*
 storySchema.pre('find', function() {
   // Skip this if the query already includes isExpired
   if (this.getQuery().isExpired === undefined) {
@@ -141,6 +145,30 @@ storySchema.pre('find', function() {
         { expiresAt: { $gt: new Date() } }
       ]
     });
+  }
+});
+*/
+
+// Modified middleware with debugging
+storySchema.pre('find', function() {
+  const currentQuery = this.getQuery();
+  console.log('Pre-find middleware triggered. Current query:', JSON.stringify(currentQuery));
+  
+  // Skip this if the query already includes isExpired
+  if (currentQuery.isExpired === undefined) {
+    console.log('Adding expiration filter to query');
+    
+    const now = new Date();
+    console.log('Current time:', now);
+    
+    this.where({
+      $or: [
+        { isExpired: false },
+        { expiresAt: { $gt: now } }
+      ]
+    });
+  } else {
+    console.log('Query already includes isExpired, not modifying');
   }
 });
 
