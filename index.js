@@ -461,13 +461,13 @@ try {
 }
 app.use('/api/bookings', require('./routes/bookings.routes'));
 app.use('/api/payments', require('./routes/payments.routes'))
+// ==========================================
 // AUTH ROUTES
 // ==========================================
 console.log('Setting up auth routes...');
 if (authController) {
   try {
     // Basic Authentication
-    // Add this route in your routes file
     app.post('/create-test-user', authController.createTestUser);
     app.post('/debug-login', authController.debugLogin);
     app.post('/auth/signup', authLimiter, authController.signup);
@@ -501,70 +501,57 @@ if (authController) {
     app.post('/auth/linkedin', authController.linkedinAuth);
 
     // Social auth with OAuth flow
-  // Add these routes to your Express app setup file
-// Make sure they appear before any other routes that use the same paths
+    // Google OAuth routes
+    app.get('/auth/google', 
+      (req, res, next) => {
+        // Save redirectTo parameter if provided
+        const { redirectTo } = req.query;
+        if (redirectTo) {
+          req.session = req.session || {};
+          req.session.redirectTo = redirectTo;
+        }
+        next();
+      },
+      passport.authenticate('google', { 
+        scope: ['profile', 'email'],
+        session: false
+      })
+    );
 
-// Google OAuth routes
-app.get('/auth/google', 
-  passport.authenticate('google', { scope: ['profile', 'email'] })
-);
+    // Google OAuth callback
+    app.get('/auth/google/callback', 
+      passport.authenticate('google', { 
+        failureRedirect: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/auth/error?message=Google-authentication-failed`,
+        session: false
+      }),
+      authController.googleCallback
+    );
 
-// Google OAuth callback
-app.get('/auth/google/callback', 
-  passport.authenticate('google', { session: false }),
-  (req, res) => {
-    // Generate JWT token
-    const token = jwt.sign(
-      { id: req.user.id, role: req.user.role },
-      process.env.JWT_SECRET || 'your-jwt-secret',
-      { expiresIn: '7d' }
+    // LinkedIn OAuth routes
+    app.get('/auth/linkedin',
+      (req, res, next) => {
+        // Save redirectTo parameter if provided
+        const { redirectTo } = req.query;
+        if (redirectTo) {
+          req.session = req.session || {};
+          req.session.redirectTo = redirectTo;
+        }
+        next();
+      },
+      passport.authenticate('linkedin', {
+        scope: ['r_liteprofile', 'r_emailaddress'],
+        session: false
+      })
     );
-    
-    // Generate refresh token
-    const refreshToken = jwt.sign(
-      { id: req.user.id },
-      process.env.JWT_SECRET || 'your-jwt-secret',
-      { expiresIn: '30d' }
-    );
-    
-    // Determine if this is a new user
-    const isNewUser = req.user.isNewUser ? 'true' : 'false';
-    
-    // Redirect to frontend with tokens
-    const redirectUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/auth/callback?token=${token}&refreshToken=${refreshToken}&provider=google&new=${isNewUser}`;
-    res.redirect(redirectUrl);
-  }
-);
-// LinkedIn OAuth routes
-app.get('/auth/linkedin',
-  passport.authenticate('linkedin', { scope: ['r_liteprofile', 'r_emailaddress'] })
-);
 
-app.get('/auth/linkedin/callback',
-  passport.authenticate('linkedin', { session: false }),
-  (req, res) => {
-    // Generate JWT token
-    const token = jwt.sign(
-      { id: req.user.id, role: req.user.role },
-      process.env.JWT_SECRET || 'your-jwt-secret',
-      { expiresIn: '7d' }
+    // LinkedIn OAuth callback
+    app.get('/auth/linkedin/callback',
+      passport.authenticate('linkedin', {
+        failureRedirect: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/auth/error?message=LinkedIn-authentication-failed`,
+        session: false
+      }),
+      authController.linkedinCallback
     );
-    
-    // Generate refresh token
-    const refreshToken = jwt.sign(
-      { id: req.user.id },
-      process.env.JWT_SECRET || 'your-jwt-secret',
-      { expiresIn: '30d' }
-    );
-    
-    // Determine if this is a new user
-    const isNewUser = req.user.isNewUser ? 'true' : 'false';
-    
-    // Redirect to frontend with tokens
-    const redirectUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/auth/callback?token=${token}&refreshToken=${refreshToken}&provider=linkedin&new=${isNewUser}`;
-    res.redirect(redirectUrl);
-  }
-);
 
     // Two-factor authentication
     app.post('/api/auth/2fa/setup', authenticateToken, twoFALimiter, authController.setup2FA);
