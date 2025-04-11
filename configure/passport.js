@@ -1,135 +1,227 @@
+// config/passport.js
+
 const passport = require('passport');
-const LocalStrategy = require('passport-local').Strategy;
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const LinkedInStrategy = require('passport-linkedin-oauth2').Strategy;
-const{ User} = require('../models/User.js');
-const dotenv = require('dotenv');
-
-dotenv.config();
+const { User } = require('../models/User');
+const crypto = require('crypto');
 
 // Environment variables
-const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
-const LINKEDIN_CLIENT_ID = process.env.LINKEDIN_CLIENT_ID;
-const LINKEDIN_CLIENT_SECRET = process.env.LINKEDIN_CLIENT_SECRET;
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
-const REDIRECT_URI = `${BASE_URL}/auth/linkedin/callback`;
+const LINKEDIN_CLIENT_ID = process.env.LINKEDIN_CLIENT_ID;
+const LINKEDIN_CLIENT_SECRET = process.env.LINKEDIN_CLIENT_SECRET;
+const BACKEND_URL = process.env.BACKEND_URL || 'https://new-backend-w86d.onrender.com';
 
-// Passport serialization
-passport.serializeUser((user, done) => {
-  done(null, user.id);
-});
+module.exports = function() {
+  // Serialize user for the session
+  passport.serializeUser((user, done) => {
+    done(null, user.id);
+  });
 
-passport.deserializeUser(async (id, done) => {
-  try {
-    const user = await User.findById(id);
-    done(null, user);
-  } catch (error) {
-    done(error, null);
-  }
-});
-// Local Strategy (add this to your passport.js file)
-passport.use(new LocalStrategy(
-  { usernameField: 'email' },
-  async (email, password, done) => {
+  // Deserialize user from the session
+  passport.deserializeUser(async (id, done) => {
     try {
-      const user = await User.findOne({ email });
-      if (!user) {
-        return done(null, false, { message: 'Incorrect email or password' });
+      const user = await User.findById(id);
+      done(null, user);
+    } catch (error) {
+      done(error, null);
+    }
+  });
+
+  // Google Strategy
+  passport.use(new GoogleStrategy({
+    clientID: GOOGLE_CLIENT_ID,
+    clientSecret: GOOGLE_CLIENT_SECRET,
+    callbackURL: `${BACKEND_URL}/auth/google/callback`,
+    passReqToCallback: true,
+    proxy: true
+  }, async (req, accessToken, refreshToken, profile, done) => {
+    try {
+      console.log('Google OAuth callback received with profile:', profile.id);
+      
+      // Check if user exists with this Google ID
+      let user = await User.findOne({ 'oauth.google.id': profile.id });
+      
+      // If not, check by email
+      if (!user && profile.emails && profile.emails.length > 0) {
+        const email = profile.emails[0].value;
+        user = await User.findOne({ email });
       }
       
-      const isMatch = await bcrypt.compare(password, user.password);
-      if (!isMatch) {
-        return done(null, false, { message: 'Incorrect email or password' });
+      // Determine if this is a new user
+      let isNewUser = false;
+      
+      if (!user) {
+        // Create new user
+        isNewUser = true;
+        
+        const email = profile.emails && profile.emails.length > 0 
+          ? profile.emails[0].value 
+          : `${profile.id}@google.com`;
+        
+        const firstName = profile.name ? profile.name.givenName : '';
+        const lastName = profile.name ? profile.name.familyName : '';
+        const profileImageUrl = profile.photos && profile.photos.length > 0 
+          ? profile.photos[0].value 
+          : null;
+        
+        user = new User({
+          firstName,
+          lastName,
+          email,
+          username: email.split('@')[0] + Math.floor(Math.random() * 1000),
+          profileImage: profileImageUrl,
+          password: crypto.randomBytes(20).toString('hex'), // Random password
+          oauth: {
+            google: {
+              id: profile.id,
+              email,
+              name: profile.displayName,
+              profileImage: profileImageUrl
+            }
+          },
+          verification: {
+            isEmailVerified: true, // Google accounts are pre-verified
+            verifiedAt: Date.now()
+          },
+          joinedDate: Date.now(),
+          lastActive: Date.now()
+        });
+      } else {
+        // Update OAuth info if needed
+        user.oauth = user.oauth || {};
+        
+        if (!user.oauth.google) {
+          const email = profile.emails && profile.emails.length > 0 
+            ? profile.emails[0].value 
+            : `${profile.id}@google.com`;
+          
+          const profileImageUrl = profile.photos && profile.photos.length > 0 
+            ? profile.photos[0].value 
+            : null;
+          
+          user.oauth.google = {
+            id: profile.id,
+            email,
+            name: profile.displayName,
+            profileImage: profileImageUrl
+          };
+        }
+        
+        // Update last active
+        user.lastActive = Date.now();
       }
+      
+      // Save user
+      await user.save();
+      
+      // Set isNewUser property for the controller to use
+      user.isNewUser = isNewUser;
       
       return done(null, user);
     } catch (error) {
-      return done(error);
+      console.error('Google strategy error:', error);
+      return done(error, null);
     }
-  }
-));
+  }));
 
-// LinkedIn Strategy
-passport.use(new LinkedInStrategy({
-  clientID: LINKEDIN_CLIENT_ID,
-  clientSecret: LINKEDIN_CLIENT_SECRET,
-  callbackURL: `${BASE_URL}/auth/linkedin/callback`,
-  scope: ['profile', 'email'],
-  state: true
-}, async (accessToken, refreshToken, profile, done) => {
-  try {
-    let user = await User.findOne({ linkedinId: profile.id });
-
-    if (!user) {
-      user = await User.create({
-        linkedinId: profile.id,
-        email: profile.emails[0].value,
-        firstName: profile.name.givenName,
-        lastName: profile.name.familyName,
-        profilePicture: profile.photos[0]?.value,
-        authProvider: 'linkedin'
-      });
+  // LinkedIn Strategy
+  passport.use(new LinkedInStrategy({
+    clientID: LINKEDIN_CLIENT_ID,
+    clientSecret: LINKEDIN_CLIENT_SECRET,
+    callbackURL: `${BACKEND_URL}/auth/linkedin/callback`,
+    scope: ['r_emailaddress', 'r_liteprofile'],
+    passReqToCallback: true,
+    proxy: true
+  }, async (req, accessToken, refreshToken, profile, done) => {
+    try {
+      console.log('LinkedIn OAuth callback received with profile:', profile.id);
+      
+      // Check if user exists with this LinkedIn ID
+      let user = await User.findOne({ 'oauth.linkedin.id': profile.id });
+      
+      // If not, check by email
+      if (!user && profile.emails && profile.emails.length > 0) {
+        const email = profile.emails[0].value;
+        user = await User.findOne({ email });
+      }
+      
+      // Determine if this is a new user
+      let isNewUser = false;
+      
+      if (!user) {
+        // Create new user
+        isNewUser = true;
+        
+        const email = profile.emails && profile.emails.length > 0 
+          ? profile.emails[0].value 
+          : `${profile.id}@linkedin.com`;
+        
+        const name = profile.displayName.split(' ');
+        const firstName = name[0] || '';
+        const lastName = name.slice(1).join(' ') || '';
+        const profileImageUrl = profile.photos && profile.photos.length > 0 
+          ? profile.photos[0].value 
+          : null;
+        
+        user = new User({
+          firstName,
+          lastName,
+          email,
+          username: email.split('@')[0] + Math.floor(Math.random() * 1000),
+          profileImage: profileImageUrl,
+          password: crypto.randomBytes(20).toString('hex'), // Random password
+          oauth: {
+            linkedin: {
+              id: profile.id,
+              email,
+              name: profile.displayName,
+              profileImage: profileImageUrl
+            }
+          },
+          verification: {
+            isEmailVerified: true, // LinkedIn accounts are pre-verified
+            verifiedAt: Date.now()
+          },
+          joinedDate: Date.now(),
+          lastActive: Date.now()
+        });
+      } else {
+        // Update OAuth info if needed
+        user.oauth = user.oauth || {};
+        
+        if (!user.oauth.linkedin) {
+          const email = profile.emails && profile.emails.length > 0 
+            ? profile.emails[0].value 
+            : `${profile.id}@linkedin.com`;
+          
+          const profileImageUrl = profile.photos && profile.photos.length > 0 
+            ? profile.photos[0].value 
+            : null;
+          
+          user.oauth.linkedin = {
+            id: profile.id,
+            email,
+            name: profile.displayName,
+            profileImage: profileImageUrl
+          };
+        }
+        
+        // Update last active
+        user.lastActive = Date.now();
+      }
+      
+      // Save user
+      await user.save();
+      
+      // Set isNewUser property for the controller to use
+      user.isNewUser = isNewUser;
+      
+      return done(null, user);
+    } catch (error) {
+      console.error('LinkedIn strategy error:', error);
+      return done(error, null);
     }
-
-    return done(null, user);
-  } catch (error) {
-    console.error("Error in LinkedIn authentication:", error);
-    return done(error, null);
-  }
-}));
-
-// Google Strategy
-// Improved Google Strategy with explicit isNewUser flag
-passport.use(new GoogleStrategy({
-  clientID: GOOGLE_CLIENT_ID,
-  clientSecret: GOOGLE_CLIENT_SECRET,
-  callbackURL: `${BASE_URL}/auth/google/callback`,
-  scope: ['profile', 'email']
-}, async (accessToken, refreshToken, profile, done) => {
-  try {
-    if (!profile.id) {
-      return done(null, false, { message: 'Google authentication failed' });
-    }
-
-    const email = profile.emails?.[0]?.value || null;
-
-    // Check if user already exists
-    let user = await User.findOne({ $or: [{ googleId: profile.id }, { email }] }).lean();
-
-    // Flag to track if this is a truly new user
-    let isNewUser = false;
-
-    if (!user) {
-      // Create new user
-      user = await User.create({
-        googleId: profile.id,
-        email,
-        firstName: profile.name?.givenName || '',
-        lastName: profile.name?.familyName || '',
-        profilePicture: profile.photos?.[0]?.value || null,
-        authProvider: 'google',
-        createdAt: new Date(),
-      });
-
-      // Explicitly mark as new user
-      isNewUser = true;
-      console.log('New user created:', user._id);
-    } else if (!user.googleId) {
-      // Link Google ID to an existing email-based user
-      await User.findByIdAndUpdate(user._id, { googleId: profile.id }, { new: true });
-      console.log('Linked Google account to existing user:', user._id);
-    }
-
-    // Attach isNewUser flag to the user object
-    user.isNewUser = isNewUser;
-
-    return done(null, user);
-  } catch (error) {
-    console.error('Error in Google authentication:', error);
-    return done(error, null);
-  }
-}));
-
-
-module.exports = passport;
+  }));
+};
