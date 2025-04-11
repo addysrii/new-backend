@@ -1,250 +1,206 @@
-// configure/passport.js
+const cloudinary = require('cloudinary').v2;
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
+const multer = require('multer');
+const dotenv = require('dotenv');
 
-const passport = require('passport');
-const GoogleStrategy = require('passport-google-oauth20').Strategy;
-const LinkedInStrategy = require('passport-linkedin-oauth2').Strategy;
-const { User } = require('../models/User');
-const crypto = require('crypto');
-const logger = require('../utils/logger');
+dotenv.config();
 
-// Environment variables
-const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
-const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
-const LINKEDIN_CLIENT_ID = process.env.LINKEDIN_CLIENT_ID;
-const LINKEDIN_CLIENT_SECRET = process.env.LINKEDIN_CLIENT_SECRET;
-const BACKEND_URL = process.env.BASE_URL || 'https://new-backend-w86d.onrender.com';
-const JWT_SECRET = process.env.JWT_SECRET || 'your-jwt-secret';
-
-// Initialize passport
-passport.serializeUser((user, done) => {
-  done(null, user.id);
+// Configure Cloudinary
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-passport.deserializeUser(async (id, done) => {
-  try {
-    const user = await User.findById(id);
-    done(null, user);
-  } catch (error) {
-    done(error, null);
-  }
-});
-
-// Google OAuth Strategy
-passport.use(new GoogleStrategy({
-  clientID: GOOGLE_CLIENT_ID,
-  clientSecret: GOOGLE_CLIENT_SECRET,
-  callbackURL: `${BACKEND_URL}/auth/google/callback`,
-  passReqToCallback: true
-}, async (req, accessToken, refreshToken, profile, done) => {
-  try {
-    logger.info('Google OAuth callback received', { profileId: profile.id });
-    
-    // Check if user exists with this Google ID
-    let user = await User.findOne({ 'oauth.google.id': profile.id });
-    
-    // If not, check by email
-    if (!user && profile.emails && profile.emails.length > 0) {
-      const email = profile.emails[0].value;
-      user = await User.findOne({ email });
+// Create a factory function for storage configs to reduce repetition
+const createCloudinaryStorage = (folder, formats, transformations = []) => {
+  return new CloudinaryStorage({
+    cloudinary: cloudinary,
+    params: {
+      folder: folder,
+      resource_type: 'auto',
+      allowed_formats: formats,
+      transformation: [
+        { quality: 'auto' },
+        { fetch_format: 'auto' },
+        ...transformations
+      ]
     }
-    
-    // Determine if this is a new user
-    let isNewUser = false;
-    
-    if (!user) {
-      // Create new user
-      isNewUser = true;
-      
-      const email = profile.emails && profile.emails.length > 0 
-        ? profile.emails[0].value 
-        : `${profile.id}@google.com`;
-      
-      const firstName = profile.name ? profile.name.givenName : '';
-      const lastName = profile.name ? profile.name.familyName : '';
-      const profileImage = profile.photos && profile.photos.length > 0 
-        ? profile.photos[0].value 
-        : null;
-      
-      // Create random password for the user
-      const randomPassword = crypto.randomBytes(20).toString('hex');
-      
-      user = new User({
-        firstName,
-        lastName,
-        email,
-        username: email.split('@')[0] + Math.floor(Math.random() * 1000),
-        profileImage,
-        password: randomPassword, // Will be hashed by pre-save middleware
-        oauth: {
-          google: {
-            id: profile.id,
-            email,
-            name: profile.displayName,
-            profileImage
-          }
-        },
-        verification: {
-          isEmailVerified: true, // Google accounts are pre-verified
-          verifiedAt: Date.now()
-        },
-        joinedDate: Date.now(),
-        lastActive: Date.now()
-      });
-      
-      await user.save();
-      logger.info('New user created from Google OAuth', { userId: user._id });
-    } else {
-      // Update OAuth info if not already set
-      if (!user.oauth) {
-        user.oauth = {};
-      }
-      
-      if (!user.oauth.google) {
-        const email = profile.emails && profile.emails.length > 0 
-          ? profile.emails[0].value 
-          : `${profile.id}@google.com`;
-        
-        const profileImage = profile.photos && profile.photos.length > 0 
-          ? profile.photos[0].value 
-          : null;
-        
-        user.oauth.google = {
-          id: profile.id,
-          email,
-          name: profile.displayName,
-          profileImage
-        };
-        
-        // Update user data
-        if (!user.profileImage && profileImage) {
-          user.profileImage = profileImage;
+  });
+};
+
+// Define mime type validators
+const mimeTypeValidators = {
+  images: {
+    validate: (file) => file.mimetype.startsWith('image/'),
+    description: 'images'
+  },
+  imagesAndVideos: {
+    validate: (file) => file.mimetype.startsWith('image/') || file.mimetype.startsWith('video/'),
+    description: 'images and videos'
+  },
+  documents: {
+    validate: (file) => {
+      const allowedMimeTypes = [
+        'image/jpeg', 'image/png', 'image/gif', 
+        'video/mp4', 'video/quicktime',
+        'application/pdf', 
+        'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'text/plain'
+      ];
+      return allowedMimeTypes.includes(file.mimetype);
+    },
+    description: 'images, videos, and common document formats'
+  }
+};
+
+// Create a factory function for upload middleware to reduce repetition
+const createUploadMiddleware = (storage, fileSize, maxFiles, validator) => {
+  return multer({
+    storage: storage,
+    limits: {
+      fileSize: fileSize,
+      files: maxFiles
+    },
+    fileFilter: (req, file, cb) => {
+      // Make sure validator is an object with a validate function
+      if (validator && typeof validator.validate === 'function') {
+        if (validator.validate(file)) {
+          cb(null, true);
+        } else {
+          cb(new Error(`Invalid file type. Only ${validator.description} are allowed.`), false);
         }
-        
-        user.lastActive = Date.now();
-        
-        await user.save();
-        logger.info('Updated existing user with Google OAuth', { userId: user._id });
+      } else {
+        // If no validator provided, accept all files
+        cb(null, true);
       }
     }
-    
-    // Set isNewUser property for the controller to use
-    user.isNewUser = isNewUser;
-    
-    return done(null, user);
-  } catch (error) {
-    logger.error('Google strategy error', { error: error.message });
-    return done(error, null);
-  }
-}));
+  });
+};
 
-// LinkedIn OAuth Strategy
-passport.use(new LinkedInStrategy({
-  clientID: LINKEDIN_CLIENT_ID,
-  clientSecret: LINKEDIN_CLIENT_SECRET,
-  callbackURL: `${BACKEND_URL}/auth/linkedin/callback`,
-  scope: ['r_emailaddress', 'r_liteprofile'],
-  passReqToCallback: true
-}, async (req, accessToken, refreshToken, profile, done) => {
-  try {
-    logger.info('LinkedIn OAuth callback received', { profileId: profile.id });
-    
-    // Check if user exists with this LinkedIn ID
-    let user = await User.findOne({ 'oauth.linkedin.id': profile.id });
-    
-    // If not, check by email
-    if (!user && profile.emails && profile.emails.length > 0) {
-      const email = profile.emails[0].value;
-      user = await User.findOne({ email });
-    }
-    
-    // Determine if this is a new user
-    let isNewUser = false;
-    
-    if (!user) {
-      // Create new user
-      isNewUser = true;
-      
-      const email = profile.emails && profile.emails.length > 0 
-        ? profile.emails[0].value 
-        : `${profile.id}@linkedin.com`;
-      
-      const name = profile.displayName ? profile.displayName.split(' ') : ['User'];
-      const firstName = name[0] || '';
-      const lastName = name.slice(1).join(' ') || '';
-      const profileImage = profile.photos && profile.photos.length > 0 
-        ? profile.photos[0].value 
-        : null;
-      
-      // Create random password for the user
-      const randomPassword = crypto.randomBytes(20).toString('hex');
-      
-      user = new User({
-        firstName,
-        lastName,
-        email,
-        username: email.split('@')[0] + Math.floor(Math.random() * 1000),
-        profileImage,
-        password: randomPassword, // Will be hashed by pre-save middleware
-        oauth: {
-          linkedin: {
-            id: profile.id,
-            email,
-            name: profile.displayName,
-            profileImage
-          }
-        },
-        verification: {
-          isEmailVerified: true, // LinkedIn accounts are pre-verified
-          verifiedAt: Date.now()
-        },
-        joinedDate: Date.now(),
-        lastActive: Date.now()
-      });
-      
-      await user.save();
-      logger.info('New user created from LinkedIn OAuth', { userId: user._id });
-    } else {
-      // Update OAuth info if not already set
-      if (!user.oauth) {
-        user.oauth = {};
-      }
-      
-      if (!user.oauth.linkedin) {
-        const email = profile.emails && profile.emails.length > 0 
-          ? profile.emails[0].value 
-          : `${profile.id}@linkedin.com`;
-        
-        const profileImage = profile.photos && profile.photos.length > 0 
-          ? profile.photos[0].value 
-          : null;
-        
-        user.oauth.linkedin = {
-          id: profile.id,
-          email,
-          name: profile.displayName,
-          profileImage
-        };
-        
-        // Update user data
-        if (!user.profileImage && profileImage) {
-          user.profileImage = profileImage;
-        }
-        
-        user.lastActive = Date.now();
-        
-        await user.save();
-        logger.info('Updated existing user with LinkedIn OAuth', { userId: user._id });
-      }
-    }
-    
-    // Set isNewUser property for the controller to use
-    user.isNewUser = isNewUser;
-    
-    return done(null, user);
-  } catch (error) {
-    logger.error('LinkedIn strategy error', { error: error.message });
-    return done(error, null);
-  }
-}));
+// Base Cloudinary storage for general uploads
+const generalStorage = createCloudinaryStorage(
+  'app_uploads',
+  ['jpg', 'jpeg', 'png', 'gif', 'mp4', 'mov', 'avi', 'pdf', 'doc', 'docx']
+);
 
-module.exports = passport;
+// Profile picture storage
+const dpStorage = createCloudinaryStorage(
+  'dp', 
+  ['jpg', 'jpeg', 'png']
+);
+
+// Post storage
+const postStorage = createCloudinaryStorage(
+  'posts',
+  ['jpg', 'jpeg', 'png', 'gif', 'mp4', 'mov']
+);
+
+// Story storage
+const storyStorage = createCloudinaryStorage(
+  'stories',
+  ['jpg', 'jpeg', 'png', 'gif', 'mp4', 'mov'],
+  [{ quality: 'auto:good' }]
+);
+
+// Event storage
+const eventStorage = createCloudinaryStorage(
+  'events',
+  ['jpg', 'jpeg', 'png', 'gif'],
+  [{ quality: 'auto:good' }, { width: 1200, crop: 'limit' }]
+);
+
+// Chat attachment storage
+const chatAttachmentStorage = createCloudinaryStorage(
+  'chat_attachments',
+  ['jpg', 'jpeg', 'png', 'gif', 'mp4', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'txt']
+);
+
+// Upload middleware configurations
+const upload = multer({ storage: generalStorage });
+
+const dpUpload = createUploadMiddleware(
+  dpStorage,
+  25 * 1024 * 1024, // 25MB
+  1,
+  mimeTypeValidators.images
+);
+
+const postUpload = createUploadMiddleware(
+  postStorage,
+  100 * 1024 * 1024, // 100MB
+  10,
+  mimeTypeValidators.imagesAndVideos
+);
+
+// Now use the same function for imageUpload and evidenceUpload to ensure consistency
+const imageUpload = createUploadMiddleware(
+  postStorage,
+  100 * 1024 * 1024,
+  10,
+  mimeTypeValidators.imagesAndVideos
+);
+
+const evidenceUpload = createUploadMiddleware(
+  postStorage,
+  100 * 1024 * 1024,
+  10,
+  mimeTypeValidators.imagesAndVideos
+);
+
+const storyUpload = createUploadMiddleware(
+  storyStorage,
+  50 * 1024 * 1024, // 50MB
+  1,
+  mimeTypeValidators.imagesAndVideos
+);
+
+const eventUpload = createUploadMiddleware(
+  eventStorage,
+  20 * 1024 * 1024, // 20MB
+  1,
+  mimeTypeValidators.images
+);
+
+const chatUpload = createUploadMiddleware(
+  chatAttachmentStorage,
+  25 * 1024 * 1024, // 25MB
+  1,
+  mimeTypeValidators.documents
+);
+
+// Handle multer errors gracefully
+const handleMulterError = (err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    console.error('Multer error:', err);
+    return res.status(400).json({
+      error: 'File upload error',
+      details: err.message,
+      code: err.code
+    });
+  }
+  
+  if (err) {
+    console.error('Unknown upload error:', err);
+    return res.status(500).json({
+      error: 'File upload failed',
+      message: err.message
+    });
+  }
+  
+  next();
+};
+
+module.exports = {
+  cloudinary,
+  upload,
+  dpUpload,
+  postUpload,
+  storyUpload,
+  imageUpload,
+  evidenceUpload,
+  eventUpload,
+  chatUpload,
+  handleMulterError
+};
