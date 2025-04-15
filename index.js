@@ -502,30 +502,32 @@ if (authController) {
 
     // Social auth with OAuth flow
     // Google OAuth routes
-    app.get('/auth/google', 
-      (req, res, next) => {
-        // Save redirectTo parameter if provided
-        const { redirectTo } = req.query;
-        if (redirectTo) {
-          req.session = req.session || {};
-          req.session.redirectTo = redirectTo;
-        }
-        next();
-      },
-      passport.authenticate('google', { 
-        scope: ['profile', 'email'],
-        session: false
-      })
-    );
+ // Google OAuth routes
+app.get('/auth/google', 
+  (req, res, next) => {
+    // Save redirectTo parameter if provided
+    const { redirectTo } = req.query;
+    if (redirectTo) {
+      req.session = req.session || {};
+      req.session.redirectTo = redirectTo.trim(); // Trim whitespace
+      console.log('Saved redirectTo in session:', req.session.redirectTo);
+    }
+    next();
+  },
+  passport.authenticate('google', { 
+    scope: ['profile', 'email'],
+    session: false
+  })
+);
 
-    // Google OAuth callback
-    app.get('/auth/google/callback', 
-      passport.authenticate('google', { 
-        failureRedirect: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/auth/error?message=Google-authentication-failed`,
-        session: false
-      }),
-      authController.googleCallback
-    );
+// Google OAuth callback
+app.get('/auth/google/callback', 
+  passport.authenticate('google', { 
+    failureRedirect: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/auth/callback?error=Google-authentication-failed`,
+    session: false
+  }),
+  authController.googleCallback
+);
 
     // LinkedIn OAuth routes
     app.get('/auth/linkedin',
