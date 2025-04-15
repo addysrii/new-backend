@@ -1525,52 +1525,34 @@ exports.googleAuth = async (req, res) => {
  */
 exports.googleCallback = async (req, res) => {
   try {
-    console.log('Google OAuth callback received', { 
-      profileId: req.user?.oauth?.google?.id || 'not available'
-    });
+    console.log('Google OAuth callback received');
     
-    // Before generating tokens, ensure required fields are properly set
-    if (!req.user.username) {
-      // Generate a username based on email if not provided
-      if (req.user.email) {
-        req.user.username = `${req.user.email.split('@')[0]}${Math.floor(Math.random() * 1000)}`;
-        console.log(`Generated username: ${req.user.username}`);
-      } else {
-        // Fall back to a randomly generated username
-        req.user.username = `user${Math.floor(Math.random() * 10000)}`;
-        console.log(`Generated random username: ${req.user.username}`);
-      }
-    }
+    // Get the redirectTo URL from session (fallback to frontend URL)
+    const redirectTo = req.session?.redirectTo || process.env.FRONTEND_URL || 'http://localhost:5173';
+    console.log('Redirect target:', redirectTo);
     
-    // Add a secure random password for OAuth users if not already set
-    if (!req.user.password) {
-      const crypto = require('crypto');
-      // Generate a secure random password (will be hashed by pre-save hook)
-      req.user.password = crypto.randomBytes(20).toString('hex');
-      console.log('Generated secure random password for OAuth user');
-    }
-    
-    // Save the user with the required fields
-    await req.user.save();
-    console.log(`User saved successfully with ID: ${req.user.id}`);
-    
-    // Generate JWT token
+    // Generate tokens with more user information included in the payload
     const token = jwt.sign(
-      { id: req.user.id, role: req.user.role },
+      { 
+        id: req.user.id, 
+        role: req.user.role,
+        email: req.user.email,
+        firstName: req.user.firstName,
+        lastName: req.user.lastName
+      },
       JWT_SECRET,
       { expiresIn: JWT_EXPIRES_IN }
     );
     
-    // Generate refresh token
     const refreshToken = jwt.sign(
       { id: req.user.id },
       JWT_SECRET,
       { expiresIn: JWT_REFRESH_EXPIRES_IN }
     );
     
-    // Get redirectTo URL from session or use default
-    const redirectTo = req.session?.redirectTo || FRONTEND_URL;
-    const callbackUrl = `${redirectTo}/auth/callback?token=${token}&refreshToken=${refreshToken}&provider=google&new=${req.user.isNewUser ? 'true' : 'false'}`;
+    // Construct the callback URL (note that we're appending query parameters to redirectTo)
+    // This should match what your frontend handleAuthCallback function expects
+    const callbackUrl = `${redirectTo}?token=${token}&refreshToken=${refreshToken}&provider=google&new=${req.user.isNewUser ? 'true' : 'false'}`;
     
     console.log(`Redirecting to: ${callbackUrl}`);
     
@@ -1578,16 +1560,9 @@ exports.googleCallback = async (req, res) => {
     res.redirect(callbackUrl);
   } catch (error) {
     console.error('Google callback error:', error);
-    // Log detailed error for debugging
-    if (error.name === 'ValidationError') {
-      console.error('Validation Error Details:', error.errors);
-    }
-    
-    // Redirect to frontend with error
-    res.redirect(`${FRONTEND_URL}/auth/callback?error=${encodeURIComponent('Authentication failed')}`);
+    res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:5173'}/auth/callback?error=${encodeURIComponent('Authentication failed')}`);
   }
 };
-
 /**
  * LinkedIn OAuth callback handler - Fixed to handle Mongoose validation
  * @route GET /auth/linkedin/callback
