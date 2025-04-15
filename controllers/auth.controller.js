@@ -1525,13 +1525,11 @@ exports.googleAuth = async (req, res) => {
  */
 exports.googleCallback = async (req, res) => {
   try {
-    console.log('Google OAuth callback received');
+    console.log('Google OAuth callback received', { 
+      profileId: req.user?.oauth?.google?.id || 'not available'
+    });
     
-    // Get the redirectTo URL from session (fallback to frontend URL)
-    const redirectTo = req.session?.redirectTo || process.env.FRONTEND_URL || 'http://localhost:5173';
-    console.log('Redirect target:', redirectTo);
-    
-    // Generate tokens with more user information included in the payload
+    // Generate token with user info
     const token = jwt.sign(
       { 
         id: req.user.id, 
@@ -1544,23 +1542,34 @@ exports.googleCallback = async (req, res) => {
       { expiresIn: JWT_EXPIRES_IN }
     );
     
+    // Generate refresh token
     const refreshToken = jwt.sign(
       { id: req.user.id },
       JWT_SECRET,
       { expiresIn: JWT_REFRESH_EXPIRES_IN }
     );
     
-    // Construct the callback URL (note that we're appending query parameters to redirectTo)
-    // This should match what your frontend handleAuthCallback function expects
-    const callbackUrl = `${redirectTo}?token=${token}&refreshToken=${refreshToken}&provider=google&new=${req.user.isNewUser ? 'true' : 'false'}`;
+    // Get redirectTo from session
+    let redirectUrl = req.session?.redirectTo || process.env.FRONTEND_URL || 'http://localhost:5173';
+    
+    // Make sure redirectUrl doesn't have trailing whitespace or newlines
+    redirectUrl = redirectUrl.trim();
+    
+    // Make sure it has /auth/callback path
+    if (!redirectUrl.includes('/auth/callback')) {
+      redirectUrl = `${redirectUrl}/auth/callback`;
+    }
+    
+    // Add the token and parameters to the URL
+    const callbackUrl = `${redirectUrl}?token=${token}&refreshToken=${refreshToken}&provider=google&new=${req.user.isNewUser ? 'true' : 'false'}`;
     
     console.log(`Redirecting to: ${callbackUrl}`);
     
-    // Redirect to frontend with tokens
-    res.redirect(callbackUrl);
+    // Redirect to frontend
+    return res.redirect(callbackUrl);
   } catch (error) {
     console.error('Google callback error:', error);
-    res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:5173'}/auth/callback?error=${encodeURIComponent('Authentication failed')}`);
+    return res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:5173'}/auth/callback?error=${encodeURIComponent('Authentication failed')}`);
   }
 };
 /**
