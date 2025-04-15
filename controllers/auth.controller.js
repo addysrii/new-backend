@@ -1518,8 +1518,9 @@ exports.googleAuth = async (req, res) => {
     res.status(500).json({ error: 'Server error during Google authentication' });
   }
 };
+
 /**
- * Google OAuth callback handler - Fixed to handle Mongoose validation
+ * Google OAuth callback handler
  * @route GET /auth/google/callback
  * @access Public
  */
@@ -1555,90 +1556,34 @@ exports.googleCallback = async (req, res) => {
     // Make sure redirectUrl doesn't have trailing whitespace or newlines
     redirectUrl = redirectUrl.trim();
     
+    // Important: Ensure the redirectUrl is a complete URL with protocol
+    if (!redirectUrl.startsWith('http://') && !redirectUrl.startsWith('https://')) {
+      redirectUrl = `https://${redirectUrl}`;
+    }
+    
     // Make sure it has /auth/callback path
     if (!redirectUrl.includes('/auth/callback')) {
-      redirectUrl = `${redirectUrl}/auth/callback`;
+      // Make sure we don't double-add slashes
+      if (redirectUrl.endsWith('/')) {
+        redirectUrl = `${redirectUrl}auth/callback`;
+      } else {
+        redirectUrl = `${redirectUrl}/auth/callback`;
+      }
     }
+    
+    // Log the constructed URL for debugging
+    console.log(`Constructed redirect URL: ${redirectUrl}`);
     
     // Add the token and parameters to the URL
     const callbackUrl = `${redirectUrl}?token=${token}&refreshToken=${refreshToken}&provider=google&new=${req.user.isNewUser ? 'true' : 'false'}`;
     
-    console.log(`Redirecting to: ${callbackUrl}`);
+    console.log(`Final redirect URL: ${callbackUrl}`);
     
     // Redirect to frontend
     return res.redirect(callbackUrl);
   } catch (error) {
     console.error('Google callback error:', error);
-    return res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:5173'}/auth/callback?error=${encodeURIComponent('Authentication failed')}`);
-  }
-};
-/**
- * LinkedIn OAuth callback handler - Fixed to handle Mongoose validation
- * @route GET /auth/linkedin/callback
- * @access Public
- */
-exports.linkedinCallback = async (req, res) => {
-  try {
-    console.log('LinkedIn OAuth callback received', { 
-      profileId: req.user?.oauth?.linkedin?.id || 'not available'
-    });
-    
-    // Before generating tokens, ensure required fields are properly set
-    if (!req.user.username) {
-      // Generate a username based on email if not provided
-      if (req.user.email) {
-        req.user.username = `${req.user.email.split('@')[0]}${Math.floor(Math.random() * 1000)}`;
-        console.log(`Generated username: ${req.user.username}`);
-      } else {
-        // Fall back to a randomly generated username
-        req.user.username = `user${Math.floor(Math.random() * 10000)}`;
-        console.log(`Generated random username: ${req.user.username}`);
-      }
-    }
-    
-    // Add a secure random password for OAuth users if not already set
-    if (!req.user.password) {
-      const crypto = require('crypto');
-      // Generate a secure random password (will be hashed by pre-save hook)
-      req.user.password = crypto.randomBytes(20).toString('hex');
-      console.log('Generated secure random password for OAuth user');
-    }
-    
-    // Save the user with the required fields
-    await req.user.save();
-    console.log(`User saved successfully with ID: ${req.user.id}`);
-    
-    // Generate JWT token
-    const token = jwt.sign(
-      { id: req.user.id, role: req.user.role },
-      JWT_SECRET,
-      { expiresIn: JWT_EXPIRES_IN }
-    );
-    
-    // Generate refresh token
-    const refreshToken = jwt.sign(
-      { id: req.user.id },
-      JWT_SECRET,
-      { expiresIn: JWT_REFRESH_EXPIRES_IN }
-    );
-    
-    // Get redirectTo URL from session or use default
-    const redirectTo = req.session?.redirectTo || FRONTEND_URL;
-    const callbackUrl = `${redirectTo}/auth/callback?token=${token}&refreshToken=${refreshToken}&provider=linkedin&new=${req.user.isNewUser ? 'true' : 'false'}`;
-    
-    console.log(`Redirecting to: ${callbackUrl}`);
-    
-    // Redirect to frontend with tokens
-    res.redirect(callbackUrl);
-  } catch (error) {
-    console.error('LinkedIn callback error:', error);
-    // Log detailed error for debugging
-    if (error.name === 'ValidationError') {
-      console.error('Validation Error Details:', error.errors);
-    }
-    
-    // Redirect to frontend with error
-    res.redirect(`${FRONTEND_URL}/auth/callback?error=${encodeURIComponent('Authentication failed')}`);
+    return res.redirect(`${process.env.FRONTEND_URL || 'www.meetkats.com'}/auth/callback?error=${encodeURIComponent('Authentication failed')}`);
   }
 };
 
@@ -1848,7 +1793,30 @@ exports.linkedinAuth = async (req, res) => {
  * @route GET /auth/linkedin/callback
  * @access Public
  */
-
+exports.linkedinCallback = async (req, res) => {
+  try {
+    // Passport.js attaches the user to req.user
+    // Generate JWT token
+    const token = jwt.sign(
+      { id: req.user.id, role: req.user.role },
+      JWT_SECRET,
+      { expiresIn: JWT_EXPIRES_IN }
+    );
+    
+    // Generate refresh token
+    const refreshToken = jwt.sign(
+      { id: req.user.id },
+      JWT_SECRET,
+      { expiresIn: JWT_REFRESH_EXPIRES_IN }
+    );
+    
+    // Redirect to frontend with tokens
+    res.redirect(`${FRONTEND_URL}/auth/callback?token=${token}&refreshToken=${refreshToken}&provider=linkedin&new=${req.user.isNewUser ? 'true' : 'false'}`);
+  } catch (error) {
+    logger.error('LinkedIn callback error:', error);
+    res.redirect(`${FRONTEND_URL}/auth/error?message=Authentication failed`);
+  }
+};
 
 /**
  * Check authentication provider
