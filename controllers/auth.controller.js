@@ -1542,13 +1542,6 @@ exports.googleCallback = async (req, res) => {
       { expiresIn: JWT_EXPIRES_IN }
     );
     
-    // Generate refresh token
-    const refreshToken = jwt.sign(
-      { id: req.user.id },
-      JWT_SECRET,
-      { expiresIn: JWT_REFRESH_EXPIRES_IN }
-    );
-    
     // Get redirectTo from session
     let redirectUrl = req.session?.redirectTo || process.env.FRONTEND_URL || 'http://localhost:5173';
     
