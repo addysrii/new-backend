@@ -1,4 +1,3 @@
-// routes/booking.routes.js
 const express = require('express');
 const router = express.Router();
 const bookingController = require('../controllers/booking.controller');
@@ -32,6 +31,9 @@ router.post('/events/:eventId/book',
 router.get('/my', authenticateToken, bookingController.getUserBookings);
 router.get('/:bookingId', authenticateToken, bookingController.getBooking);
 router.post('/:bookingId/cancel', authenticateToken, bookingController.cancelBooking);
+
+// Ticket verification route - add this new route
+router.post('/events/:eventId/verify-ticket', authenticateToken, bookingController.verifyTicketByCode);
 
 // Ticket routes
 router.post('/tickets/:ticketId/check-in', 
