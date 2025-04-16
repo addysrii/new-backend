@@ -32,7 +32,9 @@ const notificationSchema = new Schema({
       'post_reported',
       'job_deleted',
       'new_mention',
-      'new_application'
+      'new_application',
+      'ticket_checked_in', 
+      'ticket_received'
     ],
     required: true
   },
