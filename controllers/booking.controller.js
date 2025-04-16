@@ -156,7 +156,42 @@ exports.createTicketType = async (req, res) => {
     });
   }
 };
-
+exports.verifyTicketByCode = async (req, res) => {
+  try {
+    const { eventId } = req.params;
+    const { verificationCode } = req.body;
+    
+    if (!verificationCode) {
+      return res.status(400).json({ error: 'Verification code is required' });
+    }
+    
+    // Find the ticket with this verification code
+    const tickets = await Ticket.find({ 
+      event: eventId,
+      status: { $nin: ['cancelled', 'refunded', 'expired'] }
+    });
+    
+    // Find a ticket where the first 6 characters of qrSecret match the code
+    const ticket = tickets.find(t => 
+      t.qrSecret.substring(0, 6).toUpperCase() === verificationCode.toUpperCase()
+    );
+    
+    if (!ticket) {
+      return res.status(404).json({ error: 'Invalid verification code' });
+    }
+    
+    // Return the ticket with owner and event info
+    const ticketWithDetails = await Ticket.findById(ticket._id)
+      .populate('event')
+      .populate('ticketType')
+      .populate('owner', 'firstName lastName email profileImage');
+      
+    res.json({ ticket: ticketWithDetails });
+  } catch (error) {
+    console.error('Verify ticket by code error:', error);
+    res.status(500).json({ error: 'Server error when verifying ticket' });
+  }
+};
 /**
  * Update a ticket type
  * @route PUT /api/bookings/ticket-types/:ticketTypeId
