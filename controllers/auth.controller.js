@@ -525,11 +525,12 @@ exports.signup = async (req, res) => {
  * @route POST /auth/login
  * @access Public
  */
-// Modified login function to add debugging
 // Add this to your controllers/auth.controller.js file
 
+const otpService = require('../utils/otpService');
+
 /**
- * Phone auth - start verification (simplified approach)
+ * Phone auth - start verification (using existing otpService)
  * @route POST /auth/phone-auth/start
  * @access Public
  */
@@ -575,32 +576,36 @@ exports.startPhoneAuth = async (req, res) => {
       console.log(`Found existing user: ${user._id}`);
     }
     
-    // Now generate and send verification code
-    const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+    // Generate and send verification code using otpService
+    const otp = otpService.generateOTP();
+    console.log(`Generated OTP: ${otp} for user ${user._id}`);
     
-    // In a production app, you would send SMS here
-    console.log(`[DEMO] Sending code ${verificationCode} to ${formattedPhone}`);
+    // Send OTP via SMS
+    const sent = await otpService.sendSmsOTP(formattedPhone, otp, user._id);
     
-    // Store verification code in user record (should be hashed in production)
-    user.verification = user.verification || {};
-    user.verification.phone = {
-      code: verificationCode, // Should be hashed in production!
-      attempts: 0,
-      expiresAt: new Date(Date.now() + 10 * 60 * 1000) // 10 minutes
-    };
+    if (!sent) {
+      console.error(`Failed to send verification code to ${formattedPhone}`);
+      return res.status(500).json({ error: 'Failed to send verification code' });
+    }
     
-    await user.save();
+    // Double-check that the OTP was stored properly
+    const updatedUser = await User.findById(user._id);
+    console.log('Verification data after sending:', JSON.stringify(updatedUser.verification, null, 2));
     
-    // Return success response
-    return res.json({
+    // Return response
+    const response = {
       success: true,
       message: 'Verification code sent',
       isNewUser,
-      userId: user._id,
-      // ONLY FOR DEVELOPMENT: include the code in response
-      // REMOVE THIS IN PRODUCTION
-      verificationCode: verificationCode
-    });
+      userId: user._id
+    };
+    
+    // In development mode, include the verification code in the response
+    if (process.env.NODE_ENV !== 'production') {
+      response.verificationCode = otp;
+    }
+    
+    return res.json(response);
   } catch (error) {
     console.error('Phone auth start error:', error);
     return res.status(500).json({ error: 'Server error during phone verification' });
@@ -608,7 +613,7 @@ exports.startPhoneAuth = async (req, res) => {
 };
 
 /**
- * Phone auth - verify code
+ * Phone auth - verify code (using existing otpService)
  * @route POST /auth/phone-auth/verify
  * @access Public
  */
@@ -629,40 +634,18 @@ exports.verifyPhoneAuth = async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
     
-    // Check if verification data exists
-    if (!user.verification || !user.verification.phone) {
-      return res.status(400).json({ error: 'No verification in progress' });
+    // Verify OTP using otpService
+    const verificationResult = await otpService.verifyOTP(userId, 'phone', code);
+    console.log('Verification result:', verificationResult);
+    
+    if (!verificationResult.valid) {
+      return res.status(400).json({ 
+        error: verificationResult.message,
+        ...verificationResult
+      });
     }
     
-    // Check if code is expired
-    if (user.verification.phone.expiresAt < new Date()) {
-      return res.status(400).json({ error: 'Verification code expired' });
-    }
-    
-    // Check if too many attempts
-    if (user.verification.phone.attempts >= 5) {
-      return res.status(429).json({ error: 'Too many verification attempts' });
-    }
-    
-    // Increment attempts
-    user.verification.phone.attempts += 1;
-    
-    // Verify the code (in production, compare hashed values)
-    if (user.verification.phone.code !== code) {
-      await user.save(); // Save the incremented attempts
-      return res.status(400).json({ error: 'Invalid verification code' });
-    }
-    
-    // If we get here, verification was successful
-    user.phoneVerified = true;
-    user.verification.phone = undefined; // Clear verification data
-    
-    // Mark the user as verified
-    user.isVerified = true;
-    
-    await user.save();
-    
-    // Generate tokens for authentication
+    // If verification is successful, generate tokens for authentication
     const token = jwt.sign(
       { id: user._id, role: user.role },
       process.env.JWT_SECRET || 'your-jwt-secret',
@@ -675,7 +658,7 @@ exports.verifyPhoneAuth = async (req, res) => {
       { expiresIn: '30d' }
     );
     
-    // Save refresh token to user's document if you have such a field
+    // Save refresh token to user's document
     if (!user.security) {
       user.security = {};
     }
@@ -687,6 +670,19 @@ exports.verifyPhoneAuth = async (req, res) => {
       token: refreshToken,
       expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
       createdAt: new Date()
+    });
+    
+    // Also update the security.activeLoginSessions if your model uses it
+    if (!user.security.activeLoginSessions) {
+      user.security.activeLoginSessions = [];
+    }
+    
+    user.security.activeLoginSessions.push({
+      token,
+      device: req.headers['user-agent'] || 'Unknown device',
+      ip: req.ip || req.connection.remoteAddress,
+      loginTime: Date.now(),
+      lastActive: Date.now()
     });
     
     await user.save();
@@ -702,7 +698,7 @@ exports.verifyPhoneAuth = async (req, res) => {
         phone: user.phone,
         username: user.username,
         phoneVerified: user.phoneVerified,
-        isVerified: user.isVerified,
+        isVerified: user.isVerified || user.phoneVerified,
         role: user.role
       }
     });
