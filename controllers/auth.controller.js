@@ -526,6 +526,191 @@ exports.signup = async (req, res) => {
  * @access Public
  */
 // Modified login function to add debugging
+// Add this to your controllers/auth.controller.js file
+
+/**
+ * Phone auth - start verification (simplified approach)
+ * @route POST /auth/phone-auth/start
+ * @access Public
+ */
+exports.startPhoneAuth = async (req, res) => {
+  try {
+    const { phoneNumber } = req.body;
+    
+    if (!phoneNumber) {
+      return res.status(400).json({ error: 'Phone number is required' });
+    }
+    
+    console.log(`Starting phone authentication for: ${phoneNumber}`);
+    
+    // Format phone number to E.164 format if needed
+    let formattedPhone = phoneNumber;
+    if (!phoneNumber.startsWith('+')) {
+      formattedPhone = `+${phoneNumber}`;
+    }
+    
+    // Check if user already exists with this phone number
+    let user = await User.findOne({ phone: formattedPhone });
+    let isNewUser = false;
+    
+    if (!user) {
+      // This is a new user
+      isNewUser = true;
+      
+      // Create a temporary user record
+      const username = `user${Math.floor(Math.random() * 1000000)}`;
+      const tempPassword = crypto.randomBytes(20).toString('hex');
+      
+      user = new User({
+        phone: formattedPhone,
+        username: username,
+        password: tempPassword, // This will be hashed by the User model
+        joinedDate: Date.now(),
+        phoneVerified: false
+      });
+      
+      await user.save();
+      console.log(`Created temporary user: ${user._id}`);
+    } else {
+      console.log(`Found existing user: ${user._id}`);
+    }
+    
+    // Now generate and send verification code
+    const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+    
+    // In a production app, you would send SMS here
+    console.log(`[DEMO] Sending code ${verificationCode} to ${formattedPhone}`);
+    
+    // Store verification code in user record (should be hashed in production)
+    user.verification = user.verification || {};
+    user.verification.phone = {
+      code: verificationCode, // Should be hashed in production!
+      attempts: 0,
+      expiresAt: new Date(Date.now() + 10 * 60 * 1000) // 10 minutes
+    };
+    
+    await user.save();
+    
+    // Return success response
+    return res.json({
+      success: true,
+      message: 'Verification code sent',
+      isNewUser,
+      userId: user._id,
+      // ONLY FOR DEVELOPMENT: include the code in response
+      // REMOVE THIS IN PRODUCTION
+      verificationCode: verificationCode
+    });
+  } catch (error) {
+    console.error('Phone auth start error:', error);
+    return res.status(500).json({ error: 'Server error during phone verification' });
+  }
+};
+
+/**
+ * Phone auth - verify code
+ * @route POST /auth/phone-auth/verify
+ * @access Public
+ */
+exports.verifyPhoneAuth = async (req, res) => {
+  try {
+    const { userId, code } = req.body;
+    
+    if (!userId || !code) {
+      return res.status(400).json({ error: 'User ID and verification code are required' });
+    }
+    
+    console.log(`Verifying code for user ${userId}: ${code}`);
+    
+    // Find the user
+    const user = await User.findById(userId);
+    
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    // Check if verification data exists
+    if (!user.verification || !user.verification.phone) {
+      return res.status(400).json({ error: 'No verification in progress' });
+    }
+    
+    // Check if code is expired
+    if (user.verification.phone.expiresAt < new Date()) {
+      return res.status(400).json({ error: 'Verification code expired' });
+    }
+    
+    // Check if too many attempts
+    if (user.verification.phone.attempts >= 5) {
+      return res.status(429).json({ error: 'Too many verification attempts' });
+    }
+    
+    // Increment attempts
+    user.verification.phone.attempts += 1;
+    
+    // Verify the code (in production, compare hashed values)
+    if (user.verification.phone.code !== code) {
+      await user.save(); // Save the incremented attempts
+      return res.status(400).json({ error: 'Invalid verification code' });
+    }
+    
+    // If we get here, verification was successful
+    user.phoneVerified = true;
+    user.verification.phone = undefined; // Clear verification data
+    
+    // Mark the user as verified
+    user.isVerified = true;
+    
+    await user.save();
+    
+    // Generate tokens for authentication
+    const token = jwt.sign(
+      { id: user._id, role: user.role },
+      process.env.JWT_SECRET || 'your-jwt-secret',
+      { expiresIn: '7d' }
+    );
+    
+    const refreshToken = jwt.sign(
+      { id: user._id },
+      process.env.JWT_SECRET || 'your-jwt-secret',
+      { expiresIn: '30d' }
+    );
+    
+    // Save refresh token to user's document if you have such a field
+    if (!user.security) {
+      user.security = {};
+    }
+    if (!user.security.refreshTokens) {
+      user.security.refreshTokens = [];
+    }
+    
+    user.security.refreshTokens.push({
+      token: refreshToken,
+      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
+      createdAt: new Date()
+    });
+    
+    await user.save();
+    
+    // Return success with tokens and user data
+    return res.json({
+      success: true,
+      message: 'Phone verified successfully',
+      token,
+      refreshToken,
+      user: {
+        id: user._id,
+        phone: user.phone,
+        username: user.username,
+        phoneVerified: user.phoneVerified,
+        isVerified: user.isVerified,
+        role: user.role
+      }
+    });
+  } catch (error) {
+    console.error('Phone auth verification error:', error);
+    return res.status(500).json({ error: 'Server error during verification' });
+  }
+};
 exports.login = async (req, res) => {
   try {
     const errors = validationResult(req);
