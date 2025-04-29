@@ -527,7 +527,6 @@ exports.signup = async (req, res) => {
  */
 // Add this to your controllers/auth.controller.js file
 
-const otpService = require('../utils/otpService');
 
 /**
  * Phone auth - start verification (using existing otpService)
