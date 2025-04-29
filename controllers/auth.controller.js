@@ -1823,6 +1823,63 @@ exports.linkedinCallback = async (req, res) => {
  * @route POST /auth/check-provider
  * @access Public
  */
+// This should be added to your auth.controller.js on the backend side
+// Make sure to also add this route to your express app
+
+/**
+ * Start Phone Verification Process
+ * Create a temporary user and prepare for verification
+ * @route POST /auth/start-phone-verification
+ * @access Public
+ */
+exports.startPhoneVerification = async (req, res) => {
+  try {
+    const { phoneNumber } = req.body;
+    
+    if (!phoneNumber) {
+      return res.status(400).json({ error: 'Phone number is required' });
+    }
+    
+    console.log(`Starting phone verification for: ${phoneNumber}`);
+    
+    // Format phone number to E.164 format
+    let formattedPhone = phoneNumber;
+    if (!phoneNumber.startsWith('+')) {
+      formattedPhone = `+${phoneNumber}`;
+    }
+    
+    // Check if user already exists with this phone number
+    let user = await User.findOne({ phone: formattedPhone });
+    let isNewUser = false;
+    
+    if (!user) {
+      // Create a temporary user with this phone number
+      isNewUser = true;
+      user = new User({
+        phone: formattedPhone,
+        joinedDate: Date.now(),
+        lastActive: Date.now(),
+        phoneVerified: false
+      });
+      
+      await user.save();
+      console.log(`Created temporary user with ID: ${user._id}`);
+    } else {
+      console.log(`Found existing user with ID: ${user._id}`);
+    }
+    
+    // Return the user ID to be used in the verification process
+    return res.json({
+      message: 'Phone verification initialized',
+      userId: user._id,
+      isNewUser
+    });
+  } catch (error) {
+    console.error(`Start phone verification error: ${error.message}`);
+    console.error(error.stack);
+    res.status(500).json({ error: 'Server error during phone verification initialization' });
+  }
+};
 exports.checkAuthProvider = async (req, res) => {
   try {
     const { email } = req.body;
