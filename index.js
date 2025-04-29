@@ -480,7 +480,7 @@ if (authController) {
     app.post('/auth/forgot-password', authLimiter, authController.forgotPassword);
     app.post('/auth/reset-password', authLimiter, authController.resetPassword);
     app.post('/auth/change-password', authenticateToken, authController.changePassword);
-
+app.post('/auth/start-phone-verification', authController.startPhoneVerification);
     // Email verification
     app.post('/auth/email/send-code', authLimiter, authController.sendEmailVerificationCode);
     app.post('/auth/email/verify', authLimiter, authController.verifyEmailCode);
