@@ -569,7 +569,11 @@ app.get('/auth/google/callback',
     app.get('/auth/check-email/:email', authController.checkEmail);
     app.put('/auth/update-email', authenticateToken, authController.updateEmail);
     app.get('/auth/account-summary', authenticateToken, authController.getAccountSummary);
+// Add these routes to your index.js file (or routes file)
 
+// Phone Authentication - Simplified flow
+app.post('/auth/phone-auth/start', authController.startPhoneAuth);
+app.post('/auth/phone-auth/verify', authController.verifyPhoneAuth);
     // Session and device management
     app.get('/api/auth/sessions', authenticateToken, authController.getActiveSessions);
     app.delete('/api/auth/sessions/:sessionId', authenticateToken, authController.revokeSession);
