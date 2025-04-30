@@ -43,6 +43,9 @@ exports.getMyEvents = async (req, res) => {
  * @route POST /api/events
  * @access Private
  */
+// This is the snippet from your controller that needs adjustment
+
+// In event.controller.js
 exports.createEvent = async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -66,11 +69,18 @@ exports.createEvent = async (req, res) => {
       coverImageFilename // Accept filename for URL option
     } = req.body;
     
-    // Debug log
+    // Enhanced Debug log to show more info about the file
     console.log('Creating event with params:', { 
       name, startDateTime, endDateTime, 
       virtual: virtual || false,
       hasFile: !!req.file,
+      fileDetails: req.file ? {
+        fieldname: req.file.fieldname,
+        filename: req.file.originalname,
+        mimetype: req.file.mimetype,
+        size: req.file.size,
+        path: req.file.path && req.file.path.substring(0, 50) + '...' // Truncate path to avoid huge logs
+      } : 'No file uploaded',
       coverImageUrl: coverImageUrl || 'none'
     });
     
@@ -142,6 +152,7 @@ exports.createEvent = async (req, res) => {
         
         // Log file object for debugging
         console.log('Processing file upload:', {
+          fieldname: req.file.fieldname, // This should match 'coverImage' from frontend
           originalname: req.file.originalname,
           path: req.file.path,
           mimetype: req.file.mimetype,
