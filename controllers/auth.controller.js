@@ -1528,46 +1528,59 @@ exports.resendVerification = async (req, res) => {
  * @route POST /auth/google
  * @access Public
  */
+// In controllers/auth.controller.js
 exports.googleAuth = async (req, res) => {
   try {
-    const { idToken } = req.body;
+    const { idToken, userData, deviceInfo } = req.body;
     
     if (!idToken) {
       return res.status(400).json({ error: 'ID token is required' });
     }
-    
-    // Verify Google token
+
+    console.log('Google auth request received', {
+      hasUserData: !!userData,
+      deviceInfo: deviceInfo || 'none'
+    });
+
+    // Verify Google token - accept both web and Android clients
     const ticket = await googleClient.verifyIdToken({
       idToken,
-      audience: [GOOGLE_CLIENT_ID, ANDROID_CLIENT_ID]  // Add ANDROID_CLIENT_ID here
+      audience: [GOOGLE_CLIENT_ID, ANDROID_CLIENT_ID]
     });
-    
+
     const payload = ticket.getPayload();
     
     if (!payload) {
-      return res.status(400).json({ error: 'Invalid token' });
+      console.error('Invalid Google token payload');
+      return res.status(400).json({ error: 'Invalid Google token' });
     }
-    
+
+    // Extract user information from token
     const {
       email,
       name,
       given_name: firstName,
       family_name: lastName,
       picture: profileImage,
-      sub: googleId
+      sub: googleId,
+      email_verified: isEmailVerified
     } = payload;
-    
+
+    if (!email) {
+      console.error('No email in Google payload');
+      return res.status(400).json({ error: 'Email is required from Google' });
+    }
+
     // Check if user exists
     let user = await User.findOne({ email });
     let isNewUser = false;
-    
+
     if (!user) {
-      // Create new user
+      // Create new user with data from Google
       isNewUser = true;
-      
       user = new User({
-        firstName: firstName || name.split(' ')[0],
-        lastName: lastName || name.split(' ').slice(1).join(' '),
+        firstName: firstName || name?.split(' ')[0] || 'Google',
+        lastName: lastName || name?.split(' ').slice(1).join(' ') || 'User',
         email,
         username: email.split('@')[0] + Math.floor(Math.random() * 1000),
         profileImage,
@@ -1581,16 +1594,15 @@ exports.googleAuth = async (req, res) => {
           }
         },
         verification: {
-          isEmailVerified: true, // Google accounts are pre-verified
-          verifiedAt: Date.now()
+          isEmailVerified: isEmailVerified || false,
+          verifiedAt: isEmailVerified ? new Date() : null
         },
         joinedDate: Date.now(),
         lastActive: Date.now()
       });
     } else {
-      // Update OAuth info if not already set
+      // Update existing user's Google info if not set
       user.oauth = user.oauth || {};
-      
       if (!user.oauth.google) {
         user.oauth.google = {
           id: googleId,
@@ -1599,85 +1611,42 @@ exports.googleAuth = async (req, res) => {
           profileImage
         };
       }
-      
+
       // Update profile image if not set
       if (!user.profileImage) {
         user.profileImage = profileImage;
       }
-      
-      // Mark email as verified if not already
-      if (!user.verification || !user.verification.isEmailVerified) {
-        user.verification = user.verification || {};
+
+      // Mark email as verified if Google says it's verified
+      if (isEmailVerified && !user.verification.isEmailVerified) {
         user.verification.isEmailVerified = true;
-        user.verification.verifiedAt = Date.now();
+        user.verification.verifiedAt = new Date();
       }
-      
+
       user.lastActive = Date.now();
     }
-    
-    // Get device and location info
-    const userAgent = req.headers['user-agent'];
-    const ip = req.ip || req.connection.remoteAddress;
-    const deviceInfo = deviceDetector.detect(userAgent);
-    const geo = geoip.lookup(ip);
-    
+
     // Generate tokens
     const token = jwt.sign(
       { id: user.id, role: user.role },
       JWT_SECRET,
       { expiresIn: JWT_EXPIRES_IN }
     );
-    
+
     const refreshToken = jwt.sign(
       { id: user.id },
       JWT_SECRET,
       { expiresIn: JWT_REFRESH_EXPIRES_IN }
     );
-    
-    // Save session info
-    user.security = user.security || {};
-    user.security.activeLoginSessions = user.security.activeLoginSessions || [];
-    user.security.refreshTokens = user.security.refreshTokens || [];
-    
-    // Add login session
-    user.security.activeLoginSessions.push({
-      token,
-      device: {
-        type: deviceInfo.device ? deviceInfo.device.type : 'unknown',
-        name: deviceInfo.device ? deviceInfo.device.brand + ' ' + deviceInfo.device.model : 'unknown',
-        browser: deviceInfo.client ? deviceInfo.client.name + ' ' + deviceInfo.client.version : 'unknown',
-        os: deviceInfo.os ? deviceInfo.os.name + ' ' + deviceInfo.os.version : 'unknown'
-      },
-      ip,
-      location: geo ? `${geo.city}, ${geo.country}` : 'unknown',
-      loginTime: Date.now(),
-      lastActive: Date.now()
-    });
-    
-    // Add refresh token
-    user.security.refreshTokens.push({
-      token: refreshToken,
-      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
-      issuedAt: new Date(),
-      device: deviceInfo.device ? deviceInfo.device.type : 'unknown'
-    });
-    
+
+    // Save user and tokens
     await user.save();
-    
-    // Log the action
-    await SecurityLog.create({
-      user: user._id,
-      action: isNewUser ? 'oauth_signup' : 'oauth_login',
-      provider: 'google',
-      ip,
-      location: geo ? `${geo.city}, ${geo.country}` : 'unknown',
-      device: deviceInfo.device ? deviceInfo.device.type : 'unknown',
-      browser: deviceInfo.client ? deviceInfo.client.name : 'unknown',
-      os: deviceInfo.os ? deviceInfo.os.name : 'unknown',
-      timestamp: Date.now(),
-      success: true
+
+    console.log('Google authentication successful', {
+      userId: user.id,
+      isNewUser
     });
-    
+
     res.json({
       token,
       refreshToken,
@@ -1689,16 +1658,25 @@ exports.googleAuth = async (req, res) => {
         username: user.username,
         profileImage: user.profileImage,
         role: user.role,
-        isEmailVerified: true,
+        isEmailVerified: user.verification.isEmailVerified,
         isNewUser
       }
     });
+
   } catch (error) {
-    logger.error('Google auth error:', error);
-    res.status(500).json({ error: 'Server error during Google authentication' });
+    console.error('Google auth error:', error);
+    
+    // More specific error messages
+    if (error.message.includes('Invalid token signature')) {
+      return res.status(400).json({ error: 'Invalid Google token' });
+    }
+    
+    res.status(500).json({ 
+      error: 'Server error during Google authentication',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 };
-
 /**
  * Google OAuth callback handler
  * @route GET /auth/google/callback
