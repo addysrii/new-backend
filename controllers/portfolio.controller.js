@@ -1064,10 +1064,10 @@ exports.getStreak = async (req, res) => {
     }
     
     // Check if user has access to the streak
-    if (
-      streak.visibility !== 'public' && 
-      streak.owner !== req.user.id
-    ) {
+    const isOwner = streak.owner._id.toString() === req.user.id.toString();
+    const isPublic = streak.visibility === 'public';
+    
+    if (!isPublic && !isOwner) {
       return res.status(403).json({ error: 'You do not have permission to view this streak' });
     }
     
