@@ -149,7 +149,7 @@ exports.markAsRead = async (req, res) => {
     }
     
     // Check if user is the recipient
-    if (notification.recipient.toString() !== req.user.id) {
+    if (notification.recipient.toString() !== req.user.id.toString()) {
       return res.status(403).json({ error: 'You can only mark your own notifications as read' });
     }
     
