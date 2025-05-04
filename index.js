@@ -1419,7 +1419,7 @@ try {
     console.log(`Server running on port ${PORT}`);
   });
 }
-  )}.catch(err => {
+}).catch(err => {
  console.error('MongoDB connection error:', err);
  console.error('Unable to start server without database connection');
  process.exit(1);
