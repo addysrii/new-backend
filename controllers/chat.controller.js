@@ -234,6 +234,7 @@ exports.createChat = async (req, res) => {
  */
 // controllers/chat.controller.js - Update the sendMessage method
 
+// controllers/chat.controller.js - Update the sendMessage method
 exports.sendMessage = async (req, res) => {
   try {
     const { chatId } = req.params;
@@ -264,36 +265,37 @@ exports.sendMessage = async (req, res) => {
     
     // Populate sender information
     await message.populate('sender', 'firstName lastName username profileImage');
-     chat.lastMessage = message;
+    
+    // Update chat's last message
+    chat.lastMessage = message;
     await chat.save();
     
     // Get socket events handler
     const io = global.io;
     const socketEvents = require('../utils/socketEvents');
     
-    // Get online participants to emit to
-    const onlineParticipants = chat.participants.filter(participantId => {
-      return participantId.toString() !== req.user.id.toString();
+    // Emit to each participant in the chat
+    const participants = chat.participants.map(p => p.toString());
+    
+    // Emit directly using the room
+    io.to(`chat:${chatId}`).emit('new_message', {
+      message: message.toObject(),
+      chatId: chatId
     });
     
-    // Emit to each online participant
-    for (const participantId of onlineParticipants) {
-      // Check if user has active sockets
-      if (socketEvents.isUserOnline(participantId.toString())) {
-        socketEvents.emitToUser(participantId.toString(), 'new_message', {
-          message: message.toObject(),
-          chatId: chatId
-        });
-      } else {
-        logger.info(`User ${participantId} has no active sockets for event: new_message`);
-      }
-    }
+    // Also emit to each user's personal room for redundancy
+    participants.forEach(participantId => {
+      io.to(`user:${participantId}`).emit('new_message', {
+        message: message.toObject(),
+        chatId: chatId
+      });
+    });
     
-    // Also emit to the chat room
+    // Attempt to use socketEvents as well
     socketEvents.emitToRoom(chatId, 'new_message', {
       message: message.toObject(),
       chatId: chatId
-    }, req.user.id);
+    });
     
     res.status(201).json(message);
   } catch (error) {
@@ -301,7 +303,6 @@ exports.sendMessage = async (req, res) => {
     res.status(500).json({ error: 'Failed to send message' });
   }
 };
-
 // Alternative version using io directly (if socketEvents not available)
 exports.sendMessageAlternative = async (req, res) => {
   try {
