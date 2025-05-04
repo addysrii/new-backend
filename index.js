@@ -1363,39 +1363,51 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/professio
  const server = http.createServer(app);
  
  // Initialize Socket.IO with enhanced configuration
- try {
-   console.log('Initializing Socket.IO...');
-   
-   // Adding a try/catch block for the actual Socket.IO initialization
-   try {
-     const { io, chatNamespace, notificationNamespace } = await setupSocketIO(server);
-     console.log('Socket.IO server initialized successfully');
-     
-     // Store socket namespaces in app for use in routes if needed
-     app.set('io', io);
-     app.set('chatNamespace', chatNamespace);
-     app.set('notificationNamespace', notificationNamespace);
-     
-     // Make io available globally for the socket event emitters
-     global.io = io;
-   } catch (socketSetupError) {
-     console.error('Failed to initialize Socket.IO:', socketSetupError);
-     console.log('Continuing without Socket.IO functionality');
-   }
-   
-   // Start the server
-   server.listen(PORT, () => {
-     console.log(`Server running on port ${PORT}`);
-   });
- } catch (error) {
-   console.error('Failed to load Socket.IO module:', error);
-   
-   // Start the server even if Socket.IO module fails to load
-   server.listen(PORT, '0.0.0.0', () => {
+// Update the Socket.IO initialization section in index.js (around line 1000-1050)
+
+// Initialize Socket.IO with enhanced configuration
+try {
+  console.log('Initializing Socket.IO...');
+  
+  // Adding a try/catch block for the actual Socket.IO initialization
+  try {
+    const { io, chatNamespace, notificationNamespace } = await setupSocketIO(server);
+    console.log('Socket.IO server initialized successfully');
+    
+    // Initialize socketEvents handler with the io instance - ADD THIS
+    try {
+      const socketEvents = require('./utils/socketEvents');
+      socketEvents.initialize(io);
+      console.log('Socket events handler initialized successfully');
+    } catch (socketEventsError) {
+      console.error('Failed to initialize socket events handler:', socketEventsError);
+      console.log('Socket events handler was not properly initialized');
+    }
+    
+    // Store socket namespaces in app for use in routes if needed
+    app.set('io', io);
+    app.set('chatNamespace', chatNamespace);
+    app.set('notificationNamespace', notificationNamespace);
+    
+    // Make io available globally for the socket event emitters
+    global.io = io;
+  } catch (socketSetupError) {
+    console.error('Failed to initialize Socket.IO:', socketSetupError);
+    console.log('Continuing without Socket.IO functionality');
+  }
+  
+  // Start the server
+  server.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+  });
+} catch (error) {
+  console.error('Failed to load Socket.IO module:', error);
+  
+  // Start the server even if Socket.IO module fails to load
+  server.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on port ${PORT} and accessible on local network`);
   });
- }
-})
+}
 .catch(err => {
  console.error('MongoDB connection error:', err);
  console.error('Unable to start server without database connection');
