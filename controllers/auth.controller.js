@@ -706,6 +706,9 @@ exports.verifyPhoneAuth = async (req, res) => {
     return res.status(500).json({ error: 'Server error during verification' });
   }
 };
+
+// Updated sections of controllers/auth.controller.js
+
 exports.login = async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -730,7 +733,7 @@ exports.login = async (req, res) => {
       });
     }
     
-    // Compare password (fixed to match your schema)
+    // Compare password
     const isMatch = await user.comparePassword(password);
     
     if (!isMatch) {
@@ -772,18 +775,42 @@ exports.login = async (req, res) => {
     const token = user.generateAuthToken();
     const refreshToken = user.generateRefreshToken();
     
-    // Store refresh token in user's document
+    // Store tokens in user's document - THIS IS THE IMPORTANT PART
     if (!user.security) {
       user.security = {};
     }
     if (!user.security.refreshTokens) {
       user.security.refreshTokens = [];
     }
+    if (!user.security.activeLoginSessions) {
+      user.security.activeLoginSessions = [];
+    }
+    
+    // Get device and location info
+    const userAgent = req.headers['user-agent'];
+    const ip = req.ip || req.connection.remoteAddress;
+    const deviceInfo = deviceDetector.detect(userAgent);
+    const geo = geoip.lookup(ip);
+    
+    // Add new login session
+    user.security.activeLoginSessions.push({
+      token,
+      device: {
+        type: deviceInfo.device ? deviceInfo.device.type : 'unknown',
+        name: deviceInfo.device ? deviceInfo.device.brand + ' ' + deviceInfo.device.model : 'unknown',
+        browser: deviceInfo.client ? deviceInfo.client.name + ' ' + deviceInfo.client.version : 'unknown',
+        os: deviceInfo.os ? deviceInfo.os.name + ' ' + deviceInfo.os.version : 'unknown'
+      },
+      ip,
+      location: geo ? `${geo.city}, ${geo.country}` : 'unknown',
+      loginTime: Date.now(),
+      lastActive: Date.now()
+    });
     
     // Add new refresh token with device info
     user.security.refreshTokens.push({
       token: refreshToken,
-      device: req.headers['user-agent'] || 'Unknown device',
+      device: userAgent || 'Unknown device',
       expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) // 30 days
     });
     
@@ -814,6 +841,7 @@ exports.login = async (req, res) => {
     res.status(500).json({ error: 'Server error during login' });
   }
 };
+
 /**
  * Logout
  * @route POST /auth/logout
