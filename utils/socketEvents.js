@@ -173,6 +173,15 @@ class SocketEvents {
     
     const socketIds = this.userSocketMap.get(userId);
     
+    // Add more detailed logging
+    console.log('socketEvents.emitToUser:', {
+      userId,
+      event,
+      hasSocketIds: !!socketIds,
+      socketCount: socketIds ? socketIds.size : 0,
+      allOnlineUsers: this.getOnlineUsers()
+    });
+    
     if (!socketIds || socketIds.size === 0) {
       // User has no active sockets
       logger.info(`User ${userId} has no active sockets for event: ${event}`);
@@ -460,6 +469,21 @@ class SocketEvents {
     }
     
     logger.info(`Broadcast "${event}" to ${sentCount}/${userIds.length} users`);
+  }
+
+  /**
+   * Get debug information about the current state
+   * 
+   * @returns {Object} - Debug information
+   */
+  getDebugInfo() {
+    return {
+      userSocketMap: Object.fromEntries(this.userSocketMap),
+      socketUserMap: Object.fromEntries(this.socketUserMap),
+      userRooms: Object.fromEntries(this.userRooms),
+      activeTyping: Object.fromEntries(this.activeTyping),
+      onlineUsers: this.getOnlineUsers()
+    };
   }
 }
 
