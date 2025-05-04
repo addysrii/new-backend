@@ -232,229 +232,140 @@ exports.createChat = async (req, res) => {
  * @route POST /api/chats/:chatId/messages
  * @access Private
  */
+// controllers/chat.controller.js - Update the sendMessage method
+
 exports.sendMessage = async (req, res) => {
   try {
     const { chatId } = req.params;
-    const { content, type = 'text', replyTo, metadata, selfDestruct, retentionPeriod } = req.body;
+    const { content, type = 'text' } = req.body;
     
-    // Validate input
-    if (!content && !req.file && type !== 'activity') {
-      return res.status(400).json({ error: 'Message content or media is required' });
-    }
-    
-    // Get chat
+    // Validate chat existence
     const chat = await Chat.findById(chatId);
-    
     if (!chat) {
       return res.status(404).json({ error: 'Chat not found' });
     }
     
-    // Check if user is a participant
+    // Verify user is in this chat
     if (!chat.participants.includes(req.user.id)) {
       return res.status(403).json({ error: 'You are not a participant in this chat' });
     }
     
-    // Handle file upload with security scanning
-    let media = null;
-    if (req.file) {
-      try {
-        // Scan file for malware and inappropriate content
-        const scanResult = await securityScanner.scanFile(req.file.path);
-        
-        if (!scanResult.safe) {
-          // Log security event
-          await logAuditEvent(
-            req.user.id,
-            'unsafe_file_blocked',
-            {
-              chatId,
-              fileType: req.file.mimetype,
-              fileName: req.file.originalname,
-              threatDetails: scanResult.threats,
-              ip: req.ip,
-              userAgent: req.headers['user-agent']
-            },
-            false,
-            'warning'
-          );
-          
-          return res.status(400).json({ 
-            error: 'File appears to be unsafe and was blocked',
-            details: scanResult.safeForPublic ? scanResult.threats : 'Security threat detected'
-          });
-        }
-        
-        // Upload to secure cloud storage with access controls
-        const uploadResult = await cloudStorage.uploadSecureFile(req.file, {
-          userId: req.user.id,
-          chatId,
-          accessControl: chat.security?.mediaAccessControl || { allowDownloads: true }
-        });
-        
-        media = {
-          url: uploadResult.url,
-          type: req.file.mimetype.split('/')[0], // image, video, etc.
-          filename: req.file.originalname,
-          size: req.file.size,
-          contentHash: uploadResult.contentHash, // For integrity verification
-          accessKey: uploadResult.accessKey, // For controlled access
-        };
-      } catch (error) {
-        logger.error(`File processing error: ${error.message}`, { userId: req.user.id, chatId });
-        return res.status(500).json({ error: 'Failed to process uploaded file' });
-      }
-    }
-    
-    // Handle end-to-end encryption using Signal Protocol
-    let encryptedContent = content;
-    let encryptionMetadata = null;
-    
-    if (chat.encryption && chat.encryption.enabled && content) {
-      try {
-        // Get recipients' public keys
-        const recipients = chat.participants.filter(p => p.toString() !== req.user.id);
-        
-        const keys = {};
-        for (const recipientId of recipients) {
-          const recipient = await User.findById(recipientId).select('encryption.publicKeys');
-          if (recipient.encryption?.publicKeys) {
-            keys[recipientId] = recipient.encryption.publicKeys;
-          }
-        }
-        
-        // Encrypt message using Signal Protocol
-        const encryptionResult = await SignalProtocol.encryptMessage(
-          content,
-          req.user.id,
-          recipients,
-          keys
-        );
-        
-        encryptedContent = encryptionResult.encryptedContent;
-        encryptionMetadata = encryptionResult.metadata;
-      } catch (error) {
-        logger.error(`Message encryption error: ${error.message}`, { userId: req.user.id, chatId });
-        return res.status(500).json({ error: 'Failed to encrypt message' });
-      }
-    }
-    
-    // Determine message expiration time
-    const expirationTime = selfDestruct 
-      ? new Date(Date.now() + (selfDestruct * 1000)) // Convert seconds to milliseconds
-      : retentionPeriod 
-        ? new Date(Date.now() + (retentionPeriod * 1000))
-        : chat.security?.messageRetention?.enabled && chat.security.messageRetention.expirationTime
-          ? new Date(Date.now() + (chat.security.messageRetention.expirationTime * 1000))
-          : null;
-    
-    // Create new message with enhanced security features
-    const newMessage = new Message({
+    // Create the message
+    const message = new Message({
       chat: chatId,
       sender: req.user.id,
-      content: encryptedContent,
+      content,
       type,
-      media,
       timestamp: Date.now(),
-      status: 'sent',
-      readBy: [{ user: req.user.id, timestamp: Date.now() }],
-      security: {
-        expirationTime,
-        forwardingAllowed: media ? chat.security?.mediaAccessControl?.allowForwarding : true,
-        screenshotsAllowed: media ? chat.security?.mediaAccessControl?.allowScreenshots : true
-      }
+      status: 'sent'
     });
     
-    // Add reply reference if applicable
-    if (replyTo) {
-      newMessage.replyTo = replyTo;
-    }
+    await message.save();
     
-    // Add encryption metadata if applicable
-    if (encryptionMetadata) {
-      newMessage.encryption = {
-        enabled: true,
-        protocol: 'signal',
-        metadata: encryptionMetadata
-      };
-    }
+    // Populate sender information
+    await message.populate('sender', 'firstName lastName username profileImage');
+     chat.lastMessage = message;
+    await chat.save();
     
-    // Add custom metadata if provided
-    if (metadata) {
-      newMessage.metadata = metadata;
-    }
+    // Get socket events handler
+    const io = global.io;
+    const socketEvents = require('../utils/socketEvents');
     
-    await newMessage.save();
-    
-    // Update chat's last message and timestamp
-    await Chat.findByIdAndUpdate(chatId, {
-      lastMessage: newMessage._id,
-      updatedAt: Date.now()
+    // Get online participants to emit to
+    const onlineParticipants = chat.participants.filter(participantId => {
+      return participantId.toString() !== req.user.id.toString();
     });
     
-    // Populate sender info
-    const populatedMessage = await Message.findById(newMessage._id)
-      .populate('sender', 'firstName lastName username profileImage')
-      .populate({
-        path: 'replyTo',
-        select: 'content sender type media',
-        populate: {
-          path: 'sender',
-          select: 'firstName lastName username profileImage'
-        }
-      });
-    
-    // Notify other participants via socket
-    chat.participants.forEach(participant => {
-      if (participant.toString() !== req.user.id) {
-        socketEvents.emitToUser(participant.toString(), 'new_message', {
-          chatId,
-          message: populatedMessage
+    // Emit to each online participant
+    for (const participantId of onlineParticipants) {
+      // Check if user has active sockets
+      if (socketEvents.isUserOnline(participantId.toString())) {
+        socketEvents.emitToUser(participantId.toString(), 'new_message', {
+          message: message.toObject(),
+          chatId: chatId
         });
-        
-        // Create notification if user is not active in this chat
-        Notification.create({
-          recipient: participant,
-          type: 'new_message',
-          sender: req.user.id,
-          data: {
-            chatId,
-            messageId: newMessage._id,
-            preview: type === 'text' 
-              ? content.substring(0, 50) 
-              : type === 'image' 
-                ? 'Sent an image'
-                : type === 'video'
-                  ? 'Sent a video'
-                  : 'Sent an attachment'
-          },
-          timestamp: Date.now()
-        });
+      } else {
+        logger.info(`User ${participantId} has no active sockets for event: new_message`);
       }
-    });
+    }
     
-    // Log message sent (without content for privacy)
-    await logAuditEvent(
-      req.user.id,
-      'message_sent',
-      {
-        chatId,
-        messageId: newMessage._id,
-        messageType: type,
-        hasMedia: !!media,
-        isEncrypted: !!encryptionMetadata,
-        hasSelfDestruct: !!selfDestruct,
-        ip: req.ip,
-        userAgent: req.headers['user-agent']
-      }
-    );
+    // Also emit to the chat room
+    socketEvents.emitToRoom(chatId, 'new_message', {
+      message: message.toObject(),
+      chatId: chatId
+    }, req.user.id);
     
-    res.status(201).json(populatedMessage);
+    res.status(201).json(message);
   } catch (error) {
-    logger.error(`Send message error: ${error.message}`, { userId: req.user.id });
-    res.status(500).json({ error: 'Server error when sending message' });
+    logger.error('Error sending message:', error);
+    res.status(500).json({ error: 'Failed to send message' });
   }
 };
 
+// Alternative version using io directly (if socketEvents not available)
+exports.sendMessageAlternative = async (req, res) => {
+  try {
+    const { chatId } = req.params;
+    const { content, type = 'text' } = req.body;
+    
+    // Validate chat existence
+    const chat = await Chat.findById(chatId);
+    if (!chat) {
+      return res.status(404).json({ error: 'Chat not found' });
+    }
+    
+    // Verify user is in this chat
+    if (!chat.participants.includes(req.user.id)) {
+      return res.status(403).json({ error: 'You are not a participant in this chat' });
+    }
+    
+    // Create the message
+    const message = new Message({
+      chat: chatId,
+      sender: req.user.id,
+      content,
+      type,
+      timestamp: Date.now(),
+      status: 'sent'
+    });
+    
+    await message.save();
+    
+    // Populate sender information
+    await message.populate('sender', 'firstName lastName username profileImage');
+    
+    // Update chat's last message
+    chat.lastMessage = message;
+    await chat.save();
+    
+    // Emit to chat room using io directly
+    const io = global.io;
+    if (io) {
+      io.to(`chat:${chatId}`).emit('new_message', {
+        message: message.toObject(),
+        chatId: chatId
+      });
+      
+      // Also emit to individual users who might not be in the room
+      chat.participants.forEach(participantId => {
+        if (participantId.toString() !== req.user.id.toString()) {
+          io.to(`user:${participantId}`).emit('new_message', {
+            message: message.toObject(),
+            chatId: chatId
+          });
+        }
+      });
+    } else {
+      logger.warn('Socket.IO instance not found - message sent without socket notification');
+    }
+    
+    res.status(201).json(message);
+  } catch (error) {
+    logger.error('Error sending message:', error);
+    res.status(500).json({ error: 'Failed to send message' });
+  }
+};
+    //
 /**
  * Get messages in a chat
  * @route GET /api/chats/:chatId/messages
