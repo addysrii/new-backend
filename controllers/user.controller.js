@@ -44,6 +44,11 @@ exports.getCurrentUser = async (req, res) => {
  * @route PUT /api/profile
  * @access Private
  */
+/**
+ * Update user profile
+ * @route PUT /api/profile
+ * @access Private
+ */
 exports.updateProfile = async (req, res) => {
   try {
     const {
@@ -74,7 +79,24 @@ exports.updateProfile = async (req, res) => {
     if (website) profileFields.website = website;
     if (birthday) profileFields.birthday = birthday;
     if (gender) profileFields.gender = gender;
-    if (skills) profileFields.skills = Array.isArray(skills) ? skills : skills.split(',').map(skill => skill.trim());
+    
+    // Handle skills - convert skill names to ObjectIds
+    if (skills) {
+      const Skill = require('../models/Portfolio').Skill;
+      let skillNames = Array.isArray(skills) ? skills : skills.split(',').map(skill => skill.trim());
+      const skillIds = [];
+      
+      for (const skillName of skillNames) {
+        let skill = await Skill.findOne({ name: skillName.toLowerCase() });
+        if (!skill) {
+          skill = new Skill({ name: skillName.toLowerCase() });
+          await skill.save();
+        }
+        skillIds.push(skill._id);
+      }
+      
+      profileFields.skills = skillIds;
+    }
     
     // Handle interests - properly handle different formats
     if (interests) {
@@ -131,7 +153,9 @@ exports.updateProfile = async (req, res) => {
       req.user.id,
       { $set: profileFields },
       { new: true, runValidators: true }
-    ).select('-password -security.passwordResetToken -security.passwordResetExpires');
+    )
+    .select('-password -security.passwordResetToken -security.passwordResetExpires')
+    .populate('skills'); // Populate skills to return skill objects
     
     res.json(user);
   } catch (error) {
