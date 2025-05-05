@@ -34,6 +34,11 @@ exports.getCurrentUser = async (req, res) => {
  * @route PUT /api/profile
  * @access Private
  */
+/**
+ * Update user profile
+ * @route PUT /api/profile
+ * @access Private
+ */
 exports.updateProfile = async (req, res) => {
   try {
     const {
@@ -47,6 +52,8 @@ exports.updateProfile = async (req, res) => {
       gender,
       skills,
       interests,
+      interestTopics,
+      interestIndustries,
       languages,
       education,
       experience,
@@ -65,7 +72,49 @@ exports.updateProfile = async (req, res) => {
     if (birthday) profileFields.birthday = birthday;
     if (gender) profileFields.gender = gender;
     if (skills) profileFields.skills = Array.isArray(skills) ? skills : skills.split(',').map(skill => skill.trim());
-    if (interests) profileFields.interests = Array.isArray(interests) ? interests : interests.split(',').map(interest => interest.trim());
+    
+    // Handle interests - support both old array format and new object format
+    if (interests || interestTopics || interestIndustries) {
+      // If interests is provided as a simple array (old format)
+      if (interests && !interestTopics && !interestIndustries) {
+        const interestsArray = Array.isArray(interests) ? interests : interests.split(',').map(interest => interest.trim());
+        profileFields.interests = {
+          topics: interestsArray,
+          industries: []
+        };
+      } 
+      // If topics and/or industries are provided separately (new format)
+      else {
+        const currentInterests = {};
+        
+        // Get existing interests
+        const existingUser = await User.findById(req.user.id);
+        if (existingUser && existingUser.interests) {
+          currentInterests.topics = existingUser.interests.topics || [];
+          currentInterests.industries = existingUser.interests.industries || [];
+        }
+        
+        // Update topics if provided
+        if (interestTopics) {
+          currentInterests.topics = Array.isArray(interestTopics) ? interestTopics : interestTopics.split(',').map(item => item.trim());
+        }
+        
+        // Update industries if provided
+        if (interestIndustries) {
+          currentInterests.industries = Array.isArray(interestIndustries) ? interestIndustries : interestIndustries.split(',').map(item => item.trim());
+        }
+        
+        // If interests is provided as an object, use it
+        if (interests && typeof interests === 'object') {
+          profileFields.interests = {
+            topics: interests.topics || currentInterests.topics,
+            industries: interests.industries || currentInterests.industries
+          };
+        } else {
+          profileFields.interests = currentInterests;
+        }
+      }
+    }
     
     // Handle profile image upload
     if (req.file) {
@@ -106,6 +155,45 @@ exports.updateProfile = async (req, res) => {
     console.error('Error updating profile:', error);
     res.status(500).json({ error: 'Server error' });
   }
+};
+
+// Alternative helper function to handle interests update
+const updateUserInterests = (body, currentInterests = {}) => {
+  const { interests, interestTopics, interestIndustries } = body;
+  
+  // Initialize with existing interests
+  const result = {
+    topics: currentInterests.topics || [],
+    industries: currentInterests.industries || []
+  };
+  
+  // Handle different interest formats
+  if (interests) {
+    if (Array.isArray(interests)) {
+      // Old format - array of strings
+      result.topics = interests;
+      result.industries = [];
+    } else if (typeof interests === 'object') {
+      // New format - object with topics and industries
+      result.topics = interests.topics || result.topics;
+      result.industries = interests.industries || result.industries;
+    } else if (typeof interests === 'string') {
+      // Comma-separated string
+      result.topics = interests.split(',').map(item => item.trim());
+      result.industries = [];
+    }
+  }
+  
+  // Override with specific updates
+  if (interestTopics) {
+    result.topics = Array.isArray(interestTopics) ? interestTopics : interestTopics.split(',').map(item => item.trim());
+  }
+  
+  if (interestIndustries) {
+    result.industries = Array.isArray(interestIndustries) ? interestIndustries : interestIndustries.split(',').map(item => item.trim());
+  }
+  
+  return result;
 };
 
 /**
