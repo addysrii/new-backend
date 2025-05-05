@@ -11,12 +11,50 @@ const Settings = require('../models/Settings');
  * @route GET /api/me
  * @access Private
  */
+const updateUserInterests = (body, currentInterests = {}) => {
+  const { interests, interestTopics, interestIndustries } = body;
+  
+  // Initialize with existing interests
+  const result = {
+    topics: currentInterests.topics || [],
+    industries: currentInterests.industries || []
+  };
+  
+  // Handle different interest formats
+  if (interests) {
+    if (Array.isArray(interests)) {
+      // Old format - array of strings
+      result.topics = interests;
+      result.industries = [];
+    } else if (typeof interests === 'object') {
+      // New format - object with topics and industries
+      result.topics = interests.topics || result.topics;
+      result.industries = interests.industries || result.industries;
+    } else if (typeof interests === 'string') {
+      // Comma-separated string
+      result.topics = interests.split(',').map(item => item.trim());
+      result.industries = [];
+    }
+  }
+  
+  // Override with specific updates
+  if (interestTopics) {
+    result.topics = Array.isArray(interestTopics) ? interestTopics : interestTopics.split(',').map(item => item.trim());
+  }
+  
+  if (interestIndustries) {
+    result.industries = Array.isArray(interestIndustries) ? interestIndustries : interestIndustries.split(',').map(item => item.trim());
+  }
+  
+  return result;
+};
 exports.getCurrentUser = async (req, res) => {
   try {
     const user = await User.findById(req.user.id)
       .select('-password -security.passwordResetToken -security.passwordResetExpires')
       .populate('connections', 'firstName lastName profileImage username')
-      .populate('settings');
+      .populate('settings')
+      .populate('skills'); // Populate skills to get skill objects
     
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
@@ -29,21 +67,6 @@ exports.getCurrentUser = async (req, res) => {
   }
 };
 
-/**
- * Update user profile
- * @route PUT /api/profile
- * @access Private
- */
-/**
- * Update user profile
- * @route PUT /api/profile
- * @access Private
- */
-/**
- * Update user profile
- * @route PUT /api/profile
- * @access Private
- */
 /**
  * Update user profile
  * @route PUT /api/profile
@@ -82,7 +105,6 @@ exports.updateProfile = async (req, res) => {
     
     // Handle skills - convert skill names to ObjectIds
     if (skills) {
-      const Skill = require('../models/Portfolio').Skill;
       let skillNames = Array.isArray(skills) ? skills : skills.split(',').map(skill => skill.trim());
       const skillIds = [];
       
@@ -164,45 +186,6 @@ exports.updateProfile = async (req, res) => {
   }
 };
 
-// Alternative helper function to handle interests update
-const updateUserInterests = (body, currentInterests = {}) => {
-  const { interests, interestTopics, interestIndustries } = body;
-  
-  // Initialize with existing interests
-  const result = {
-    topics: currentInterests.topics || [],
-    industries: currentInterests.industries || []
-  };
-  
-  // Handle different interest formats
-  if (interests) {
-    if (Array.isArray(interests)) {
-      // Old format - array of strings
-      result.topics = interests;
-      result.industries = [];
-    } else if (typeof interests === 'object') {
-      // New format - object with topics and industries
-      result.topics = interests.topics || result.topics;
-      result.industries = interests.industries || result.industries;
-    } else if (typeof interests === 'string') {
-      // Comma-separated string
-      result.topics = interests.split(',').map(item => item.trim());
-      result.industries = [];
-    }
-  }
-  
-  // Override with specific updates
-  if (interestTopics) {
-    result.topics = Array.isArray(interestTopics) ? interestTopics : interestTopics.split(',').map(item => item.trim());
-  }
-  
-  if (interestIndustries) {
-    result.industries = Array.isArray(interestIndustries) ? interestIndustries : interestIndustries.split(',').map(item => item.trim());
-  }
-  
-  return result;
-};
-
 /**
  * Get a user's profile
  * @route GET /api/users/:userId/profile
@@ -220,7 +203,8 @@ exports.getUserProfile = async (req, res) => {
     const user = await User.findById(userId)
       .select('-password -security -email')
       .populate('connections', 'firstName lastName profileImage username')
-      .populate('settings', 'privacySettings.profileVisibility');
+      .populate('settings', 'privacySettings.profileVisibility')
+      .populate('skills'); // Populate skills for profile
     
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
@@ -229,7 +213,7 @@ exports.getUserProfile = async (req, res) => {
     // Check if profile is private and user is not a connection
     if (
       user.settings &&
-      user.settings.privacySettings.profileVisibility === 'connections_only' &&
+      user.settings.privacySettings?.profileVisibility === 'connections_only' &&
       !user.connections.some(connection => connection._id.toString() === req.user.id) &&
       user._id.toString() !== req.user.id
     ) {
@@ -252,6 +236,7 @@ exports.getUserProfile = async (req, res) => {
     res.status(500).json({ error: 'Server error' });
   }
 };
+
 
 /**
  * Delete user account
