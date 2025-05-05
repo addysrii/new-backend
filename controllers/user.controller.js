@@ -39,6 +39,11 @@ exports.getCurrentUser = async (req, res) => {
  * @route PUT /api/profile
  * @access Private
  */
+/**
+ * Update user profile
+ * @route PUT /api/profile
+ * @access Private
+ */
 exports.updateProfile = async (req, res) => {
   try {
     const {
@@ -52,8 +57,6 @@ exports.updateProfile = async (req, res) => {
       gender,
       skills,
       interests,
-      interestTopics,
-      interestIndustries,
       languages,
       education,
       experience,
@@ -73,46 +76,26 @@ exports.updateProfile = async (req, res) => {
     if (gender) profileFields.gender = gender;
     if (skills) profileFields.skills = Array.isArray(skills) ? skills : skills.split(',').map(skill => skill.trim());
     
-    // Handle interests - support both old array format and new object format
-    if (interests || interestTopics || interestIndustries) {
-      // If interests is provided as a simple array (old format)
-      if (interests && !interestTopics && !interestIndustries) {
-        const interestsArray = Array.isArray(interests) ? interests : interests.split(',').map(interest => interest.trim());
+    // Handle interests - properly handle different formats
+    if (interests) {
+      // If interests is already an object, use it directly
+      if (typeof interests === 'object' && !Array.isArray(interests)) {
+        profileFields.interests = interests;
+      } 
+      // If interests is an array (old format), convert to new format
+      else if (Array.isArray(interests)) {
+        profileFields.interests = {
+          topics: interests,
+          industries: []
+        };
+      } 
+      // If interests is a string, parse it
+      else if (typeof interests === 'string') {
+        const interestsArray = interests.split(',').map(interest => interest.trim());
         profileFields.interests = {
           topics: interestsArray,
           industries: []
         };
-      } 
-      // If topics and/or industries are provided separately (new format)
-      else {
-        const currentInterests = {};
-        
-        // Get existing interests
-        const existingUser = await User.findById(req.user.id);
-        if (existingUser && existingUser.interests) {
-          currentInterests.topics = existingUser.interests.topics || [];
-          currentInterests.industries = existingUser.interests.industries || [];
-        }
-        
-        // Update topics if provided
-        if (interestTopics) {
-          currentInterests.topics = Array.isArray(interestTopics) ? interestTopics : interestTopics.split(',').map(item => item.trim());
-        }
-        
-        // Update industries if provided
-        if (interestIndustries) {
-          currentInterests.industries = Array.isArray(interestIndustries) ? interestIndustries : interestIndustries.split(',').map(item => item.trim());
-        }
-        
-        // If interests is provided as an object, use it
-        if (interests && typeof interests === 'object') {
-          profileFields.interests = {
-            topics: interests.topics || currentInterests.topics,
-            industries: interests.industries || currentInterests.industries
-          };
-        } else {
-          profileFields.interests = currentInterests;
-        }
       }
     }
     
