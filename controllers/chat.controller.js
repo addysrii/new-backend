@@ -235,19 +235,32 @@ exports.createChat = async (req, res) => {
 // controllers/chat.controller.js - Update the sendMessage method
 
 // controllers/chat.controller.js - Update the sendMessage method
+// controllers/chat.controller.js - Updated sendMessage function
 exports.sendMessage = async (req, res) => {
   try {
     const { chatId } = req.params;
     const { content, type = 'text' } = req.body;
     
+    console.log('sendMessage called:', {
+      chatId,
+      userId: req.user.id,
+      contentLength: content?.length,
+      type
+    });
+    
     // Validate chat existence
     const chat = await Chat.findById(chatId);
     if (!chat) {
+      console.log('Chat not found:', chatId);
       return res.status(404).json({ error: 'Chat not found' });
     }
     
     // Verify user is in this chat
     if (!chat.participants.includes(req.user.id)) {
+      console.log('User not in chat:', {
+        userId: req.user.id,
+        chatParticipants: chat.participants
+      });
       return res.status(403).json({ error: 'You are not a participant in this chat' });
     }
     
@@ -272,34 +285,52 @@ exports.sendMessage = async (req, res) => {
     
     // Get socket events handler
     const io = global.io;
-    const socketEvents = require('../utils/socketEvents');
     
-    // Emit to each participant in the chat
-    const participants = chat.participants.map(p => p.toString());
+    if (!io) {
+      console.error('Socket.IO instance not found - message sent without socket notification');
+      logger.error('Socket.IO instance not found');
+      // Continue with response - message is saved, just no real-time notification
+      return res.status(201).json(message);
+    }
     
-    // Emit directly using the room
+    // Debug socket emitting
+    console.log('Emitting message to chat:', {
+      chatId,
+      messageId: message._id,
+      participants: chat.participants.length
+    });
+    
+    // Emit to chat room
     io.to(`chat:${chatId}`).emit('new_message', {
       message: message.toObject(),
       chatId: chatId
     });
     
-    // Also emit to each user's personal room for redundancy
-    participants.forEach(participantId => {
-      io.to(`user:${participantId}`).emit('new_message', {
+    // Also emit to each participant's personal room
+    chat.participants.forEach(participantId => {
+      if (participantId.toString() !== req.user.id.toString()) {
+        console.log('Emitting to user room:', `user:${participantId}`);
+        io.to(`user:${participantId}`).emit('new_message', {
+          message: message.toObject(),
+          chatId: chatId
+        });
+      }
+    });
+    
+    // Also try with socketEvents if available
+    const socketEvents = require('../utils/socketEvents');
+    if (socketEvents && socketEvents.emitToRoom) {
+      console.log('Using socketEvents to emit message');
+      socketEvents.emitToRoom(chatId, 'new_message', {
         message: message.toObject(),
         chatId: chatId
       });
-    });
-    
-    // Attempt to use socketEvents as well
-    socketEvents.emitToRoom(chatId, 'new_message', {
-      message: message.toObject(),
-      chatId: chatId
-    });
+    }
     
     res.status(201).json(message);
   } catch (error) {
     logger.error('Error sending message:', error);
+    console.error('Error sending message:', error);
     res.status(500).json({ error: 'Failed to send message' });
   }
 };
