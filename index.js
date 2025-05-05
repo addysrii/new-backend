@@ -1352,89 +1352,91 @@ app.get('/api/version', (req, res) => {
 
 // Connect to MongoDB
 console.log('Connecting to MongoDB...');
+// Replace the socket initialization section in index.js
 mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/professionals_network', {
- useNewUrlParser: true,
- useUnifiedTopology: true
+  useNewUrlParser: true,
+  useUnifiedTopology: true
 })
 .then(async () => {
- console.log('Connected to MongoDB');
- 
- // Create HTTP server
- const server = http.createServer(app);
- 
-// In index.js - Fix the socket initialization section
-
-// Initialize Socket.IO with enhanced configuration
-try {
-  console.log('Initializing Socket.IO...');
+  console.log('Connected to MongoDB');
   
-  // Call setupSocketIO and get the io instance
-  setupSocketIO(server).then(({ io, chatNamespace, notificationNamespace }) => {
-    console.log('Socket.IO server initialized successfully');
+  // Create HTTP server
+  const server = http.createServer(app);
+  
+  // Initialize Socket.IO with enhanced configuration
+  try {
+    console.log('Starting Socket.IO initialization...');
     
-    // NOW initialize socketEvents with the io instance
-    try {
-      const socketEvents = require('./utils/socketEvents');
-      socketEvents.initialize(io);
-      console.log('Socket events handler initialized successfully');
+    // Import setupSocketIO function
+    const setupSocketIO = require('./lib/socket');
+    
+    // Call setupSocketIO and wait for it to complete
+    setupSocketIO(server).then(({ io, chatNamespace, notificationNamespace }) => {
+      console.log('Socket.IO server initialized successfully');
+      
+      // Make io available globally
+      global.io = io;
       
       // Store socket namespaces in app for use in routes if needed
       app.set('io', io);
       app.set('chatNamespace', chatNamespace);
       app.set('notificationNamespace', notificationNamespace);
       
-      // Make io available globally for the socket event emitters
-      global.io = io;
+      // Test socket functionality
+      console.log('Testing socket.io instance:', {
+        hasIO: !!global.io,
+        ioConstructor: io.constructor.name,
+        listeners: io.eventNames()
+      });
       
       // Start the server after Socket.IO is fully initialized
       server.listen(PORT, () => {
         console.log(`Server running on port ${PORT}`);
+        console.log(`Socket.IO ready for connections`);
+        
+        // Additional debug info
+        console.log('Server environment:', {
+          nodeEnv: process.env.NODE_ENV,
+          hasIO: !!global.io,
+          port: PORT
+        });
       });
       
-    } catch (socketEventsError) {
-      console.error('Failed to initialize socket events handler:', socketEventsError);
-      console.log('Continuing without socket events handler');
+    }).catch(error => {
+      console.error('Failed to initialize Socket.IO:', error);
+      console.log('Starting server without Socket.IO functionality');
       
-      // Start the server even if socket events initialization fails
+      // Start the server even if Socket.IO setup fails
       server.listen(PORT, () => {
-        console.log(`Server running on port ${PORT}`);
+        console.log(`Server running on port ${PORT} (without socket.io)`);
       });
-    }
-  }).catch(error => {
-    console.error('Failed to initialize Socket.IO:', error);
+    });
+    
+  } catch (error) {
+    console.error('Failed to load Socket.IO module:', error);
     console.log('Starting server without Socket.IO functionality');
     
-    // Start the server even if Socket.IO setup fails
+    // Start the server even if Socket.IO module fails to load
     server.listen(PORT, () => {
-      console.log(`Server running on port ${PORT}`);
+      console.log(`Server running on port ${PORT} (without socket.io)`);
     });
-  });
-  
-} catch (error) {
-  console.error('Failed to load Socket.IO module:', error);
-  console.log('Starting server without Socket.IO functionality');
-  
-  // Start the server even if Socket.IO module fails to load
-  server.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-  });
-}
+  }
 }).catch(err => {
- console.error('MongoDB connection error:', err);
- console.error('Unable to start server without database connection');
- process.exit(1);
+  console.error('MongoDB connection error:', err);
+  console.error('Unable to start server without database connection');
+  process.exit(1);
 });
 
 // Error handling for uncaught exceptions and rejections
 process.on('uncaughtException', (error) => {
- console.error('UNCAUGHT EXCEPTION:', error);
- // Keep the process running, but log the error
+  console.error('UNCAUGHT EXCEPTION:', error);
+  // Keep the process running, but log the error
 });
 
 process.on('unhandledRejection', (reason, promise) => {
- console.error('UNHANDLED REJECTION at Promise:', promise);
- console.error('Reason:', reason);
- // Keep the process running, but log the error
+  console.error('UNHANDLED REJECTION at Promise:', promise);
+  console.error('Reason:', reason);
+  // Keep the process running, but log the error
 });
 
 module.exports = app;
