@@ -463,7 +463,7 @@ try {
 
 app.use('/api/bookings', require('./routes/bookings.routes'));
 app.use('/api/payments', require('./routes/payments.routes'))
-app.use('/api/customEevent', require('./routes/customEvent.routes'))
+app.use('/api/customevent', require('./routes/customEvent.routes'))
 // ==========================================
 // AUTH ROUTES
 // ==========================================
