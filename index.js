@@ -432,6 +432,7 @@ try {
 try {
   console.log('Importing analytics controller...');
   analyticsController = require('./controllers/analytics.controller');
+  
   console.log('Analytics controller imported successfully');
 } catch (error) {
   console.error('Failed to import analytics controller:', error);
@@ -459,8 +460,10 @@ try {
     ENABLE_METRICS: false
   };
 }
+
 app.use('/api/bookings', require('./routes/bookings.routes'));
 app.use('/api/payments', require('./routes/payments.routes'))
+app.use('/api/customEevent', require('./routes/customEvent.routes'))
 // ==========================================
 // AUTH ROUTES
 // ==========================================
