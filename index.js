@@ -463,7 +463,23 @@ try {
 
 app.use('/api/bookings', require('./routes/bookings.routes'));
 app.use('/api/payments', require('./routes/payments.routes'))
-app.use('/api/customevent', require('./routes/customEvent.routes'))
+try {
+  console.log('Importing cse routes ');
+ 
+  app.use('/api/customevent', require('./routes/customEvent.routes'))
+  console.log('cse imported successfully');
+} catch (error) {
+  console.error('Failed to import comments routes:', error);
+}
+
+try {
+  console.log('Importing comments routes ');
+ 
+  app.use('/api/customevent', require('./routes/comments.routes'))
+  console.log('comments routes imported successfully');
+} catch (error) {
+  console.error('Failed to import comments routes:', error);
+}
 // ==========================================
 // AUTH ROUTES
 // ==========================================
