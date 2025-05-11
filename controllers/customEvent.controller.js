@@ -103,7 +103,7 @@ exports.updateCustomEventForm = async (req, res) => {
     }
     
     // Verify user is creator or host
-    const isCreator = event.createdBy.toString() === req.user.id;
+    const isCreator = event.createdBy.toString() === req.user.id.toString();
     const isHost = event.attendees.some(a => 
       a.user.toString() === req.user.id && a.role === 'host'
     );
