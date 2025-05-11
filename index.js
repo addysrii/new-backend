@@ -171,21 +171,49 @@ app.use(sqlSanitizer);
 // Set up CORS
 console.log('Setting up CORS...');
 app.use(cors({
-  origin: [
-    'https://meetkats.com',
-    'https://meetkats.com/', // Include both versions to be safe
-    'http://localhost:3000',
-    'http://localhost:5173',
-    'http://localhost:8081' ,
-    'http://192.168.61.248:3000', // Replace with your computer's IP address
-    'capacitor://localhost', // For capacitor apps
-    'ionic://localhost', // For ionic framework
-    '*' // During development, allow all origins (remove in production)
-  ],
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  origin: function(origin, callback) {
+    // Allow requests with no origin (like mobile apps, curl requests)
+    if (!origin) return callback(null, true);
+    
+    // List of allowed origins
+    const allowedOrigins = [
+      'https://meetkats.com',
+      'http://localhost:3000',
+      'http://localhost:5173',
+      'http://localhost:8081',
+      'http://192.168.61.248:3000',
+      'capacitor://localhost',
+      'ionic://localhost'
+    ];
+    
+    // Check if the origin is in our allowed list
+    if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV !== 'production') {
+      callback(null, true);
+    } else {
+      console.log('CORS blocked request from:', origin);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true, // Allow credentials (cookies, authorization headers)
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+  exposedHeaders: ['Content-Length', 'X-Request-ID'],
+  maxAge: 86400 // Cache preflight requests for 24 hours
 }));
 
+// Add more flexible CORS handling for preflight OPTIONS requests
+app.options('*', cors());
+
+// Add a manual CORS middleware for additional control if needed
+app.use((req, res, next) => {
+  // Always allow OPTIONS requests
+  if (req.method === 'OPTIONS') {
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin');
+    return res.status(200).json({});
+  }
+  next();
+});
 // Session setup
 console.log('Setting up session...');
 app.use(session({
