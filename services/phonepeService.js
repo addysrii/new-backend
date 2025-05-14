@@ -119,18 +119,17 @@ class PhonePeService {
       
       // Make API request to PhonePe
       const response = await axios.post(
-        this.apiUrls.paymentInit,
-        {
-          request: payloadBase64
-        },
-        {
-          headers: {
-            'Content-Type': 'application/json',
-            'X-VERIFY': xVerify
-          },
-          timeout: 30000 // 30 seconds timeout
+      this.apiUrls.paymentInit,
+      {
+        request: payloadBase64
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'X-VERIFY': xVerify
         }
-      );
+      }
+    );
       
       logger.info(`PhonePe API response: ${JSON.stringify(response.data)}`);
       
@@ -157,12 +156,23 @@ class PhonePeService {
         message: response.data.message || 'Payment initiated successfully',
         code: response.data.code
       };
-    } catch (error) {
-      logger.error('PhonePe payment initiation error:', error);
-      
-      if (error.response) {
-        logger.error(`PhonePe API error response: ${JSON.stringify(error.response.data)}`);
-      }
+    } } catch (error) {
+    // Fix for circular structure error
+    const safeError = {
+      message: error.message,
+      status: error.response?.status,
+      statusText: error.response?.statusText,
+      data: error.response?.data
+    };
+    
+    logger.error('PhonePe payment initiation error:', safeError);
+    
+    return {
+      success: false,
+      message: error.response?.data?.message || error.message || 'Payment initiation failed'
+    };
+  }
+}
       
       return {
         success: false,
