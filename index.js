@@ -932,7 +932,13 @@ if (eventController) {
     
     // Second: Define general routes
     app.get('/api/events', authenticateToken, eventController.getEvents);
-    app.post('/api/events', authenticateToken, eventUpload.single('coverImage'), eventController.createEvent);
+    app.post('/api/events', authenticateToken, eventUpload.single('coverImage'), check('name', 'Event name is required').not().isEmpty(),
+    check('startDateTime', 'Start date and time is required').not().isEmpty(),
+    check('customFields', 'Custom fields must be an array if provided').optional().isArray(),
+    check('customFields.*.key', 'Each custom field must have a key').optional(),
+    check('customFields.*.value', 'Each custom field must have a value').optional(),
+    check('customFields.*.label', 'Each custom field must have a label').optional(),
+             eventController.createEvent);
     
     // Third: Define parameter-based routes
     app.get('/api/events/:eventId', authenticateToken, eventController.getEvent);
