@@ -480,6 +480,8 @@ try {
 } catch (error) {
   console.error('Failed to import comments routes:', error);
 }
+const eventFieldTemplateRoutes = require('./routes/eventFieldTemplate.routes');
+app.use('/api/event-field-templates', eventFieldTemplateRoutes);
 // ==========================================
 // AUTH ROUTES
 // ==========================================
