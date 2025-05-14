@@ -157,13 +157,6 @@ const commentSchema = new Schema({
   }
 }, { _id: true });
 
-// Event Schema
-const eventSchema = new Schema({
-  // Changed: title -> name to match controller
-
-  // In models/Event.js, add this to the eventSchema:
-
-// Add this to the existing eventSchema definition
 const eventSchema = new Schema({
   customFields: [{
     key: {
