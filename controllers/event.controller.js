@@ -46,6 +46,8 @@ exports.getMyEvents = async (req, res) => {
 // This is the snippet from your controller that needs adjustment
 
 // In event.controller.js
+// In controllers/event.controller.js, update the createEvent function:
+
 exports.createEvent = async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -65,8 +67,9 @@ exports.createEvent = async (req, res) => {
       category,
       tags,
       requireApproval,
-      coverImageUrl, // Accept direct URL option
-      coverImageFilename // Accept filename for URL option
+      coverImageUrl,
+      coverImageFilename,
+      customFields // Add this to extract custom fields from request
     } = req.body;
     
     // Enhanced Debug log to show more info about the file
@@ -81,7 +84,9 @@ exports.createEvent = async (req, res) => {
         size: req.file.size,
         path: req.file.path && req.file.path.substring(0, 50) + '...' // Truncate path to avoid huge logs
       } : 'No file uploaded',
-      coverImageUrl: coverImageUrl || 'none'
+      coverImageUrl: coverImageUrl || 'none',
+      hasCustomFields: !!customFields,
+      customFieldsCount: customFields ? customFields.length : 0
     });
     
     // Validate required fields
@@ -134,6 +139,33 @@ exports.createEvent = async (req, res) => {
     // Add tags if provided
     if (tags && Array.isArray(tags) && tags.length > 0) {
       newEvent.tags = tags.map(tag => tag.trim().toLowerCase());
+    }
+    
+    // Add custom fields if provided
+    if (customFields && Array.isArray(customFields) && customFields.length > 0) {
+      // Validate each custom field
+      const validatedCustomFields = customFields.map((field, index) => {
+        // Ensure minimum required properties are present
+        if (!field.key || !field.value || !field.label) {
+          throw new Error(`Custom field at index ${index} is missing required properties (key, value, or label)`);
+        }
+        
+        // Format the key if needed (e.g., remove spaces, convert to lowercase)
+        const formattedKey = field.key.trim().replace(/\s+/g, '_').toLowerCase();
+        
+        // Return formatted field with default values where needed
+        return {
+          key: formattedKey,
+          value: field.value,
+          type: field.type || 'text',
+          label: field.label.trim(),
+          isRequired: field.isRequired || false,
+          isPublic: field.isPublic !== undefined ? field.isPublic : true,
+          order: field.order || index
+        };
+      });
+      
+      newEvent.customFields = validatedCustomFields;
     }
     
     // Handle cover image - first check for uploaded file
@@ -221,7 +253,9 @@ exports.createEvent = async (req, res) => {
     console.log('Event created successfully:', {
       id: populatedEvent._id,
       name: populatedEvent.name,
-      hasCoverImage: !!populatedEvent.coverImage
+      hasCoverImage: !!populatedEvent.coverImage,
+      hasCustomFields: populatedEvent.customFields && populatedEvent.customFields.length > 0,
+      customFieldsCount: populatedEvent.customFields ? populatedEvent.customFields.length : 0
     });
     
     res.status(201).json(populatedEvent);
@@ -230,12 +264,6 @@ exports.createEvent = async (req, res) => {
     res.status(500).json({ error: 'Server error when creating event' });
   }
 };
-
-/**
- * Create a recurrent event
- * @route POST /api/events/recurrent
- * @access Private
- */
 exports.createRecurrentEvent = async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -710,6 +738,8 @@ exports.getEvent = async (req, res) => {
  * @route PUT /api/events/:eventId
  * @access Private
  */
+// In controllers/event.controller.js, update the updateEvent function:
+
 exports.updateEvent = async (req, res) => {
   try {
     const { eventId } = req.params;
@@ -727,7 +757,8 @@ exports.updateEvent = async (req, res) => {
       tags,
       requireApproval,
       updateSeries,
-      keepExistingImage
+      keepExistingImage,
+      customFields // Add this to extract custom fields from request
     } = req.body;
     
     // Get event
@@ -800,6 +831,33 @@ exports.updateEvent = async (req, res) => {
     // Update tags if provided
     if (tags && Array.isArray(tags)) {
       event.tags = tags.map(tag => tag.trim().toLowerCase());
+    }
+    
+    // Update custom fields if provided
+    if (customFields && Array.isArray(customFields)) {
+      // Validate each custom field
+      const validatedCustomFields = customFields.map((field, index) => {
+        // Ensure minimum required properties are present
+        if (!field.key || !field.value || !field.label) {
+          throw new Error(`Custom field at index ${index} is missing required properties (key, value, or label)`);
+        }
+        
+        // Format the key if needed (e.g., remove spaces, convert to lowercase)
+        const formattedKey = field.key.trim().replace(/\s+/g, '_').toLowerCase();
+        
+        // Return formatted field with default values where needed
+        return {
+          key: formattedKey,
+          value: field.value,
+          type: field.type || 'text',
+          label: field.label.trim(),
+          isRequired: field.isRequired || false,
+          isPublic: field.isPublic !== undefined ? field.isPublic : true,
+          order: field.order || index
+        };
+      });
+      
+      event.customFields = validatedCustomFields;
     }
     
     // Handle cover image update
@@ -880,6 +938,11 @@ exports.updateEvent = async (req, res) => {
             futureEvent.tags = tags.map(tag => tag.trim().toLowerCase());
           }
           
+          // Update custom fields if provided
+          if (customFields && Array.isArray(customFields)) {
+            futureEvent.customFields = [...event.customFields]; // Copy from the updated event
+          }
+          
           // Copy cover image if provided
           if (event.coverImage) {
             futureEvent.coverImage = { ...event.coverImage };
@@ -937,11 +1000,6 @@ exports.updateEvent = async (req, res) => {
     res.status(500).json({ error: 'Server error when updating event' });
   }
 };
-/**
- * Delete an event
- * @route DELETE /api/events/:eventId
- * @access Private
- */
 exports.deleteEvent = async (req, res) => {
   try {
     const { eventId } = req.params;
