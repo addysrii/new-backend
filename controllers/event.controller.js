@@ -1476,7 +1476,259 @@ exports.inviteToEvent = async (req, res) => {
     res.status(500).json({ error: 'Server error when inviting to event' });
   }
 };
+// Add this to controllers/event.controller.js - a method to search events with custom fields
 
+/**
+ * Search events with advanced filtering
+ * @route GET /api/events/search
+ * @access Private
+ */
+exports.searchEvents = async (req, res) => {
+  try {
+    const {
+      page = 1,
+      limit = 10,
+      filter = 'upcoming',
+      category,
+      location,
+      radius,
+      virtual,
+      startDate,
+      endDate,
+      search,
+      tags,
+      customFields // New parameter to filter by custom fields
+    } = req.query;
+    
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    
+    // Build base query
+    let query = {};
+    
+    // Filter by date
+    if (filter === 'upcoming') {
+      query.startDateTime = { $gte: new Date() };
+    } else if (filter === 'past') {
+      query.startDateTime = { $lt: new Date() };
+    } else if (filter === 'created') {
+      query.createdBy = req.user.id;
+    } else if (filter === 'attending') {
+      query['attendees.user'] = req.user.id;
+      query['attendees.status'] = 'going';
+    } else if (filter === 'invited') {
+      query['invites.user'] = req.user.id;
+      query['invites.status'] = 'pending';
+    }
+    
+    // Category filter
+    if (category) {
+      query.category = category;
+    }
+    
+    // Virtual events filter
+    if (virtual === 'true') {
+      query.virtual = true;
+    } else if (virtual === 'false') {
+      query.virtual = false;
+    }
+    
+    // Custom date range
+    if (startDate) {
+      query.startDateTime = query.startDateTime || {};
+      query.startDateTime.$gte = new Date(startDate);
+    }
+    
+    if (endDate) {
+      query.startDateTime = query.startDateTime || {};
+      query.startDateTime.$lte = new Date(endDate);
+    }
+    
+    // Search
+    if (search) {
+      const searchRegex = new RegExp(search, 'i');
+      query.$or = [
+        { name: searchRegex },
+        { description: searchRegex },
+        { 'location.name': searchRegex },
+        { 'location.city': searchRegex }
+      ];
+    }
+    
+    // Tags filter
+    if (tags) {
+      const tagArray = Array.isArray(tags) ? tags : tags.split(',').map(tag => tag.trim().toLowerCase());
+      query.tags = { $in: tagArray };
+    }
+    
+    // Custom fields filter - this is the new part
+    if (customFields) {
+      try {
+        // Parse the custom fields filter from the query string
+        const customFieldsFilter = typeof customFields === 'string' 
+          ? JSON.parse(customFields) 
+          : customFields;
+        
+        if (Array.isArray(customFieldsFilter) && customFieldsFilter.length > 0) {
+          const customFieldsQuery = [];
+          
+          customFieldsFilter.forEach(filter => {
+            if (filter.key && filter.value !== undefined) {
+              const customFieldQuery = {
+                'customFields': {
+                  $elemMatch: {
+                    'key': filter.key
+                  }
+                }
+              };
+              
+              // Handle different comparison operators
+              if (filter.operator) {
+                switch (filter.operator) {
+                  case 'eq':
+                    customFieldQuery.customFields.$elemMatch.value = filter.value;
+                    break;
+                  case 'ne':
+                    customFieldQuery.customFields.$elemMatch.value = { $ne: filter.value };
+                    break;
+                  case 'gt':
+                    customFieldQuery.customFields.$elemMatch.value = { $gt: filter.value };
+                    break;
+                  case 'gte':
+                    customFieldQuery.customFields.$elemMatch.value = { $gte: filter.value };
+                    break;
+                  case 'lt':
+                    customFieldQuery.customFields.$elemMatch.value = { $lt: filter.value };
+                    break;
+                  case 'lte':
+                    customFieldQuery.customFields.$elemMatch.value = { $lte: filter.value };
+                    break;
+                  case 'contains':
+                    customFieldQuery.customFields.$elemMatch.value = {
+                      $regex: filter.value,
+                      $options: 'i'
+                    };
+                    break;
+                  default:
+                    customFieldQuery.customFields.$elemMatch.value = filter.value;
+                }
+              } else {
+                // Default to equality
+                customFieldQuery.customFields.$elemMatch.value = filter.value;
+              }
+              
+              customFieldsQuery.push(customFieldQuery);
+            }
+          });
+          
+          if (customFieldsQuery.length > 0) {
+            // Add custom fields filter to main query using AND logic
+            query.$and = query.$and || [];
+            query.$and = [...query.$and, ...customFieldsQuery];
+          }
+        }
+      } catch (error) {
+        console.error('Error parsing custom fields filter:', error);
+        // Continue without custom fields filter if there's an error
+      }
+    }
+    
+    // Location-based search (if coordinates and radius provided)
+    if (location && radius) {
+      try {
+        const [lat, lng] = location.split(',').map(coord => parseFloat(coord.trim()));
+        const radiusInMeters = parseFloat(radius) * 1000; // Convert km to meters
+        
+        query.location = {
+          $nearSphere: {
+            $geometry: {
+              type: 'Point',
+              coordinates: [lng, lat]
+            },
+            $maxDistance: radiusInMeters
+          }
+        };
+      } catch (err) {
+        console.error('Invalid location format:', err);
+        // Continue without location filter if format is invalid
+      }
+    }
+    
+    // Get connections safely
+    let connections = [];
+    try {
+      connections = await getConnections(req.user.id);
+    } catch (error) {
+      console.error('Error getting connections for visibility filter:', error);
+      // Continue with empty connections array
+    }
+    
+    // Visibility filter - show public events and events user is invited to
+    // Use $or instead of overriding existing $or
+    const visibilityQuery = [
+      { visibility: 'public' },
+      { visibility: 'connections', 'createdBy': { $in: connections } },
+      { visibility: 'private', 'invites.user': req.user.id },
+      { 'createdBy': req.user.id }
+    ];
+    
+    if (query.$or) {
+      // If there's an existing $or for search, add an $and with the visibility conditions
+      query.$and = query.$and || [];
+      query.$and.push({ $or: visibilityQuery });
+    } else {
+      // Otherwise just set the $or directly
+      query.$or = visibilityQuery;
+    }
+    
+    // Execute query
+    const events = await Event.find(query)
+      .populate('createdBy', 'firstName lastName username profileImage')
+      .populate('attendees.user', 'firstName lastName username profileImage')
+      .sort({ startDateTime: 1 })
+      .skip(skip)
+      .limit(parseInt(limit));
+    
+    // Count total matching events
+    const total = await Event.countDocuments(query);
+    
+    // Get user's response to each event
+    const enhancedEvents = events.map(event => {
+      const eventObj = event.toObject();
+      
+      // Add user's response
+      const userResponse = event.attendees.find(a => 
+        a.user && a.user._id && a.user._id.toString() === req.user.id.toString()
+      );
+      eventObj.userResponse = userResponse ? userResponse.status : null;
+      eventObj.userRole = userResponse ? userResponse.role : null;
+      
+      // Add attendee counts
+      const attendeeCounts = {
+        going: event.attendees.filter(a => a.status === 'going').length,
+        maybe: event.attendees.filter(a => a.status === 'maybe').length,
+        invited: event.invites ? event.invites.filter(i => i.status === 'pending').length : 0,
+        declined: event.attendees.filter(a => a.status === 'declined').length
+      };
+      
+      eventObj.attendeeCounts = attendeeCounts;
+      
+      return eventObj;
+    });
+    
+    res.json({
+      events: enhancedEvents,
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        pages: Math.ceil(total / parseInt(limit))
+      }
+    });
+  } catch (error) {
+    console.error('Search events error:', error);
+    res.status(500).json({ error: 'Server error when searching events' });
+  }
+};
 /**
  * Check in to an event
  * @route POST /api/events/:eventId/checkin
