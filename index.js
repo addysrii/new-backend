@@ -472,14 +472,7 @@ try {
   console.error('Failed to import comments routes:', error);
 }
 
-try {
-  console.log('Importing comments routes ');
- 
-  app.use('/api/customevent', require('./routes/comments.routes'))
-  console.log('comments routes imported successfully');
-} catch (error) {
-  console.error('Failed to import comments routes:', error);
-}
+
 const eventFieldTemplateRoutes = require('./routes/eventFieldTemplate.routes');
 app.use('/api/event-field-templates', eventFieldTemplateRoutes);
 // ==========================================
