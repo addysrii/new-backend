@@ -160,6 +160,45 @@ const commentSchema = new Schema({
 // Event Schema
 const eventSchema = new Schema({
   // Changed: title -> name to match controller
+
+  // In models/Event.js, add this to the eventSchema:
+
+// Add this to the existing eventSchema definition
+const eventSchema = new Schema({
+  customFields: [{
+    key: {
+      type: String,
+      required: true,
+      trim: true
+    },
+    value: {
+      type: Schema.Types.Mixed,
+      required: true
+    },
+    type: {
+      type: String,
+      enum: ['text', 'number', 'date', 'boolean', 'url', 'email', 'select'],
+      default: 'text'
+    },
+    label: {
+      type: String,
+      required: true,
+      trim: true
+    },
+    isRequired: {
+      type: Boolean,
+      default: false
+    },
+    isPublic: {
+      type: Boolean,
+      default: true
+    },
+    order: {
+      type: Number,
+      default: 0
+    }
+  }],
+  
   name: {
     type: String,
     required: true,
@@ -351,7 +390,7 @@ eventSchema.index({ status: 1 });
 eventSchema.index({ 'attendees.user': 1 });
 eventSchema.index({ 'attendees.status': 1 });
 eventSchema.index({ createdAt: -1 });
-
+eventSchema.index({ 'customFields.key': 1 });
 // Pre-save middleware to update timestamp
 eventSchema.pre('save', function(next) {
   this.updatedAt = Date.now();
