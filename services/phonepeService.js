@@ -2,8 +2,8 @@ const crypto = require('crypto');
 const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
 const logger = require('../utils/logger');
-const { Transaction } = require('../models/Transaction'); // Import your transaction model
-const { PaymentRefund } = require('../models/PaymentRefund'); // Import your refund model
+const  Transaction  = require('../models/Transaction'); // Import your transaction model
+const PaymentRefund  = require('../models/PaymentRefund'); // Import your refund model
 
 /**
  * PhonePe Payment Service
@@ -119,17 +119,17 @@ class PhonePeService {
       
       // Make API request to PhonePe
       const response = await axios.post(
-      this.apiUrls.paymentInit,
-      {
-        request: payloadBase64
-      },
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          'X-VERIFY': xVerify
+        this.apiUrls.paymentInit,
+        {
+          request: payloadBase64
+        },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'X-VERIFY': xVerify
+          }
         }
-      }
-    );
+      );
       
       logger.info(`PhonePe API response: ${JSON.stringify(response.data)}`);
       
@@ -156,23 +156,16 @@ class PhonePeService {
         message: response.data.message || 'Payment initiated successfully',
         code: response.data.code
       };
-    } } catch (error) {
-    // Fix for circular structure error
-    const safeError = {
-      message: error.message,
-      status: error.response?.status,
-      statusText: error.response?.statusText,
-      data: error.response?.data
-    };
-    
-    logger.error('PhonePe payment initiation error:', safeError);
-    
-    return {
-      success: false,
-      message: error.response?.data?.message || error.message || 'Payment initiation failed'
-    };
-  }
-}
+    } catch (error) {
+      // Fix for circular structure error
+      const safeError = {
+        message: error.message,
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        data: error.response?.data
+      };
+      
+      logger.error('PhonePe payment initiation error:', safeError);
       
       return {
         success: false,
@@ -180,7 +173,6 @@ class PhonePeService {
       };
     }
   }
-  
   /**
    * Check the status of a PhonePe payment
    * @param {string} merchantTransactionId - The merchant transaction ID

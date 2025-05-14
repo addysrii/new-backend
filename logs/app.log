@@ -1492,3 +1492,24 @@
 {"service":"chat-api","level":"warn","message":"Redis connection failed, using in-memory adapter: ","timestamp":"2025-05-10T02:44:43.674Z"}
 {"service":"chat-api","level":"info","message":"Socket events handler initialized","timestamp":"2025-05-10T02:44:43.680Z"}
 {"service":"chat-api","level":"info","message":"Socket events handler initialized","timestamp":"2025-05-10T02:44:43.680Z"}
+{"service":"chat-api","level":"warn","message":"Google OAuth strategy not configured - missing credentials","timestamp":"2025-05-14T14:17:51.720Z"}
+{"service":"chat-api","level":"warn","message":"Google OAuth strategy not configured - missing credentials","timestamp":"2025-05-14T14:20:11.390Z"}
+{"service":"chat-api","level":"warn","message":"Google OAuth strategy not configured - missing credentials","timestamp":"2025-05-14T14:25:04.752Z"}
+{"service":"chat-api","level":"warn","message":"Google OAuth strategy not configured - missing credentials","timestamp":"2025-05-14T14:25:24.745Z"}
+{"service":"chat-api","level":"warn","message":"Google OAuth strategy not configured - missing credentials","timestamp":"2025-05-14T14:25:38.547Z"}
+{"service":"chat-api","level":"warn","message":"Google OAuth strategy not configured - missing credentials","timestamp":"2025-05-14T14:25:55.448Z"}
+{"service":"chat-api","level":"warn","message":"Google OAuth strategy not configured - missing credentials","timestamp":"2025-05-14T14:25:59.148Z"}
+{"service":"chat-api","level":"warn","message":"Google OAuth strategy not configured - missing credentials","timestamp":"2025-05-14T14:26:39.695Z"}
+{"service":"chat-api","level":"warn","message":"Google OAuth strategy not configured - missing credentials","timestamp":"2025-05-14T14:27:17.227Z"}
+{"service":"chat-api","level":"warn","message":"Google OAuth strategy not configured - missing credentials","timestamp":"2025-05-14T14:27:32.451Z"}
+{"service":"chat-api","level":"warn","message":"Google OAuth strategy not configured - missing credentials","timestamp":"2025-05-14T14:28:22.057Z"}
+{"service":"chat-api","level":"warn","message":"Google OAuth strategy not configured - missing credentials","timestamp":"2025-05-14T14:28:37.523Z"}
+{"service":"chat-api","level":"warn","message":"Google OAuth strategy not configured - missing credentials","timestamp":"2025-05-14T14:28:41.992Z"}
+{"service":"chat-api","level":"warn","message":"LinkedIn OAuth strategy not configured - missing credentials","timestamp":"2025-05-14T14:28:41.994Z"}
+{"service":"chat-api","level":"info","message":"Cloudinary storage handler initialized","timestamp":"2025-05-14T14:28:43.216Z"}
+{"service":"chat-api","level":"info","message":"PhonePe service initialized in TEST environment","timestamp":"2025-05-14T14:28:43.868Z"}
+{"service":"chat-api","level":"info","message":"Using Merchant ID: undefined","timestamp":"2025-05-14T14:28:43.869Z"}
+{"service":"chat-api","level":"info","message":"Callback URL: https://yourdomain.com/api/payments/phonepe/callback","timestamp":"2025-05-14T14:28:43.871Z"}
+{"service":"chat-api","level":"info","message":"Redirect URL: https://yourdomain.com/payment-response","timestamp":"2025-05-14T14:28:43.872Z"}
+{"service":"chat-api","level":"warn","message":"Email templates directory not found: D:\\new-backend\\templates\\emails","timestamp":"2025-05-14T14:28:44.150Z"}
+{"service":"chat-api","level":"info","message":"Email service initialized","timestamp":"2025-05-14T14:28:44.151Z"}

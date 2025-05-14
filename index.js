@@ -473,8 +473,8 @@ try {
 }
 
 
-const eventFieldTemplateRoutes = require('./routes/eventFieldTemplate.routes');
-app.use('/api/event-field-templates', eventFieldTemplateRoutes);
+// const eventFieldTemplateRoutes = require('./routes/eventFieldTemplate.routes');
+// app.use('/api/event-field-templates', eventFieldTemplateRoutes);
 // ==========================================
 // AUTH ROUTES
 // ==========================================
