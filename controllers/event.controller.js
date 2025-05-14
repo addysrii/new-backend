@@ -283,7 +283,8 @@ exports.createRecurrentEvent = async (req, res) => {
       category,
       tags,
       requireApproval,
-      recurrence
+      recurrence,
+      customFields // Add this to extract custom fields from request
     } = req.body;
     
     // Validate required fields
@@ -329,6 +330,32 @@ exports.createRecurrentEvent = async (req, res) => {
     
     // Generate event dates based on recurrence pattern
     const eventDates = generateRecurringDates(startDate, recurrenceEndDate, recurrence);
+    
+    // Process custom fields if provided
+    let validatedCustomFields = [];
+    if (customFields && Array.isArray(customFields) && customFields.length > 0) {
+      // Validate each custom field
+      validatedCustomFields = customFields.map((field, index) => {
+        // Ensure minimum required properties are present
+        if (!field.key || !field.value || !field.label) {
+          throw new Error(`Custom field at index ${index} is missing required properties (key, value, or label)`);
+        }
+        
+        // Format the key if needed
+        const formattedKey = field.key.trim().replace(/\s+/g, '_').toLowerCase();
+        
+        // Return formatted field with default values where needed
+        return {
+          key: formattedKey,
+          value: field.value,
+          type: field.type || 'text',
+          label: field.label.trim(),
+          isRequired: field.isRequired || false,
+          isPublic: field.isPublic !== undefined ? field.isPublic : true,
+          order: field.order || index
+        };
+      });
+    }
     
     // Create individual events
     const events = [];
@@ -381,6 +408,11 @@ exports.createRecurrentEvent = async (req, res) => {
       // Add tags if provided
       if (tags && Array.isArray(tags) && tags.length > 0) {
         event.tags = tags.map(tag => tag.trim().toLowerCase());
+      }
+      
+      // Add custom fields if available
+      if (validatedCustomFields.length > 0) {
+        event.customFields = [...validatedCustomFields];
       }
       
       // Add cover image if provided (only for the first event)
