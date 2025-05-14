@@ -954,7 +954,7 @@ if (eventController) {
     app.get('/api/events/:eventId/attendees', authenticateToken, eventController.getEventAttendees);
     app.get('/api/events/:eventId/photos', authenticateToken, eventController.getEventPhotos);
     app.get('/api/events/:eventId/comments', authenticateToken, eventController.getEventComments);
-    
+    app.get('/api/events/search', authenticateToken, eventController.searchEvents);
     // Event responses and interactions
     app.post('/api/events/:eventId/respond', authenticateToken, eventController.respondToEvent);
     app.post('/api/events/:eventId/invite', authenticateToken, eventController.inviteToEvent);
