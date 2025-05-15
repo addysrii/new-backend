@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const fs = require('fs');
 const path = require('path');
+const jwt = require('jsonwebtoken');
 
 // Create logs directory if it doesn't exist
 const logDir = path.join(__dirname, '..', 'logs');
@@ -57,13 +58,14 @@ const paymentControllerModule = safeImport('../controllers/phonepe.controller', 
 log('Importing validation middleware');
 const validationMiddleware = safeImport('../middleware/validation.middleware', 'validation middleware');
 
-log('Importing auth middleware');
-const auth = safeImport('../middleware/auth.middleware', 'auth middleware');
+// Import User model for authentication
+const UserModel = safeImport('../models/User', 'User model');
 
 // Check that validatePayment exists
 const validatePayment = validationMiddleware.validatePayment 
   || validationMiddleware.phonePePaymentValidationRules 
-  || validationMiddleware.validateRequest;
+  || validationMiddleware.validateRequest
+  || ((req, res, next) => next()); // Fallback no-op middleware
 
 if (!validatePayment) {
   log('WARNING: validatePayment middleware not found in validation.middleware');
@@ -162,6 +164,68 @@ const debugValidation = (validationMiddleware, name) => {
   };
 };
 
+// Authentication middleware
+const authenticateToken = async (req, res, next) => {
+  try {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+
+    if (!token) {
+      log('No token provided');
+      return res.status(401).json({ error: 'Authentication token required' });
+    }
+
+    // Get JWT_SECRET from environment
+    const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret_should_be_in_env_file';
+    
+    // Verify the token
+    jwt.verify(token, JWT_SECRET, async (err, decoded) => {
+      if (err) {
+        log('Token verification failed', { error: err.message });
+        if (err.name === 'TokenExpiredError') {
+          return res.status(401).json({ error: 'Token has expired', code: 'TOKEN_EXPIRED' });
+        }
+        return res.status(403).json({ error: 'Invalid token', code: 'INVALID_TOKEN' });
+      }
+
+      try {
+        // Get User model
+        const User = UserModel.User;
+        
+        if (!User) {
+          log('User model not available');
+          return res.status(500).json({ error: 'User model not available' });
+        }
+        
+        // Check if user exists in database
+        const user = await User.findById(decoded.id);
+        
+        if (!user) {
+          log('User not found', { userId: decoded.id });
+          return res.status(401).json({ error: 'User not found', code: 'USER_NOT_FOUND' });
+        }
+
+        // Set user info in request object
+        req.user = {
+          id: user._id,
+          email: user.email,
+          username: user.username,
+          role: user.role
+        };
+        
+        log('Authentication successful', { userId: user._id });
+        next();
+      } catch (dbError) {
+        log('Database error during authentication', { error: dbError.message });
+        return res.status(500).json({ error: 'Internal server error during authentication' });
+      }
+    });
+  } catch (error) {
+    log('Authentication error', { error: error.message });
+    return res.status(500).json({ error: 'Authentication process failed' });
+  }
+};
+
 // Apply request logging middleware
 router.use(logRequest);
 
@@ -171,7 +235,7 @@ router.get('/debug', (req, res) => {
   
   // Check the imported modules
   const moduleStatus = {
-    auth: typeof auth === 'function' ? 'imported' : 'failed',
+    userModel: !!UserModel.User ? 'imported' : 'failed',
     validationMiddleware: validationMiddleware ? 'imported' : 'failed',
     validatePayment: validatePayment ? 'imported' : 'failed',
     controllerMethodsAvailable: controllerMethods.filter(method => 
@@ -207,40 +271,26 @@ router.post('/phonepe/callback', catchErrors(paymentController.handlePhonePeCall
 // Public endpoint for redirect after payment
 router.get('/phonepe/redirect', catchErrors(paymentController.handlePhonePeRedirect, 'handlePhonePeRedirect'));
 
-// Protected routes requiring authentication
-log('Adding auth middleware for protected routes');
-router.use((req, res, next) => {
-  log('Checking authentication for protected payment routes');
-  if (!auth || typeof auth !== 'function') {
-    log('Auth middleware is not a function', { auth });
-    return res.status(500).json({ error: 'Authentication middleware not properly configured' });
-  }
-  
-  auth(req, res, (err) => {
-    if (err) {
-      log('Authentication failed', { error: err });
-      // Auth middleware should handle the response
-    } else {
-      log('Authentication passed', { user: req.user ? req.user.id : 'unknown' });
-      next();
-    }
-  });
-});
-
-// PhonePe payment initialization
-log('Registering protected payment routes');
+// IMPORTANT: Public PhonePe payment initiation endpoint (no auth required)
 router.post('/phonepe/initiate', 
   debugValidation(validatePayment, 'validatePayment'),
   catchErrors(paymentController.initiatePhonePePayment, 'initiatePhonePePayment')
 );
 
-// Check payment status
+// Check payment status - public endpoint
 router.get('/phonepe/status/:transactionId', 
   catchErrors(paymentController.checkPhonePePaymentStatus, 'checkPhonePePaymentStatus')
 );
 
-// Process refunds
-router.post('/phonepe/refund', 
+// Protected routes requiring authentication
+log('Adding protected routes with authentication');
+
+// Authentication middleware for protected routes
+router.use('/admin/*', authenticateToken);
+
+// Admin-only refund endpoint (requires authentication)
+router.post('/admin/phonepe/refund', 
+  authenticateToken,
   catchErrors(paymentController.refundPhonePePayment, 'refundPhonePePayment')
 );
 
