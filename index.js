@@ -462,7 +462,7 @@ try {
 }
 
 app.use('/api/bookings', require('./routes/bookings.routes'));
-app.use('/api/payments', require('./new-payments-routes'));
+app.use('/api/payments', require('./routes/new-payments-routes'));
 try {
   console.log('Importing cse routes ');
  
