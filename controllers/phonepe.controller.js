@@ -1,3 +1,5 @@
+// controllers/phonepe.controller.js - Updated Version
+
 const phonePeService = require('../services/phonepeService.js');
 const { Booking, Ticket } = require('../models/Booking.js');
 const { Notification } = require('../models/Notification.js');
@@ -7,10 +9,12 @@ const socketEvents = require('../utils/socketEvents');
 /**
  * Initialize a PhonePe payment
  * @route POST /api/payments/phonepe/initiate
- * @access Private
+ * @access Public
  */
 exports.initiatePhonePePayment = async (req, res) => {
   try {
+    console.log("PhonePe initiation called with body:", JSON.stringify(req.body));
+    
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       return res.status(400).json({ errors: errors.array() });
@@ -20,8 +24,10 @@ exports.initiatePhonePePayment = async (req, res) => {
       amount, 
       bookingId, 
       eventName,
+      userId,
       transactionId, 
-      returnUrl 
+      returnUrl,
+      userContact
     } = req.body;
     
     // Validate required fields
@@ -29,21 +35,30 @@ exports.initiatePhonePePayment = async (req, res) => {
       return res.status(400).json({ error: 'Amount and booking ID are required' });
     }
     
+    // Extract userId from request user if available, or from the payload
+    const effectiveUserId = (req.user && req.user.id) || userId || 'anonymous_user';
+    
+    console.log(`Using user ID: ${effectiveUserId} for payment initiation`);
+    
     // Prepare payment data
     const paymentData = {
       amount,
-      userId: req.user.id,
+      userId: effectiveUserId,
       bookingId,
       eventName,
       transactionId,
-      userContact: {
-        phone: req.user.phone,
-        email: req.user.email
-      }
+      userContact: userContact || {
+        phone: req.body.phone || '',
+        email: req.body.email || ''
+      },
+      returnUrl: returnUrl || req.body.returnUrl
     };
+    
+    console.log("Payment data prepared:", JSON.stringify(paymentData));
     
     // Initialize PhonePe payment
     const response = await phonePeService.initiatePayment(paymentData);
+    console.log("PhonePe service response:", JSON.stringify(response));
     
     if (response.success) {
       // Save transaction reference to database if needed
@@ -62,14 +77,17 @@ exports.initiatePhonePePayment = async (req, res) => {
     }
   } catch (error) {
     console.error('PhonePe payment initiation error:', error);
-    res.status(500).json({ error: 'Server error when initiating payment' });
+    res.status(500).json({ 
+      error: 'Server error when initiating payment',
+      message: error.message
+    });
   }
 };
 
 /**
  * Check PhonePe payment status
  * @route GET /api/payments/phonepe/status/:transactionId
- * @access Private
+ * @access Public
  */
 exports.checkPhonePePaymentStatus = async (req, res) => {
   try {
@@ -113,6 +131,8 @@ exports.checkPhonePePaymentStatus = async (req, res) => {
 exports.handlePhonePeCallback = async (req, res) => {
   try {
     // Process callback data from PhonePe
+    console.log('Received PhonePe callback:', JSON.stringify(req.body));
+    
     const callbackResponse = await phonePeService.handleCallback(req.body);
     
     if (callbackResponse.success) {
@@ -195,15 +215,17 @@ exports.refundPhonePePayment = async (req, res) => {
       return res.status(400).json({ error: 'Transaction ID and amount are required' });
     }
     
-    // Verify admin access or ownership
-    const booking = await Booking.findOne({ transactionId });
-    
-    if (!booking) {
-      return res.status(404).json({ error: 'Booking not found for this transaction' });
-    }
-    
-    if (!req.user.isAdmin && booking.user.toString() !== req.user.id) {
-      return res.status(403).json({ error: 'You do not have permission to refund this payment' });
+    // Verify admin access or ownership if req.user is available
+    if (req.user) {
+      const booking = await Booking.findOne({ transactionId });
+      
+      if (!booking) {
+        return res.status(404).json({ error: 'Booking not found for this transaction' });
+      }
+      
+      if (!req.user.isAdmin && booking.user.toString() !== req.user.id) {
+        return res.status(403).json({ error: 'You do not have permission to refund this payment' });
+      }
     }
     
     // Process refund
@@ -214,42 +236,53 @@ exports.refundPhonePePayment = async (req, res) => {
     });
     
     if (refundResponse.success) {
-      // Update booking status
-      booking.status = 'refunded';
-      booking.refundAmount = amount;
-      booking.refundDate = new Date();
-      booking.refundReason = reason;
-      booking.refundTransactionId = refundResponse.refundId;
-      await booking.save();
-      
-      // Update tickets status
-      await Ticket.updateMany(
-        { booking: booking._id },
-        { status: 'refunded' }
-      );
-      
-      // Notify user
-      await Notification.create({
-        recipient: booking.user,
-        type: 'booking_refunded',
-        data: {
-          bookingId: booking._id,
-          eventId: booking.event,
-          refundAmount: amount
-        },
-        timestamp: Date.now()
-      });
-      
-      // Send socket event
-      socketEvents.emitToUser(booking.user.toString(), 'booking_refunded', {
-        bookingId: booking._id,
-        refundAmount: amount
-      });
+      // Update booking if it exists
+      const booking = await Booking.findOne({ transactionId });
+      if (booking) {
+        // Update booking status
+        booking.status = 'refunded';
+        booking.refundAmount = amount;
+        booking.refundDate = new Date();
+        booking.refundReason = reason;
+        booking.refundTransactionId = refundResponse.refundId;
+        await booking.save();
+        
+        // Update tickets status
+        await Ticket.updateMany(
+          { booking: booking._id },
+          { status: 'refunded' }
+        );
+        
+        // Notify user if Notification model is available
+        try {
+          await Notification.create({
+            recipient: booking.user,
+            type: 'booking_refunded',
+            data: {
+              bookingId: booking._id,
+              eventId: booking.event,
+              refundAmount: amount
+            },
+            timestamp: Date.now()
+          });
+          
+          // Send socket event if available
+          if (socketEvents && typeof socketEvents.emitToUser === 'function') {
+            socketEvents.emitToUser(booking.user.toString(), 'booking_refunded', {
+              bookingId: booking._id,
+              refundAmount: amount
+            });
+          }
+        } catch (notificationError) {
+          console.error('Error sending refund notification:', notificationError);
+          // Continue with response even if notification fails
+        }
+      }
       
       return res.json({
         success: true,
         refundId: refundResponse.refundId,
-        bookingId: booking._id,
+        bookingId: booking ? booking._id : null,
         message: 'Refund processed successfully'
       });
     } else {
@@ -291,29 +324,36 @@ async function processSuccessfulPayment(booking, paymentData) {
       { status: 'active' }
     );
     
-    // Notify user
-    await Notification.create({
-      recipient: booking.user,
-      type: 'booking_confirmed',
-      data: {
-        bookingId: booking._id,
-        eventId: booking.event
-      },
-      timestamp: Date.now()
-    });
-    
-    // Send socket event
-    socketEvents.emitToUser(booking.user.toString(), 'booking_confirmed', {
-      bookingId: booking._id
-    });
-    
-    // Generate and send ticket PDFs in background
-    const emailService = require('../services/emailService');
-    const tickets = await Ticket.find({ booking: booking._id });
-    
-    emailService.sendBookingConfirmation(booking, tickets).catch(err => {
-      console.error('Error sending booking confirmation email:', err);
-    });
+    // Notify user if Notification model is available
+    try {
+      await Notification.create({
+        recipient: booking.user,
+        type: 'booking_confirmed',
+        data: {
+          bookingId: booking._id,
+          eventId: booking.event
+        },
+        timestamp: Date.now()
+      });
+      
+      // Send socket event if available
+      if (socketEvents && typeof socketEvents.emitToUser === 'function') {
+        socketEvents.emitToUser(booking.user.toString(), 'booking_confirmed', {
+          bookingId: booking._id
+        });
+      }
+      
+      // Generate and send ticket PDFs in background
+      const emailService = require('../services/emailService');
+      const tickets = await Ticket.find({ booking: booking._id });
+      
+      emailService.sendBookingConfirmation(booking, tickets).catch(err => {
+        console.error('Error sending booking confirmation email:', err);
+      });
+    } catch (error) {
+      console.error('Error processing successful payment notifications:', error);
+      // Continue with payment processing even if notifications fail
+    }
   } catch (error) {
     console.error('Error processing successful payment:', error);
     throw error;
