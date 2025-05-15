@@ -45,7 +45,21 @@ class PhonePeService {
    * Generate a new PhonePe payment request
    * @param {Object} paymentData - Payment details
    * @returns {Promise<Object>} Payment response with redirect URL
+   
    */
+
+  async checkPhonePeApiStatus() {
+  try {
+    // Try a simple GET request to the API
+    await axios.get(`${this.apiUrls.checkStatus}/status`, {
+      timeout: 5000
+    });
+    return true;
+  } catch (error) {
+    console.error('PhonePe API status check failed:', error);
+    return false;
+  }
+}
   async initiatePayment(paymentData) {
     try {
       const { 
@@ -118,18 +132,25 @@ class PhonePeService {
       logger.debug(`Making PhonePe API request to: ${this.apiUrls.paymentInit}`);
       
       // Make API request to PhonePe
-      const response = await axios.post(
-        this.apiUrls.paymentInit,
-        {
-          request: payloadBase64
-        },
-        {
-          headers: {
-            'Content-Type': 'application/json',
-            'X-VERIFY': xVerify
-          }
-        }
-      );
+     // Inside initiatePayment method
+console.log(`PhonePe API URL: ${this.apiUrls.paymentInit}`);
+console.log(`PhonePe Merchant ID: ${this.merchantId}`);
+console.log(`PhonePe Environment: ${this.isProduction ? 'PRODUCTION' : 'TEST'}`);
+
+// Add timeout to the axios request for better error handling
+const response = await axios.post(
+  this.apiUrls.paymentInit,
+  {
+    request: payloadBase64
+  },
+  {
+    headers: {
+      'Content-Type': 'application/json',
+      'X-VERIFY': xVerify
+    },
+    timeout: 10000 // 10 seconds timeout
+  }
+);
       
       logger.info(`PhonePe API response: ${JSON.stringify(response.data)}`);
       
