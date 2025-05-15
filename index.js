@@ -10,6 +10,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const expressRateLimit = require('express-rate-limit');
 const dotenv = require('dotenv');
+const { check } = require('express-validator');
 const setupSocketIO = require('./lib/socket');
 const jwt = require('jsonwebtoken');
 console.log('Starting application initialization...');
