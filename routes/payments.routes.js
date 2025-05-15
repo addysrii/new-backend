@@ -72,14 +72,19 @@ const logRequest = (req, res, next) => {
 };
 
 // Simple error handling wrapper
+// Replace lines 78-97 with this safer version
 const catchErrors = (controllerFn) => {
   return async (req, res, next) => {
     try {
-      log(`Starting controller function: ${controllerFn.name}`);
+      // Safely get function name
+      const fnName = controllerFn?.name || 'unknown';
+      log(`Starting controller function: ${fnName}`);
+      
       await controllerFn(req, res, next);
-      log(`Completed controller function: ${controllerFn.name}`);
+      
+      log(`Completed controller function: ${fnName}`);
     } catch (error) {
-      log(`Error in controller function ${controllerFn.name}`, { 
+      log(`Error in controller function`, { 
         error: error.message, 
         stack: error.stack 
       });
