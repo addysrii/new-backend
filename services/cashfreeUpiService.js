@@ -21,7 +21,24 @@ constructor() {
   // Add debug logging (remove in production)
   logger.debug(`Cashfree API configured for ${this.baseUrl}`);
 }
-
+async validateCredentials() {
+  try {
+    const response = await axios.get(`${this.baseUrl}/orders`, {
+      headers: {
+        'x-client-id': this.apiKey,
+        'x-client-secret': this.secretKey,
+        'x-api-version': '2022-09-01'
+      },
+      params: {
+        order_id: 'test_connection_' + Date.now()
+      }
+    });
+    return response.status === 200;
+  } catch (error) {
+    logger.error(`Cashfree credentials validation failed: ${error.message}`);
+    return false;
+  }
+}
   /**
    * Create a new UPI payment order with Cashfree
    * @param {Object} paymentData - Payment details
