@@ -1,5 +1,3 @@
-// controllers/upi.controller.js
-
 const { Booking, Ticket } = require('../models/Booking.js');
 const { Event } = require('../models/Event.js');
 const { Notification } = require('../models/Notification.js');
@@ -24,7 +22,14 @@ async function processSuccessfulPayment(booking, paymentData) {
       orderId: paymentData.orderId,
       transactionId: paymentData.transactionId,
       transactionDate: new Date(),
-      responseData: paymentData
+      // Store only necessary data, avoid circular references
+      responseData: {
+        orderId: paymentData.orderId,
+        status: paymentData.status,
+        amount: paymentData.orderAmount,
+        transactionId: paymentData.transactionId,
+        transactionTime: paymentData.transactionTime
+      }
     };
     
     await booking.save();
@@ -53,14 +58,12 @@ async function processSuccessfulPayment(booking, paymentData) {
           bookingId: booking._id
         });
       }
-      
-      // You could add email notification here if needed
     } catch (notificationError) {
-      logger.error('Error sending payment confirmation notification:', notificationError);
+      logger.error(`Error sending payment confirmation notification: ${notificationError.message}`);
       // Continue with payment processing even if notifications fail
     }
   } catch (error) {
-    logger.error('Error processing successful payment:', error);
+    logger.error(`Error processing successful payment: ${error.message}`);
     throw error;
   }
 }
@@ -86,6 +89,9 @@ exports.initiateUpiPayment = async (req, res) => {
       return res.status(400).json({ error: 'Amount and booking ID are required' });
     }
     
+    // Simplified logging to avoid circular references
+    logger.info(`Processing UPI payment request: bookingId=${bookingId}, amount=${amount}`);
+    
     // Find the booking
     const booking = await Booking.findById(bookingId)
       .populate('event', 'name createdBy');
@@ -102,7 +108,7 @@ exports.initiateUpiPayment = async (req, res) => {
     // Get event name if not provided
     const finalEventName = eventName || (booking.event ? booking.event.name : 'Event Tickets');
     
-    // Prepare payment data
+    // Create clean payment data object without circular references
     const paymentData = {
       amount,
       bookingId: booking._id.toString(),
@@ -146,7 +152,8 @@ exports.initiateUpiPayment = async (req, res) => {
       upiData: paymentResponse.upiData || {}
     });
   } catch (error) {
-    logger.error('UPI payment initiation error:', error);
+    // Safe error logging without circular references
+    logger.error(`UPI payment initiation error: ${error.message}`);
     
     res.status(500).json({ 
       success: false,
@@ -216,7 +223,8 @@ exports.verifyUpiPayment = async (req, res) => {
       });
     }
   } catch (error) {
-    logger.error('UPI payment verification error:', error);
+    // Safe error logging without circular references
+    logger.error(`UPI payment verification error: ${error.message}`);
     
     res.status(500).json({ 
       success: false,
@@ -272,7 +280,8 @@ exports.checkUpiPaymentStatus = async (req, res) => {
       transactionTime: verificationResult.transactionTime
     });
   } catch (error) {
-    logger.error('UPI payment status check error:', error);
+    // Safe error logging without circular references
+    logger.error(`UPI payment status check error: ${error.message}`);
     
     res.status(500).json({ 
       success: false,
@@ -328,7 +337,8 @@ exports.handleCashfreeWebhook = async (req, res) => {
       }
     }
   } catch (error) {
-    logger.error('Cashfree webhook handling error:', error);
+    // Safe error logging without circular references
+    logger.error(`Cashfree webhook handling error: ${error.message}`);
     
     // We've already sent a 200 response, so this is just for logging
     // Do not send a response here as it would cause an error
