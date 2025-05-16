@@ -4,16 +4,23 @@ const crypto = require('crypto');
 const logger = require('../utils/logger');
 
 class CashfreeUpiService {
-  constructor() {
-    this.baseUrl = process.env.CASHFREE_ENV === 'PRODUCTION' 
-      ? 'https://api.cashfree.com/pg'
-      : 'https://sandbox.cashfree.com/pg';
-    
-    this.apiKey = process.env.CASHFREE_APP_ID;
-    this.secretKey = process.env.CASHFREE_SECRET_KEY;
-    this.returnUrl = process.env.CASHFREE_RETURN_URL || 'https://meetkats.com/payment-response';
-    this.notifyUrl = process.env.CASHFREE_NOTIFY_URL || 'https://meetkats.com/api/payments/cashfree/webhook';
+// Add validation in constructor
+constructor() {
+  this.baseUrl = process.env.CASHFREE_ENV === 'PRODUCTION' 
+    ? 'https://api.cashfree.com/pg'
+    : 'https://sandbox.cashfree.com/pg';
+  
+  // Add validation for required keys
+  if (!process.env.CASHFREE_APP_ID || !process.env.CASHFREE_SECRET_KEY) {
+    throw new Error('Cashfree API credentials are not configured');
   }
+  
+  this.apiKey = process.env.CASHFREE_APP_ID;
+  this.secretKey = process.env.CASHFREE_SECRET_KEY;
+  
+  // Add debug logging (remove in production)
+  logger.debug(`Cashfree API configured for ${this.baseUrl}`);
+}
 
   /**
    * Create a new UPI payment order with Cashfree
@@ -66,19 +73,20 @@ class CashfreeUpiService {
       })}`);
       
       // Make API request to create order
-      const response = await axios.post(
-        `${this.baseUrl}/orders`,
-        orderPayload,
-        {
-          headers: {
-            'Content-Type': 'application/json',
-            'x-client-id': this.apiKey,
-            'x-client-secret': this.secretKey
-          },
-          timeout: 10000 // 10 seconds timeout
-        }
-      );
-      
+      // Update the headers in createUpiOrder method
+const response = await axios.post(
+  `${this.baseUrl}/orders`,
+  orderPayload,
+  {
+    headers: {
+      'Content-Type': 'application/json',
+      'x-client-id': this.apiKey,
+      'x-client-secret': this.secretKey,
+      'x-api-version': '2022-09-01' // Add API version header
+    },
+    timeout: 10000
+  }
+);
       // Log only necessary data, no circular references
       logger.info(`Cashfree UPI order created successfully: ${response.data.order_id}`);
       
