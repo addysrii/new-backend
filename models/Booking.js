@@ -268,7 +268,7 @@ const BookingSchema = new Schema({
   paymentInfo: {
     method: {
       type: String,
-      enum: ['credit_card', 'debit_card', 'paypal', 'apple_pay', 'google_pay', 'bank_transfer', 'cash', 'free', 'phonepe', 'pending']
+      enum: ['credit_card', 'debit_card', 'paypal', 'apple_pay', 'google_pay', 'bank_transfer', 'cash', 'free', 'phonepe', 'pending','upi']
     },
     transactionId: String,
     transactionDate: Date,
