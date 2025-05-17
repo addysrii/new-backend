@@ -147,7 +147,7 @@ class CashfreeUpiService {
       // Create all possible payment URL formats
       const paymentUrls = {
         // Primary URL format with # anchor (correct for production)
-        primary: `https://payments.cashfree.com/order/#${createdOrderId}`,
+        primary: `https://payments.cashfree.com/order/#${cfOrderId}`,
         
         // Direct payment link from API (if provided)
         apiLink: response.data.payment_link,
