@@ -13,6 +13,11 @@ const logger = require('../utils/logger');
  */
 async function processSuccessfulPayment(booking, paymentData) {
   try {
+    logger.info(`Processing successful payment for booking ${booking._id}`, {
+      orderId: paymentData.orderId,
+      transactionId: paymentData.transactionId
+    });
+
     // Update booking status
     booking.status = 'confirmed';
     booking.paymentInfo = {
@@ -33,12 +38,14 @@ async function processSuccessfulPayment(booking, paymentData) {
     };
     
     await booking.save();
+    logger.debug(`Booking ${booking._id} updated to 'confirmed' status`);
     
     // Update ticket statuses
     await Ticket.updateMany(
       { booking: booking._id },
       { status: 'active' }
     );
+    logger.debug(`Updated tickets for booking ${booking._id} to 'active' status`);
     
     // Notify user if Notification model is available
     try {
@@ -57,13 +64,17 @@ async function processSuccessfulPayment(booking, paymentData) {
         socketEvents.emitToUser(booking.user.toString(), 'booking_confirmed', {
           bookingId: booking._id
         });
+        logger.debug(`Socket notification sent to user ${booking.user}`);
       }
     } catch (notificationError) {
       logger.error(`Error sending payment confirmation notification: ${notificationError.message}`);
       // Continue with payment processing even if notifications fail
     }
   } catch (error) {
-    logger.error(`Error processing successful payment: ${error.message}`);
+    logger.error(`Error processing successful payment: ${error.message}`, {
+      stack: error.stack,
+      bookingId: booking._id
+    });
     throw error;
   }
 }
@@ -86,10 +97,13 @@ exports.initiateUpiPayment = async (req, res) => {
     
     // Validate required fields
     if (!amount || !bookingId) {
+      logger.warn('Missing required fields for UPI payment', { 
+        hasAmount: !!amount, 
+        hasBookingId: !!bookingId 
+      });
       return res.status(400).json({ error: 'Amount and booking ID are required' });
     }
     
-    // Simplified logging to avoid circular references
     logger.info(`Processing UPI payment request: bookingId=${bookingId}, amount=${amount}`);
     
     // Find the booking
@@ -97,11 +111,13 @@ exports.initiateUpiPayment = async (req, res) => {
       .populate('event', 'name createdBy');
     
     if (!booking) {
+      logger.error(`Booking not found: ${bookingId}`);
       return res.status(404).json({ error: 'Booking not found' });
     }
     
     // Verify booking ownership
     if (booking.user.toString() !== req.user.id.toString()) {
+      logger.warn(`Unauthorized payment attempt: User ${req.user.id} attempted to pay for booking ${bookingId} owned by user ${booking.user}`);
       return res.status(403).json({ error: 'You can only pay for your own bookings' });
     }
     
@@ -123,10 +139,22 @@ exports.initiateUpiPayment = async (req, res) => {
     const paymentResponse = await cashfreeUpiService.createUpiOrder(paymentData);
     
     if (!paymentResponse.success) {
+      logger.error('UPI payment initialization failed', { 
+        message: paymentResponse.message || 'Unknown error' 
+      });
       return res.status(400).json({
         success: false,
         message: paymentResponse.message || 'Failed to initialize UPI payment',
         error: process.env.NODE_ENV === 'development' ? paymentResponse.error : undefined
+      });
+    }
+    
+    // Validate payment link exists
+    if (!paymentResponse.paymentLink && !paymentResponse.upiData?.paymentLink) {
+      logger.error('Payment response from Cashfree missing payment link', paymentResponse);
+      return res.status(500).json({
+        success: false,
+        message: 'Payment link could not be generated. Please try again or use another payment method.',
       });
     }
     
@@ -140,6 +168,7 @@ exports.initiateUpiPayment = async (req, res) => {
     };
     
     await booking.save();
+    logger.info(`Booking ${bookingId} updated with UPI payment info. Order ID: ${paymentResponse.orderId}`);
     
     // Return success response
     return res.status(200).json({
@@ -149,11 +178,16 @@ exports.initiateUpiPayment = async (req, res) => {
       paymentLink: paymentResponse.paymentLink,
       expiresAt: paymentResponse.expiresAt,
       bookingId: booking._id,
-      upiData: paymentResponse.upiData || {}
+      upiData: paymentResponse.upiData || {
+        paymentLink: paymentResponse.paymentLink // Ensure payment link is always in upiData
+      }
     });
   } catch (error) {
     // Safe error logging without circular references
-    logger.error(`UPI payment initiation error: ${error.message}`);
+    logger.error(`UPI payment initiation error: ${error.message}`, {
+      stack: error.stack,
+      bookingId: req.body.bookingId
+    });
     
     res.status(500).json({ 
       success: false,
@@ -173,16 +207,27 @@ exports.verifyUpiPayment = async (req, res) => {
     const { orderId, bookingId } = req.body;
     
     if (!orderId) {
+      logger.warn('Missing order ID for payment verification');
       return res.status(400).json({ error: 'Order ID is required' });
     }
+    
+    logger.info(`Verifying UPI payment. OrderID: ${orderId}, BookingID: ${bookingId || 'Not provided'}`);
     
     // Find booking either by ID or by order ID in payment info
     let booking;
     
     if (bookingId) {
       booking = await Booking.findById(bookingId);
-    } else {
+      if (!booking) {
+        logger.warn(`Booking not found during payment verification: ${bookingId}`);
+      }
+    } 
+    
+    if (!booking) {
       booking = await Booking.findOne({ 'paymentInfo.orderId': orderId });
+      if (!booking) {
+        logger.warn(`Booking not found with order ID: ${orderId}`);
+      }
     }
     
     if (!booking) {
@@ -192,7 +237,17 @@ exports.verifyUpiPayment = async (req, res) => {
     // Verify payment with Cashfree
     const verificationResult = await cashfreeUpiService.verifyPaymentOrder(orderId);
     
+    logger.debug('Payment verification result', {
+      orderId: orderId,
+      success: verificationResult.success,
+      status: verificationResult.status,
+      bookingId: booking._id
+    });
+    
     if (!verificationResult.success) {
+      logger.warn(`Payment verification failed for order ${orderId}`, {
+        reason: verificationResult.message
+      });
       return res.status(400).json({
         success: false,
         message: verificationResult.message || 'Payment verification failed',
@@ -214,6 +269,7 @@ exports.verifyUpiPayment = async (req, res) => {
       });
     } else {
       // Payment is still pending or failed
+      logger.info(`Payment not confirmed for order ${orderId}, status: ${verificationResult.status}`);
       return res.json({
         success: false,
         status: verificationResult.status,
@@ -224,7 +280,11 @@ exports.verifyUpiPayment = async (req, res) => {
     }
   } catch (error) {
     // Safe error logging without circular references
-    logger.error(`UPI payment verification error: ${error.message}`);
+    logger.error(`UPI payment verification error: ${error.message}`, {
+      stack: error.stack,
+      orderId: req.body.orderId,
+      bookingId: req.body.bookingId
+    });
     
     res.status(500).json({ 
       success: false,
@@ -244,13 +304,19 @@ exports.checkUpiPaymentStatus = async (req, res) => {
     const { orderId } = req.params;
     
     if (!orderId) {
+      logger.warn('Missing order ID for payment status check');
       return res.status(400).json({ error: 'Order ID is required' });
     }
+    
+    logger.info(`Checking UPI payment status for order ${orderId}`);
     
     // Verify payment with Cashfree
     const verificationResult = await cashfreeUpiService.verifyPaymentOrder(orderId);
     
     if (!verificationResult.success) {
+      logger.warn(`Payment status check failed for order ${orderId}`, {
+        reason: verificationResult.message
+      });
       return res.status(400).json({
         success: false,
         message: verificationResult.message || 'Payment status check failed',
@@ -265,7 +331,12 @@ exports.checkUpiPaymentStatus = async (req, res) => {
       
       // Only process if booking found and not already confirmed
       if (booking && booking.status !== 'confirmed') {
+        logger.info(`Payment success detected for booking ${booking._id}, processing payment...`);
         await processSuccessfulPayment(booking, verificationResult);
+      } else if (booking) {
+        logger.info(`Payment already processed for booking ${booking._id}`);
+      } else {
+        logger.warn(`Booking not found for successful payment, order ID: ${orderId}`);
       }
     }
     
@@ -281,7 +352,10 @@ exports.checkUpiPaymentStatus = async (req, res) => {
     });
   } catch (error) {
     // Safe error logging without circular references
-    logger.error(`UPI payment status check error: ${error.message}`);
+    logger.error(`UPI payment status check error: ${error.message}`, {
+      stack: error.stack,
+      orderId: req.params.orderId
+    });
     
     res.status(500).json({ 
       success: false,
@@ -298,6 +372,8 @@ exports.checkUpiPaymentStatus = async (req, res) => {
  */
 exports.handleCashfreeWebhook = async (req, res) => {
   try {
+    logger.info('Received Cashfree webhook notification');
+    
     // Get signature from headers
     const signature = req.headers['x-webhook-signature'];
     
@@ -305,6 +381,20 @@ exports.handleCashfreeWebhook = async (req, res) => {
       logger.warn('Missing webhook signature in request');
       return res.status(400).json({ error: 'Missing signature' });
     }
+    
+    // Log headers for debugging
+    logger.debug('Webhook headers received', {
+      signature: signature ? 'Present' : 'Missing',
+      timestamp: req.headers['x-webhook-timestamp'] ? 'Present' : 'Missing',
+      contentType: req.headers['content-type']
+    });
+    
+    // Log payload summary (without sensitive data)
+    logger.debug('Webhook payload summary', {
+      eventType: req.body.type || 'Unknown event type',
+      hasData: !!req.body.data,
+      orderId: req.body.data?.order?.order_id || 'Not available'
+    });
     
     // Validate signature
     const isValid = cashfreeUpiService.validateWebhookSignature(req.body, signature);
@@ -314,16 +404,17 @@ exports.handleCashfreeWebhook = async (req, res) => {
       return res.status(401).json({ error: 'Invalid signature' });
     }
     
-    // Process webhook data
-    const { event, data } = req.body;
-    
     // Acknowledge receipt with 200 response first (webhook best practice)
     res.status(200).json({ received: true });
     
     // Now process the webhook asynchronously
+    const { event, data } = req.body;
+    
     if (event === 'ORDER_PAID' && data && data.order && data.order.order_id) {
       // Find booking with this order ID
       const orderId = data.order.order_id;
+      logger.info(`Processing ORDER_PAID webhook for order ${orderId}`);
+      
       const booking = await Booking.findOne({ 'paymentInfo.orderId': orderId });
       
       if (booking && booking.status !== 'confirmed') {
@@ -333,12 +424,25 @@ exports.handleCashfreeWebhook = async (req, res) => {
         if (paymentDetails.success && paymentDetails.status === 'PAYMENT_SUCCESS') {
           await processSuccessfulPayment(booking, paymentDetails);
           logger.info(`Successfully processed webhook payment for order ${orderId}, booking ${booking._id}`);
+        } else {
+          logger.warn(`Webhook payment verification failed for order ${orderId}`, {
+            verificationStatus: paymentDetails.status,
+            success: paymentDetails.success
+          });
         }
+      } else if (booking) {
+        logger.info(`Booking ${booking._id} already confirmed, ignoring webhook`);
+      } else {
+        logger.warn(`Booking not found for webhook order ${orderId}`);
       }
+    } else {
+      logger.info(`Received webhook event type: ${event || 'Unknown'}`);
     }
   } catch (error) {
     // Safe error logging without circular references
-    logger.error(`Cashfree webhook handling error: ${error.message}`);
+    logger.error(`Cashfree webhook handling error: ${error.message}`, {
+      stack: error.stack
+    });
     
     // We've already sent a 200 response, so this is just for logging
     // Do not send a response here as it would cause an error
