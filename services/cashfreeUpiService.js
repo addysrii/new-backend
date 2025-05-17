@@ -161,9 +161,11 @@ class CashfreeUpiService {
       
       // Return comprehensive response with multiple URL options
       return {
-        success: true,
-        orderId: response.data.order_id,
-        orderToken: response.data.order_token,
+         return {
+      success: true,
+      orderId: response.data.order_id,
+      orderToken: response.data.order_token, // This is crucial for SDK
+      cfOrderId: response.data.cf_order_id,
         // Use the correct URL format: first from API if available, then the # anchor format
         paymentLink: response.data.payment_link || paymentUrls.primary,
         expiresAt: response.data.order_expiry_time,
