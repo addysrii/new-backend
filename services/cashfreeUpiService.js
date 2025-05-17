@@ -75,7 +75,7 @@ class CashfreeUpiService {
       // Generate unique order ID
       const orderId = `UPI_${Date.now()}_${bookingId.substring(0, 8)}`;
       
-      // Create order payload with validated URLs
+      // Create order payload with validated URLs and payment specific options
       const orderPayload = {
         order_id: orderId,
         order_amount: amount,
@@ -90,7 +90,7 @@ class CashfreeUpiService {
         order_meta: {
           return_url: `${this.returnUrl}?order_id=${encodeURIComponent(orderId)}`,
           notify_url: this.notifyUrl,
-          payment_methods: "upi"
+          payment_methods: "upi" // Specify UPI only
         }
       };
       
@@ -113,111 +113,16 @@ class CashfreeUpiService {
       
       logger.info(`Cashfree UPI order created: ${response.data.order_id}`);
       
-      // Generate UPI intent URL
-      const upiUrl = this.generateUpiIntent(amount, orderId, eventName, customerName);
-      
-      // Validate the UPI URL before returning it
-      const isValidUpiUrl = this.validateUpiUrl(upiUrl);
-      
       return {
         success: true,
         orderId: response.data.order_id,
         orderToken: response.data.order_token,
         paymentLink: response.data.payment_link,
         expiresAt: response.data.order_expiry_time,
-        cfOrderId: response.data.cf_order_id,
-        upiData: {
-          paymentLink: response.data.payment_link,
-          upiUrl: isValidUpiUrl ? upiUrl : null
-        }
+        cfOrderId: response.data.cf_order_id
       };
     } catch (error) {
       return this.handleCashfreeError(error, 'UPI order creation');
-    }
-  }
-  
-  /**
-   * Generate UPI payment intent URL with proper encoding
-   */
-  generateUpiIntent(amount, orderId, eventName, customerName) {
-    try {
-      // Ensure we have a valid merchant UPI ID
-      const payeeAddress = this.merchantUpiId && this.merchantUpiId.includes('@') 
-        ? this.merchantUpiId 
-        : 'yourmerchant@cashfree';
-      
-      // Sanitize and limit the transaction reference (orderId)
-      const transactionRef = orderId ? orderId.replace(/[^a-zA-Z0-9]/g, '').substring(0, 20) : '';
-      
-      // Create a clean, short transaction note
-      const transactionNote = eventName 
-        ? `Tickets for ${eventName}`.substring(0, 50) 
-        : 'Event Tickets';
-      
-      // Format amount with 2 decimal places and no commas
-      const formattedAmount = parseFloat(amount).toFixed(2);
-      
-      // Build and properly encode the UPI URL
-      const upiUrl = 'upi://pay?' + [
-        `pa=${encodeURIComponent(payeeAddress)}`,
-        `pn=${encodeURIComponent('MeetKats')}`,
-        `am=${encodeURIComponent(formattedAmount)}`,
-        `cu=INR`,
-        `tn=${encodeURIComponent(transactionNote)}`,
-        `tr=${encodeURIComponent(transactionRef)}`
-      ].join('&');
-      
-      logger.debug(`Generated UPI intent URL: ${upiUrl}`);
-      return upiUrl;
-    } catch (error) {
-      logger.error(`UPI intent generation failed: ${error.message}`);
-      return null;
-    }
-  }
-  
-  /**
-   * Validate UPI intent URL
-   */
-  validateUpiUrl(upiUrl) {
-    if (!upiUrl) return false;
-    
-    try {
-      // Check for required parameters
-      const urlParts = upiUrl.split('?');
-      if (urlParts.length !== 2 || urlParts[0] !== 'upi://pay') {
-        logger.warn(`Invalid UPI URL format: ${upiUrl}`);
-        return false;
-      }
-      
-      const params = new URLSearchParams(urlParts[1]);
-      
-      // Required parameters for UPI apps
-      const requiredParams = ['pa', 'pn', 'am', 'cu', 'tr'];
-      for (const param of requiredParams) {
-        if (!params.has(param) || !params.get(param)) {
-          logger.warn(`UPI URL missing required parameter: ${param}`);
-          return false;
-        }
-      }
-      
-      // Validate merchant UPI ID format (payee address)
-      const pa = params.get('pa');
-      if (!pa.includes('@')) {
-        logger.warn(`Invalid UPI ID format: ${pa}`);
-        return false;
-      }
-      
-      // Validate amount format
-      const amount = params.get('am');
-      if (isNaN(parseFloat(amount))) {
-        logger.warn(`Invalid amount format: ${amount}`);
-        return false;
-      }
-      
-      return true;
-    } catch (error) {
-      logger.error(`UPI URL validation failed: ${error.message}`);
-      return false;
     }
   }
   
