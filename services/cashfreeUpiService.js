@@ -1,4 +1,3 @@
-// Final optimized cashfreeUpiService.js
 const axios = require('axios');
 const crypto = require('crypto');
 const logger = require('../utils/logger');
@@ -6,47 +5,58 @@ const { URL } = require('url');
 
 class CashfreeUpiService {
   constructor() {
-    // Validate environment configuration
-    if (!process.env.CASHFREE_APP_ID || !process.env.CASHFREE_SECRET_KEY) {
-      throw new Error('Cashfree API credentials are not configured');
-    }
+    // Validate mandatory environment configuration
+    this.validateConfig();
 
-    // Determine environment
-    const isProduction = process.env.CASHFREE_ENV === 'PRODUCTION';
-    logger.info(`Initializing Cashfree UPI service in ${isProduction ? 'PRODUCTION' : 'SANDBOX'} mode`);
+    // Determine environment (Production/Sandbox)
+    this.isProduction = process.env.CASHFREE_ENV === 'PRODUCTION';
+    logger.info(`Initializing Cashfree UPI service in ${this.isProduction ? 'PRODUCTION' : 'SANDBOX'} mode`);
 
-    this.baseUrl = isProduction 
+    // Configure base URLs
+    this.baseUrl = this.isProduction
       ? 'https://api.cashfree.com/pg'
       : 'https://sandbox.cashfree.com/pg';
-    
+
     this.apiKey = process.env.CASHFREE_APP_ID;
     this.secretKey = process.env.CASHFREE_SECRET_KEY;
-    
-    // Use the dedicated webhook secret if available, otherwise fall back to API secret
     this.webhookSecret = process.env.CASHFREE_WEBHOOK_SECRET || this.secretKey;
-    
-    this.merchantUpiId = process.env.CASHFREE_UPI_ID || 'yourmerchant@cashfree';
 
-    // Validate and configure URLs
+    // Validate UPI ID (critical for UPI payments)
+    this.merchantUpiId = process.env.CASHFREE_UPI_ID;
+    if (!this.merchantUpiId) {
+      throw new Error('CASHFREE_UPI_ID is required for UPI payments');
+    }
+
+    // Configure and validate callback URLs
     this.returnUrl = this.validateAndConfigureUrl(
       process.env.CASHFREE_RETURN_URL,
       'CASHFREE_RETURN_URL',
-      'https://meetkats.com/payment-response' // default fallback
+      'https://meetkats.com/payment-response'
     );
-    
+
     this.notifyUrl = this.validateAndConfigureUrl(
       process.env.CASHFREE_NOTIFY_URL,
       'CASHFREE_NOTIFY_URL',
-      'https://new-backend-w86d.onrender.com/api/payments/cashfree/webhook' // updated default fallback
+      'https://new-backend-w86d.onrender.com/api/payments/cashfree/webhook'
     );
 
     logger.debug(`Cashfree service initialized for ${this.baseUrl}`);
-    logger.debug(`Using webhook URL: ${this.notifyUrl}`);
-    logger.debug(`Webhook secret configured: ${this.webhookSecret ? 'Yes' : 'No'}`);
   }
 
   /**
-   * Validate and configure URL with proper fallbacks
+   * Validate mandatory configuration
+   */
+  validateConfig() {
+    const requiredVars = ['CASHFREE_APP_ID', 'CASHFREE_SECRET_KEY'];
+    const missingVars = requiredVars.filter(v => !process.env[v]);
+
+    if (missingVars.length > 0) {
+      throw new Error(`Missing Cashfree config: ${missingVars.join(', ')}`);
+    }
+  }
+
+  /**
+   * Validate and sanitize URLs
    */
   validateAndConfigureUrl(url, envVarName, fallback) {
     try {
@@ -58,139 +68,120 @@ class CashfreeUpiService {
         throw new Error(`${envVarName} is required`);
       }
 
-      new URL(url); // Will throw if invalid
+      new URL(url); // Throws if invalid
       return url;
     } catch (error) {
-      logger.error(`Invalid URL configuration for ${envVarName}: ${error.message}`);
+      logger.error(`Invalid URL for ${envVarName}: ${error.message}`);
       throw new Error(`Invalid ${envVarName}: Must be a valid absolute URL`);
     }
   }
 
   /**
-   * Create a new UPI payment order with Cashfree
+   * Create a UPI payment order
    */
   async createUpiOrder(paymentData) {
     try {
-      const { 
-        amount, 
-        bookingId, 
+      const {
+        amount,
+        bookingId,
         userId,
         eventName = '',
         customerName,
         customerPhone,
-        customerEmail
+        customerEmail,
+        customerUpiId = null
       } = paymentData;
-      
-      // Log the request data (safely, without sensitive details)
-      logger.info(`Creating Cashfree UPI order for booking ${bookingId}, amount: ${amount}`, {
+
+      // Log sanitized request data
+      logger.info(`Creating UPI order for booking ${bookingId}`, {
         amount,
         bookingId: bookingId.substring(0, 8) + '...',
-        customerNameFirstChar: customerName ? customerName.charAt(0) : 'N/A',
-        customerEmailDomain: customerEmail ? customerEmail.split('@')[1] : 'N/A'
+        customer: customerEmail ? customerEmail.split('@')[1] : 'N/A'
       });
-      
+
       // Generate unique order ID
-      const orderId = `UPI_${Date.now()}_${bookingId.substring(0, 8)}`;
-      
-      // Create order payload with validated URLs
+      const orderId = `UPI_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+
+      // Build order payload
       const orderPayload = {
         order_id: orderId,
         order_amount: amount,
         order_currency: 'INR',
-        order_note: `Tickets for ${eventName.substring(0, 50)}`, // Truncate if needed
+        order_note: `Tickets for ${eventName.substring(0, 50)}`,
         customer_details: {
           customer_id: userId.toString().substring(0, 50),
           customer_name: customerName.substring(0, 50),
           customer_email: customerEmail.substring(0, 100),
-          customer_phone: customerPhone.toString().substring(0, 10)
+          customer_phone: customerPhone.toString().replace(/\D/g, '').substring(0, 10)
         },
         order_meta: {
           return_url: `${this.returnUrl}?order_id=${encodeURIComponent(orderId)}`,
           notify_url: this.notifyUrl,
-          payment_methods: "upi", // Restrict to UPI payment method
-          payment_flows: "direct" // Request a direct payment flow for better UX
+          payment_methods: "upi",
+          payment_flows: "direct",
+          upi: {
+            upi_id: customerUpiId,
+            preferred_apps: ["google_pay", "phonepe", "paytm"]
+          }
+        },
+        order_tags: {
+          booking_id: bookingId,
+          user_id: userId,
+          source: "your_app_name"
         }
       };
-      
-      logger.debug('Cashfree order payload prepared', {
-        orderId: orderPayload.order_id,
-        amount: orderPayload.order_amount,
-        returnUrl: orderPayload.order_meta.return_url,
-        notifyUrl: orderPayload.order_meta.notify_url
-      });
-      
-      // Make API request to create order
+
+      // API request
       const response = await axios.post(
         `${this.baseUrl}/orders`,
         orderPayload,
         {
           headers: this.getApiHeaders(),
-          timeout: 15000 // 15 seconds timeout
+          timeout: 15000
         }
       );
-      
-      // Process and validate the response
-      if (!response.data || !response.data.order_id) {
-        throw new Error('Invalid response from Cashfree API');
+
+      if (!response.data?.order_id) {
+        throw new Error('Invalid Cashfree API response');
       }
-      
-      // Log the full payment link to help debug 404 issues
-      logger.info(`Cashfree UPI order created successfully: ${response.data.order_id}`, {
-        cfOrderId: response.data.cf_order_id,
-        paymentLink: response.data.payment_link || 'Not provided',
-        orderStatus: response.data.order_status
-      });
-      
-      // Build payment URLs with correct production format (using # anchor)
-      const orderId = response.data.order_id;
-      const cfOrderId = response.data.cf_order_id;
-      
-      // Create all possible payment URL formats
+
+      // Build payment URLs
       const paymentUrls = {
-        // Primary URL format with # anchor (correct for production)
-        primary: `https://payments.cashfree.com/order/#${orderId}`,
-        
-        // Direct payment link from API (if provided)
+        primary: `https://payments.cashfree.com/order/#${response.data.order_id}`,
         apiLink: response.data.payment_link,
-        
-        // Alternative formats that might work
-        billPayUrl: `https://payments.cashfree.com/billpay/order/pay/${orderId}`,
-        pgOrdersUrl: `https://payments.cashfree.com/pg/orders/${orderId}`
+        upiDeepLink: this.generateUpiDeepLink(response.data.order_id)
       };
-      
-      logger.debug('Generated payment URLs for order', paymentUrls);
-      
-      // Return comprehensive response with multiple URL options
+
+      logger.info(`Order created: ${response.data.order_id}`, {
+        cfOrderId: response.data.cf_order_id,
+        paymentLink: paymentUrls.primary
+      });
+
       return {
         success: true,
         orderId: response.data.order_id,
-        orderToken: response.data.order_token,
-        // Use the correct URL format: first from API if available, then the # anchor format
         paymentLink: response.data.payment_link || paymentUrls.primary,
-        expiresAt: response.data.order_expiry_time,
-        cfOrderId: response.data.cf_order_id,
-        paymentUrls: paymentUrls,
-        upiData: {
-          paymentLink: response.data.payment_link || paymentUrls.primary,
-          alternateLinks: [
-            paymentUrls.primary,
-            paymentUrls.billPayUrl,
-            paymentUrls.pgOrdersUrl
-          ].filter(Boolean) // Filter out any nulls
-        }
+        upiDeepLink: paymentUrls.upiDeepLink,
+        expiresAt: response.data.order_expiry_time
       };
+
     } catch (error) {
       return this.handleCashfreeError(error, 'UPI order creation');
     }
   }
 
   /**
-   * Verify payment status with Cashfree
+   * Generate UPI deep link for better mobile UX
+   */
+  generateUpiDeepLink(orderId) {
+    return `upi://pay?pa=${this.merchantUpiId}&pn=YourMerchantName&am=${amount}&tn=${orderId}`;
+  }
+
+  /**
+   * Verify payment status
    */
   async verifyPaymentOrder(orderId) {
     try {
-      logger.info(`Verifying Cashfree payment for order: ${orderId}`);
-      
       const response = await axios.get(
         `${this.baseUrl}/orders/${orderId}`,
         {
@@ -198,81 +189,52 @@ class CashfreeUpiService {
           timeout: 10000
         }
       );
-      
-      const orderData = response.data;
-      const paymentStatus = this.mapCashfreeStatus(orderData.order_status);
-      
-      logger.debug(`Payment verification for ${orderId}`, {
-        status: orderData.order_status,
-        mappedStatus: paymentStatus,
-        amount: orderData.order_amount
-      });
-      
+
       return {
         success: true,
-        orderId: orderData.order_id,
-        orderAmount: orderData.order_amount,
-        status: paymentStatus,
-        paymentMethod: orderData.payment_method || 'UPI',
-        transactionId: orderData.cf_payment_id || orderId,
-        transactionTime: orderData.order_status === 'PAID' ? orderData.order_status_time : null
+        status: this.mapCashfreeStatus(response.data.order_status),
+        transactionId: response.data.cf_payment_id,
+        amount: response.data.order_amount
       };
     } catch (error) {
       return this.handleCashfreeError(error, 'payment verification');
     }
   }
-  
+
   /**
-   * Validate Cashfree webhook signature
-   * @param {Object|string} postData - The webhook payload
-   * @param {string} signature - The signature from x-webhook-signature header
-   * @param {string} timestamp - Optional timestamp from x-webhook-timestamp header
-   * @returns {boolean} - Whether the signature is valid
+   * Validate webhook signature
    */
-  validateWebhookSignature(postData, signature, timestamp = null) {
+  validateWebhookSignature(postData, signature, timestamp) {
     try {
-      // Make sure we have string data
       const data = typeof postData === 'object' ? JSON.stringify(postData) : postData;
-      
-      // If timestamp is provided, use it in the signature calculation
-      let signatureData = data;
-      if (timestamp) {
-        signatureData = timestamp + data;
-      }
-      
-      // Try both base64 and hex encoding since Cashfree documentation can be inconsistent
-      const expectedSignatureBase64 = crypto
+      const signatureData = timestamp ? timestamp + data : data;
+
+      // Check both Base64 and Hex encodings
+      const expectedBase64 = crypto
         .createHmac('sha256', this.webhookSecret)
         .update(signatureData)
         .digest('base64');
-        
-      const expectedSignatureHex = crypto
+
+      const expectedHex = crypto
         .createHmac('sha256', this.webhookSecret)
         .update(signatureData)
         .digest('hex');
-      
-      // Check if either encoding matches
-      const isValidBase64 = expectedSignatureBase64 === signature;
-      const isValidHex = expectedSignatureHex === signature;
-      const isValid = isValidBase64 || isValidHex;
-      
-      logger.debug(`Webhook signature validation: ${isValid ? 'Valid' : 'Invalid'}`, {
-        validationMethod: isValidBase64 ? 'base64' : (isValidHex ? 'hex' : 'failed'),
-        signatureLength: signature.length,
-        useTimestamp: !!timestamp
-      });
-      
-      return isValid;
+
+      // Reject if timestamp is older than 5 minutes
+      if (timestamp && Date.now() - parseInt(timestamp) > 300000) {
+        logger.error('Webhook timestamp expired');
+        return false;
+      }
+
+      return signature === expectedBase64 || signature === expectedHex;
     } catch (error) {
-      logger.error(`Webhook signature validation failed: ${error.message}`, {
-        error: error.stack
-      });
+      logger.error(`Webhook validation failed: ${error.message}`);
       return false;
     }
   }
-  
+
   /**
-   * Standard API headers for Cashfree requests
+   * Standard API headers
    */
   getApiHeaders() {
     return {
@@ -282,79 +244,37 @@ class CashfreeUpiService {
       'x-api-version': '2022-09-01'
     };
   }
-  
+
   /**
-   * Handle Cashfree API errors consistently
+   * Error handler
    */
   handleCashfreeError(error, context) {
-    const errorDetails = {
-      message: error.message,
-      code: error.code || 'UNKNOWN_ERROR',
-      status: error.response?.status || 500
-    };
-    
-    logger.error(`Cashfree ${context} error:`, errorDetails);
-    
-    if (error.response) {
-      logger.error('Cashfree API response error:', {
-        status: error.response.status,
-        data: error.response.data || 'No data returned',
-        headers: error.response.headers ? Object.keys(error.response.headers).join(', ') : 'No headers'
-      });
-    }
-    
-    // User-friendly error message
-    let userMessage = `Cashfree ${context} failed`;
-    if (error.response?.data?.message) {
-      userMessage = error.response.data.message;
-    } else if (error.message && !error.message.includes('network error')) {
-      userMessage = error.message;
-    }
-    
+    const status = error.response?.status || 500;
+    const message = error.response?.data?.message || error.message;
+
+    logger.error(`Cashfree ${context} failed (${status}): ${message}`);
+
     return {
       success: false,
-      message: userMessage,
-      error: error.response?.data || error.message,
-      status: error.response?.status || 500
+      status,
+      message: message.includes('network error') 
+        ? 'Payment service temporarily unavailable' 
+        : message
     };
   }
-  
+
   /**
-   * Map Cashfree status to standardized status
+   * Map Cashfree status to standardized values
    */
-  mapCashfreeStatus(cashfreeStatus) {
+  mapCashfreeStatus(status) {
     const statusMap = {
-      'PAID': 'PAYMENT_SUCCESS',
-      'ACTIVE': 'PAYMENT_PENDING',
-      'EXPIRED': 'PAYMENT_FAILED',
-      'CANCELLED': 'PAYMENT_CANCELLED', 
-      'FAILED': 'PAYMENT_FAILED'
+      'PAID': 'SUCCESS',
+      'ACTIVE': 'PENDING',
+      'EXPIRED': 'FAILED',
+      'CANCELLED': 'CANCELLED'
     };
-    
-    return statusMap[cashfreeStatus] || 'PAYMENT_UNKNOWN';
-  }
-  
-  /**
-   * Validate API credentials (for startup check)
-   */
-  async validateCredentials() {
-    try {
-      logger.info('Validating Cashfree API credentials');
-      
-      const response = await axios.get(`${this.baseUrl}/orders`, {
-        headers: this.getApiHeaders(),
-        params: { order_id: `validate_${Date.now()}` },
-        timeout: 5000
-      });
-      
-      const isValid = response.status === 200;
-      logger.info(`Cashfree credentials validation: ${isValid ? 'Success' : 'Failed'}`);
-      
-      return isValid;
-    } catch (error) {
-      logger.error('Cashfree credentials validation failed:', error.message);
-      return false;
-    }
+
+    return statusMap[status] || 'UNKNOWN';
   }
 }
 
