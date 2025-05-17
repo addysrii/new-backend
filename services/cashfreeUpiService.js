@@ -1,3 +1,4 @@
+// Final optimized cashfreeUpiService.js
 const axios = require('axios');
 const crypto = require('crypto');
 const logger = require('../utils/logger');
@@ -106,7 +107,8 @@ class CashfreeUpiService {
         order_meta: {
           return_url: `${this.returnUrl}?order_id=${encodeURIComponent(orderId)}`,
           notify_url: this.notifyUrl,
-          payment_methods: "upi" // Restrict to UPI payment method
+          payment_methods: "upi", // Restrict to UPI payment method
+          payment_flows: "direct" // Request a direct payment flow for better UX
         }
       };
       
@@ -132,29 +134,49 @@ class CashfreeUpiService {
         throw new Error('Invalid response from Cashfree API');
       }
       
+      // Log the full payment link to help debug 404 issues
       logger.info(`Cashfree UPI order created successfully: ${response.data.order_id}`, {
         cfOrderId: response.data.cf_order_id,
-        orderToken: response.data.order_token ? 'Present' : 'Missing',
-        paymentLink: response.data.payment_link ? 'Generated' : 'Missing'
+        paymentLink: response.data.payment_link || 'Not provided',
+        orderStatus: response.data.order_status
       });
       
-      // Ensure we have a payment link - build one if not provided
-      const hostedDomain = process.env.CASHFREE_ENV === 'PRODUCTION' 
-        ? 'payments.cashfree.com' 
-        : 'sandbox.cashfree.com';
+      // Build payment URLs with correct production format (using # anchor)
+      const orderId = response.data.order_id;
+      const cfOrderId = response.data.cf_order_id;
       
-      const paymentLink = response.data.payment_link || 
-                          `https://${hostedDomain}/pg/orders/${response.data.order_id}`;
+      // Create all possible payment URL formats
+      const paymentUrls = {
+        // Primary URL format with # anchor (correct for production)
+        primary: `https://payments.cashfree.com/order/#${orderId}`,
+        
+        // Direct payment link from API (if provided)
+        apiLink: response.data.payment_link,
+        
+        // Alternative formats that might work
+        billPayUrl: `https://payments.cashfree.com/billpay/order/pay/${orderId}`,
+        pgOrdersUrl: `https://payments.cashfree.com/pg/orders/${orderId}`
+      };
       
+      logger.debug('Generated payment URLs for order', paymentUrls);
+      
+      // Return comprehensive response with multiple URL options
       return {
         success: true,
         orderId: response.data.order_id,
         orderToken: response.data.order_token,
-        paymentLink: paymentLink,
+        // Use the correct URL format: first from API if available, then the # anchor format
+        paymentLink: response.data.payment_link || paymentUrls.primary,
         expiresAt: response.data.order_expiry_time,
         cfOrderId: response.data.cf_order_id,
+        paymentUrls: paymentUrls,
         upiData: {
-          paymentLink: paymentLink // Always provide a payment link in upiData
+          paymentLink: response.data.payment_link || paymentUrls.primary,
+          alternateLinks: [
+            paymentUrls.primary,
+            paymentUrls.billPayUrl,
+            paymentUrls.pgOrdersUrl
+          ].filter(Boolean) // Filter out any nulls
         }
       };
     } catch (error) {
@@ -218,18 +240,25 @@ class CashfreeUpiService {
         signatureData = timestamp + data;
       }
       
-      // Use the webhook secret key to calculate expected signature
-      const expectedSignature = crypto
+      // Try both base64 and hex encoding since Cashfree documentation can be inconsistent
+      const expectedSignatureBase64 = crypto
         .createHmac('sha256', this.webhookSecret)
         .update(signatureData)
-        .digest('base64'); // Note: Cashfree often uses base64 encoding for webhook signatures
+        .digest('base64');
+        
+      const expectedSignatureHex = crypto
+        .createHmac('sha256', this.webhookSecret)
+        .update(signatureData)
+        .digest('hex');
       
-      // Check if signatures match
-      const isValid = expectedSignature === signature;
+      // Check if either encoding matches
+      const isValidBase64 = expectedSignatureBase64 === signature;
+      const isValidHex = expectedSignatureHex === signature;
+      const isValid = isValidBase64 || isValidHex;
       
       logger.debug(`Webhook signature validation: ${isValid ? 'Valid' : 'Invalid'}`, {
-        expectedSignatureStart: expectedSignature.substring(0, 10) + '...',
-        receivedSignatureStart: signature.substring(0, 10) + '...',
+        validationMethod: isValidBase64 ? 'base64' : (isValidHex ? 'hex' : 'failed'),
+        signatureLength: signature.length,
         useTimestamp: !!timestamp
       });
       
