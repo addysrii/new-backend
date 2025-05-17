@@ -167,6 +167,8 @@ exports.ticketTypeValidationRules = () => {
 /**
  * Booking validation rules
  */
+// Updated validation.middleware.js - bookingValidationRules function
+
 exports.bookingValidationRules = () => {
   const { body } = require('express-validator');
   
@@ -186,7 +188,31 @@ exports.bookingValidationRules = () => {
     body('paymentMethod')
       .notEmpty()
       .withMessage('Payment method is required')
-      .isIn(['phonepe', 'credit_card', 'debit_card', 'upi', 'bank_transfer','free'])
+      .custom((value) => {
+        // Normalize payment method for validation
+        const normalizedMethod = value.toLowerCase().trim();
+        const validMethods = [
+          'credit_card', 'debit_card', 'paypal', 'apple_pay', 
+          'google_pay', 'bank_transfer', 'cash', 'free', 
+          'phonepe', 'pending', 'upi'
+        ];
+        
+        // Check normalized version
+        if (validMethods.includes(normalizedMethod)) {
+          return true;
+        }
+        
+        // Handle common variations
+        if (normalizedMethod.includes('phone') || normalizedMethod.includes('pe')) {
+          return true; // phonepe variations
+        }
+        
+        if (normalizedMethod === 'upi' || normalizedMethod.includes('bhim')) {
+          return true; // upi variations
+        }
+        
+        return false;
+      })
       .withMessage('Invalid payment method'),
       
     body('contactInformation.email')
@@ -199,7 +225,6 @@ exports.bookingValidationRules = () => {
       .withMessage('Valid phone number is required')
   ];
 };
-
 /**
  * PhonePe payment validation rules
  */
