@@ -20,6 +20,10 @@ class CashfreeUpiService {
     
     this.apiKey = process.env.CASHFREE_APP_ID;
     this.secretKey = process.env.CASHFREE_SECRET_KEY;
+    
+    // Use the dedicated webhook secret if available, otherwise fall back to API secret
+    this.webhookSecret = process.env.CASHFREE_WEBHOOK_SECRET || this.secretKey;
+    
     this.merchantUpiId = process.env.CASHFREE_UPI_ID || 'yourmerchant@cashfree';
 
     // Validate and configure URLs
@@ -32,10 +36,12 @@ class CashfreeUpiService {
     this.notifyUrl = this.validateAndConfigureUrl(
       process.env.CASHFREE_NOTIFY_URL,
       'CASHFREE_NOTIFY_URL',
-      'https://meetkats.com/api/payments/cashfree/webhook' // default fallback
+      'https://new-backend-w86d.onrender.com/api/payments/cashfree/webhook' // updated default fallback
     );
 
     logger.debug(`Cashfree service initialized for ${this.baseUrl}`);
+    logger.debug(`Using webhook URL: ${this.notifyUrl}`);
+    logger.debug(`Webhook secret configured: ${this.webhookSecret ? 'Yes' : 'No'}`);
   }
 
   /**
@@ -107,7 +113,8 @@ class CashfreeUpiService {
       logger.debug('Cashfree order payload prepared', {
         orderId: orderPayload.order_id,
         amount: orderPayload.order_amount,
-        returnUrl: orderPayload.order_meta.return_url
+        returnUrl: orderPayload.order_meta.return_url,
+        notifyUrl: orderPayload.order_meta.notify_url
       });
       
       // Make API request to create order
@@ -195,21 +202,42 @@ class CashfreeUpiService {
   
   /**
    * Validate Cashfree webhook signature
+   * @param {Object|string} postData - The webhook payload
+   * @param {string} signature - The signature from x-webhook-signature header
+   * @param {string} timestamp - Optional timestamp from x-webhook-timestamp header
+   * @returns {boolean} - Whether the signature is valid
    */
-  validateWebhookSignature(postData, signature) {
+  validateWebhookSignature(postData, signature, timestamp = null) {
     try {
+      // Make sure we have string data
       const data = typeof postData === 'object' ? JSON.stringify(postData) : postData;
-      const expectedSignature = crypto
-        .createHmac('sha256', this.secretKey)
-        .update(data)
-        .digest('hex');
       
+      // If timestamp is provided, use it in the signature calculation
+      let signatureData = data;
+      if (timestamp) {
+        signatureData = timestamp + data;
+      }
+      
+      // Use the webhook secret key to calculate expected signature
+      const expectedSignature = crypto
+        .createHmac('sha256', this.webhookSecret)
+        .update(signatureData)
+        .digest('base64'); // Note: Cashfree often uses base64 encoding for webhook signatures
+      
+      // Check if signatures match
       const isValid = expectedSignature === signature;
-      logger.debug(`Webhook signature validation: ${isValid ? 'Valid' : 'Invalid'}`);
+      
+      logger.debug(`Webhook signature validation: ${isValid ? 'Valid' : 'Invalid'}`, {
+        expectedSignatureStart: expectedSignature.substring(0, 10) + '...',
+        receivedSignatureStart: signature.substring(0, 10) + '...',
+        useTimestamp: !!timestamp
+      });
       
       return isValid;
     } catch (error) {
-      logger.error(`Webhook signature validation failed: ${error.message}`);
+      logger.error(`Webhook signature validation failed: ${error.message}`, {
+        error: error.stack
+      });
       return false;
     }
   }
