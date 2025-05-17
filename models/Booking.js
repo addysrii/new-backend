@@ -265,10 +265,22 @@ const BookingSchema = new Schema({
     enum: ['pending', 'confirmed', 'cancelled', 'refunded', 'initiate'],
     default: 'pending'
   },
-  paymentInfo: {
+ paymentInfo: {
     method: {
       type: String,
-      enum: ['credit_card', 'debit_card', 'paypal', 'apple_pay', 'google_pay', 'bank_transfer', 'cash', 'free', 'phonepe', 'pending','upi']
+      enum: [
+        'credit_card', 
+        'debit_card', 
+        'paypal', 
+        'apple_pay', 
+        'google_pay', 
+        'bank_transfer', 
+        'cash', 
+        'free', 
+        'phonepe',
+        'upi',     // Ensure UPI is properly included
+        'pending'
+      ]
     },
     transactionId: String,
     transactionDate: Date,
