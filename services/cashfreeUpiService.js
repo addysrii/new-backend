@@ -59,73 +59,79 @@ class CashfreeUpiService {
    * Create a new UPI payment order with Cashfree
    */
   async createUpiOrder(paymentData) {
-    try {
-      const { 
-        amount, 
-        bookingId, 
-        userId,
-        eventName = '',
-        customerName,
-        customerPhone,
-        customerEmail
-      } = paymentData;
-      
-      logger.info(`Creating Cashfree UPI order for booking ${bookingId}, amount: ${amount}`);
-      
-      // Generate unique order ID
-      const orderId = `UPI_${Date.now()}_${bookingId.substring(0, 8)}`;
-      
-      // Create order payload with validated URLs and payment specific options
-      const orderPayload = {
-        order_id: orderId,
-        order_amount: amount,
-        order_currency: 'INR',
-        order_note: `Tickets for ${eventName.substring(0, 50)}`, // Truncate if needed
-        customer_details: {
-          customer_id: userId.toString().substring(0, 50),
-          customer_name: customerName.substring(0, 50),
-          customer_email: customerEmail.substring(0, 100),
-          customer_phone: customerPhone.toString().substring(0, 10)
-        },
-        order_meta: {
-          return_url: `${this.returnUrl}?order_id=${encodeURIComponent(orderId)}`,
-          notify_url: this.notifyUrl,
-          payment_methods: "upi" // Specify UPI only
-        }
-      };
-      
-      logger.debug('Cashfree order payload:', {
-        orderId: orderPayload.order_id,
-        amount: orderPayload.order_amount,
-        customer: orderPayload.customer_details.customer_name,
-        returnUrl: orderPayload.order_meta.return_url
-      });
-      
-      // Make API request to create order
-      const response = await axios.post(
-        `${this.baseUrl}/orders`,
-        orderPayload,
-        {
-          headers: this.getApiHeaders(),
-          timeout: 15000 // 15 seconds timeout
-        }
-      );
-      
-      logger.info(`Cashfree UPI order created: ${response.data.order_id}`);
-      
-      return {
-        success: true,
-        orderId: response.data.order_id,
-        orderToken: response.data.order_token,
-        paymentLink: response.data.payment_link,
-        expiresAt: response.data.order_expiry_time,
-        cfOrderId: response.data.cf_order_id
-      };
-    } catch (error) {
-      return this.handleCashfreeError(error, 'UPI order creation');
-    }
+  try {
+    const { 
+      amount, 
+      bookingId, 
+      userId,
+      eventName = '',
+      customerName,
+      customerPhone,
+      customerEmail
+    } = paymentData;
+    
+    logger.info(`Creating Cashfree UPI order for booking ${bookingId}, amount: ${amount}`);
+    
+    // Generate unique order ID
+    const orderId = `UPI_${Date.now()}_${bookingId.substring(0, 8)}`;
+    
+    // Create order payload with validated URLs
+    const orderPayload = {
+      order_id: orderId,
+      order_amount: amount,
+      order_currency: 'INR',
+      order_note: `Tickets for ${eventName.substring(0, 50)}`, // Truncate if needed
+      customer_details: {
+        customer_id: userId.toString().substring(0, 50),
+        customer_name: customerName.substring(0, 50),
+        customer_email: customerEmail.substring(0, 100),
+        customer_phone: customerPhone.toString().substring(0, 10)
+      },
+      order_meta: {
+        return_url: `${this.returnUrl}?order_id=${encodeURIComponent(orderId)}`,
+        notify_url: this.notifyUrl,
+        payment_methods: "upi"
+      }
+    };
+    
+    logger.debug('Cashfree order payload:', {
+      orderId: orderPayload.order_id,
+      amount: orderPayload.order_amount,
+      customer: orderPayload.customer_details.customer_name,
+      returnUrl: orderPayload.order_meta.return_url
+    });
+    
+    // Make API request to create order
+    const response = await axios.post(
+      `${this.baseUrl}/orders`,
+      orderPayload,
+      {
+        headers: this.getApiHeaders(),
+        timeout: 15000 // 15 seconds timeout
+      }
+    );
+    
+    logger.info(`Cashfree UPI order created: ${response.data.order_id}`);
+    
+    // Build a direct URL for Cashfree's payment page as fallback
+    const cashfreePaymentUrl = `https://${process.env.CASHFREE_ENV === 'PRODUCTION' ? 'payments.cashfree.com' : 'sandbox.cashfree.com'}/pg/orders/${response.data.order_id}`;
+    
+    return {
+      success: true,
+      orderId: response.data.order_id,
+      orderToken: response.data.order_token,
+      paymentLink: response.data.payment_link || cashfreePaymentUrl,
+      expiresAt: response.data.order_expiry_time,
+      cfOrderId: response.data.cf_order_id,
+      // Always ensure we have a valid payment link
+      upiData: {
+        paymentLink: response.data.payment_link || cashfreePaymentUrl
+      }
+    };
+  } catch (error) {
+    return this.handleCashfreeError(error, 'UPI order creation');
   }
-  
+}
   /**
    * Verify payment status with Cashfree
    */
