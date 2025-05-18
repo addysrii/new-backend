@@ -34,7 +34,28 @@ router.post('/:bookingId/cancel', authenticateToken, bookingController.cancelBoo
 
 // Ticket verification route - add this new route
 router.post('/events/:eventId/verify-ticket', authenticateToken, bookingController.verifyTicketByCode);
-
+router.post('/events/:eventId/coupons', 
+  authenticateToken, 
+  validate(couponValidationRules()),
+  bookingController.createCoupon
+);
+router.put('/coupons/:couponId', 
+  authenticateToken, 
+  validate(couponValidationRules()),
+  bookingController.updateCoupon
+);
+router.get('/events/:eventId/coupons', 
+  authenticateToken, 
+  bookingController.getEventCoupons
+);
+router.get('/coupons/:couponId/stats', 
+  authenticateToken, 
+  bookingController.getCouponStats
+);
+router.post('/events/:eventId/validate-coupon', 
+  authenticateToken, 
+  bookingController.validateCoupon
+);
 // Ticket routes
 router.post('/tickets/:ticketId/check-in', 
   authenticateToken, 
