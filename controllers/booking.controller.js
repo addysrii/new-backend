@@ -265,7 +265,7 @@ exports.createBooking = async (req, res) => {
       session.endSession();
       return res.status(400).json({ errors: errors.array() });
     }
-    
+
     const { eventId } = req.params;
     const { 
       ticketSelections, 
@@ -382,18 +382,71 @@ exports.createBooking = async (req, res) => {
       totalTicketCount += quantity;
       allTicketTypes.push({ ticketType, quantity });
     }
+
+    // Handle coupon if provided
+    let discountAmount = 0;
+    let appliedCoupon = null;
+    let coupon = null;
+
+    if (promoCode) {
+      // Find coupon
+      coupon = await Coupon.findOne({ 
+        code: promoCode.toUpperCase(),
+        event: eventId,
+        isActive: true
+      }).session(session);
+
+      if (coupon) {
+        // Check validity dates
+        const now = new Date();
+        const isValidDate = (!coupon.validFrom || coupon.validFrom <= now) &&
+                          (!coupon.validUntil || coupon.validUntil >= now);
+
+        // Check max uses
+        const hasUsesLeft = !coupon.maxUses || coupon.currentUses < coupon.maxUses;
+
+        if (isValidDate && hasUsesLeft) {
+          // Calculate discount
+          discountAmount = (totalAmount * coupon.discountPercentage) / 100;
+          appliedCoupon = {
+            code: coupon.code,
+            name: coupon.name,
+            discountPercentage: coupon.discountPercentage,
+            discountAmount
+          };
+        } else {
+          await session.abortTransaction();
+          session.endSession();
+          return res.status(400).json({ 
+            error: 'Coupon is not valid or has reached its usage limit'
+          });
+        }
+      } else {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({ 
+          error: 'Invalid coupon code'
+        });
+      }
+    }
+
+    // Apply discount to total amount
+    const discountedAmount = Math.max(0, totalAmount - discountAmount);
     
     // Comprehensive logging for debugging
     console.log('Booking Creation Debug:', {
-      totalAmount,
+      originalAmount: totalAmount,
+      discountedAmount,
+      discountAmount,
       totalTicketCount,
       requestPaymentMethod,
       userId: req.user.id,
-      eventId
+      eventId,
+      appliedCoupon
     });
     
     // Determine booking and payment details
-    const isFreeBooking = totalAmount === 0;
+    const isFreeBooking = discountedAmount === 0;
     
     // Determine payment method and status
     const finalPaymentMethod = isFreeBooking 
@@ -420,7 +473,9 @@ exports.createBooking = async (req, res) => {
     const booking = new Booking({
       user: req.user.id,
       event: eventId,
-      totalAmount,
+      originalAmount: totalAmount,
+      totalAmount: discountedAmount,
+      discountAmount,
       currency: allTicketTypes[0].ticketType.currency || 'INR',
       status: bookingStatus,
       paymentInfo: {
@@ -428,7 +483,8 @@ exports.createBooking = async (req, res) => {
         status: paymentStatus
       },
       contactInformation,
-      ticketCount: totalTicketCount
+      ticketCount: totalTicketCount,
+      promoCode: appliedCoupon
     });
     
     // Generate a common QR secret for all tickets in this booking
@@ -512,6 +568,12 @@ exports.createBooking = async (req, res) => {
     booking.tickets = [groupTicket._id];
     booking.groupTicket = true;
     await booking.save({ session });
+
+    // Update coupon uses after booking is successfully created
+    if (appliedCoupon && coupon && booking.status === 'confirmed') {
+      coupon.currentUses += 1;
+      await coupon.save({ session });
+    }
     
     // Additional logging after saving
     console.log('Saved Booking Details:', {
@@ -519,7 +581,8 @@ exports.createBooking = async (req, res) => {
       status: booking.status,
       paymentStatus: booking.paymentInfo.status,
       paymentMethod: booking.paymentInfo.method,
-      hasQrCode: !!groupTicket.qrCode
+      hasQrCode: !!groupTicket.qrCode,
+      appliedCoupon: booking.promoCode
     });
     
     // Commit transaction
@@ -546,11 +609,14 @@ exports.createBooking = async (req, res) => {
     const responseBooking = {
       id: booking._id,
       bookingNumber: booking.bookingNumber,
-      totalAmount,
+      originalAmount: totalAmount,
+      totalAmount: discountedAmount,
+      discountAmount,
       currency: booking.currency,
       status: booking.status,
       paymentStatus: booking.paymentInfo.status,
-      ticketCount: totalTicketCount
+      ticketCount: totalTicketCount,
+      promoCode: appliedCoupon
     };
     
     // Handle different scenarios based on booking type
@@ -569,7 +635,7 @@ exports.createBooking = async (req, res) => {
     if (finalPaymentMethod === 'phonepe') {
       try {
         const paymentData = {
-          amount: totalAmount,
+          amount: discountedAmount,
           userId: req.user.id,
           bookingId: booking._id.toString(),
           eventName: event.name,
@@ -633,11 +699,6 @@ exports.createBooking = async (req, res) => {
     });
   }
 };
-/**
- * Get user bookings
- * @route GET /api/bookings/my
- * @access Private
- */
 exports.getUserBookings = async (req, res) => {
   try {
     const { status, upcoming } = req.query;
