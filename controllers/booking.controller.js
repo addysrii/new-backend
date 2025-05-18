@@ -2448,5 +2448,447 @@ exports.getEventBookingStats = async (req, res) => {
       res.status(500).json({ error: 'Server error when generating event report' });
     }
   };
+  // Add this to your booking.controller.js file
+
+/**
+ * Initiate Cashfree Form Payment
+ * @route POST /api/bookings/events/:eventId/cashfree-payment
+ * @access Private
+ */
+exports.initiateCashfreeFormPayment = async (req, res) => {
+  // Use a database transaction for data integrity
+  const session = await mongoose.startSession();
+  session.startTransaction();
   
+  try {
+    const { eventId } = req.params;
+    const { 
+      ticketSelections, 
+      contactInformation,
+      formType = 'default' // Support different form types if needed
+    } = req.body;
+    
+    // Validate user authentication
+    if (!req.user || !req.user.id) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(401).json({ error: 'User authentication required' });
+    }
+    
+    // Validate ticket selections
+    if (!ticketSelections || !Array.isArray(ticketSelections) || ticketSelections.length === 0) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ error: 'At least one ticket must be selected' });
+    }
+    
+    // Get event
+    const event = await Event.findById(eventId).session(session);
+    if (!event) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({ error: 'Event not found' });
+    }
+    
+    // Process each ticket type selection
+    let totalAmount = 0;
+    let totalTicketCount = 0;
+    let allTicketTypes = [];
+    
+    // First check availability for all ticket types
+    for (const selection of ticketSelections) {
+      const { ticketTypeId, quantity } = selection;
+      
+      if (!ticketTypeId || !quantity || quantity < 1) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({ error: 'Invalid ticket selection' });
+      }
+      
+      // Get ticket type
+      const ticketType = await TicketType.findById(ticketTypeId).session(session);
+      if (!ticketType) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(404).json({ error: `Ticket type not found: ${ticketTypeId}` });
+      }
+      
+      // Verify ticket belongs to correct event
+      if (ticketType.event.toString() !== eventId.toString()) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({ error: 'Ticket type does not belong to this event' });
+      }
+      
+      // Check if tickets are on sale
+      const now = new Date();
+      if (ticketType.startSaleDate > now || 
+          (ticketType.endSaleDate && ticketType.endSaleDate < now)) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({ 
+          error: `Tickets "${ticketType.name}" are not currently on sale`
+        });
+      }
+      
+      // Check if ticket type is active
+      if (!ticketType.isActive) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({ 
+          error: `Ticket type "${ticketType.name}" is not available`
+        });
+      }
+      
+      // Check available quantity
+      const available = ticketType.quantity - ticketType.quantitySold;
+      if (quantity > available) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({ 
+          error: `Not enough tickets available for "${ticketType.name}"`,
+          requested: quantity,
+          available
+        });
+      }
+      
+      // Add to total amount
+      totalAmount += ticketType.price * quantity;
+      totalTicketCount += quantity;
+      allTicketTypes.push({ ticketType, quantity });
+    }
+    
+    // Create booking with pending status
+    const booking = new Booking({
+      user: req.user.id,
+      event: eventId,
+      originalAmount: totalAmount,
+      totalAmount: totalAmount,
+      discountAmount: 0,
+      currency: allTicketTypes[0].ticketType.currency || 'INR',
+      status: 'pending',
+      paymentInfo: {
+        method: 'cashfree_form',
+        status: 'pending'
+      },
+      contactInformation,
+      ticketCount: totalTicketCount
+    });
+    
+    // Generate a common QR secret for all tickets in this booking
+    const commonQrSecret = crypto.randomBytes(20).toString('hex');
+    
+    // Create a single "group ticket" that represents all tickets
+    const groupTicket = new Ticket({
+      ticketNumber: `GRP-${uuidv4().substring(0, 8).toUpperCase()}`,
+      event: eventId,
+      booking: booking._id,
+      owner: req.user.id,
+      isGroupTicket: true,
+      totalTickets: totalTicketCount,
+      status: 'pending',
+      qrSecret: commonQrSecret
+    });
+    
+    await groupTicket.save({ session });
+    
+    // Create ticket details
+    const ticketDetails = [];
+    
+    for (const { ticketType, quantity } of allTicketTypes) {
+      // Update quantity sold
+      ticketType.quantitySold += quantity;
+      await ticketType.save({ session });
+      
+      // Store ticket type details for the group
+      ticketDetails.push({
+        ticketTypeId: ticketType._id,
+        name: ticketType.name,
+        price: ticketType.price,
+        currency: ticketType.currency,
+        quantity: quantity
+      });
+    }
+    
+    // Store the ticket details with the group ticket
+    groupTicket.ticketDetails = ticketDetails;
+    await groupTicket.save({ session });
+    
+    // Update booking with the group ticket
+    booking.tickets = [groupTicket._id];
+    booking.groupTicket = true;
+    await booking.save({ session });
+    
+    // Commit transaction
+    await session.commitTransaction();
+    session.endSession();
+    
+    // Get the appropriate Cashfree form URL based on the event or formType
+    let cashfreeFormUrl;
+    
+    if (formType === 'earlybird') {
+      cashfreeFormUrl = 'https://payments.cashfree.com/forms/bytebattle-earlybird';
+    } else {
+      // You can customize this logic based on your event types
+      cashfreeFormUrl = `https://payments.cashfree.com/forms/${event.cashfreeFormId || 'default-form'}`;
+    }
+    
+    // Add booking ID as a query parameter for reconciliation
+    cashfreeFormUrl = `${cashfreeFormUrl}?booking_id=${booking._id}`;
+    
+    return res.status(200).json({
+      success: true,
+      booking: {
+        id: booking._id,
+        bookingNumber: booking.bookingNumber,
+        totalAmount,
+        currency: booking.currency,
+        status: booking.status,
+        ticketCount: totalTicketCount
+      },
+      redirectUrl: cashfreeFormUrl
+    });
+    
+  } catch (error) {
+    // Ensure transaction is always aborted and session ended in case of an error
+    try {
+      await session.abortTransaction();
+      session.endSession();
+    } catch (sessionError) {
+      console.error('Error aborting transaction:', sessionError);
+    }
+    
+    console.error('Cashfree form payment initiation error:', {
+      message: error.message,
+      stack: error.stack,
+      requestBody: req.body
+    });
+    
+    res.status(500).json({ 
+      error: 'Server error when creating Cashfree form payment',
+      details: error.message 
+    });
+  }
+};
+
+/**
+ * Handle Cashfree Form Payment Webhook
+ * @route POST /api/payments/cashfree-form/webhook
+ * @access Public
+ */
+exports.handleCashfreeFormWebhook = async (req, res) => {
+  try {
+    // Log the webhook payload for debugging
+    console.log('Received Cashfree form webhook:', JSON.stringify(req.body, null, 2));
+    
+    // Validate the webhook signature if available
+    const signature = req.headers['x-webhook-signature'];
+    const webhookSecret = process.env.CASHFREE_FORM_WEBHOOK_SECRET;
+    
+    if (signature && webhookSecret) {
+      // Verify signature logic here
+      // This would depend on Cashfree's webhook signature format
+    }
+    
+    // Get booking ID from the webhook data
+    const bookingId = req.body.booking_id || 
+                     req.body.order_id || 
+                     req.body.orderId ||
+                     req.body.metadata?.booking_id;
+    
+    if (!bookingId) {
+      console.error('Missing booking ID in webhook data');
+      // Still return 200 so Cashfree doesn't retry
+      return res.status(200).json({ 
+        success: false, 
+        message: 'Missing booking ID' 
+      });
+    }
+    
+    // Get the booking
+    const booking = await Booking.findById(bookingId);
+    
+    if (!booking) {
+      console.error(`Booking not found: ${bookingId}`);
+      return res.status(200).json({ 
+        success: false, 
+        message: 'Booking not found' 
+      });
+    }
+    
+    // Get payment status from webhook
+    const paymentStatus = req.body.payment_status || 
+                          req.body.status || 
+                          req.body.order_status;
+    
+    // Update booking based on payment status
+    if (paymentStatus === 'PAID' || paymentStatus === 'SUCCESS' || paymentStatus === 'COMPLETED') {
+      // Update booking status
+      booking.status = 'confirmed';
+      booking.paymentInfo = {
+        ...booking.paymentInfo,
+        status: 'completed',
+        transactionId: req.body.transaction_id || req.body.order_id,
+        transactionDate: new Date()
+      };
+      
+      await booking.save();
+      
+      // Update ticket statuses
+      await Ticket.updateMany(
+        { booking: bookingId },
+        { status: 'active' }
+      );
+      
+      // Notify user if Notification model is available
+      try {
+        await Notification.create({
+          recipient: booking.user,
+          type: 'booking_confirmed',
+          data: {
+            bookingId: booking._id,
+            eventId: booking.event
+          },
+          timestamp: Date.now()
+        });
+        
+        // Send socket event if available
+        if (socketEvents && typeof socketEvents.emitToUser === 'function') {
+          socketEvents.emitToUser(booking.user.toString(), 'booking_confirmed', {
+            bookingId: booking._id
+          });
+        }
+        
+        // Generate and send ticket PDFs in background
+        const emailService = require('../services/emailService');
+        const tickets = await Ticket.find({ booking: booking._id });
+        
+        emailService.sendBookingConfirmation(booking, tickets).catch(err => {
+          console.error('Error sending booking confirmation email:', err);
+        });
+      } catch (notificationError) {
+        console.error('Error sending webhook notification:', notificationError);
+      }
+    } else if (paymentStatus === 'FAILED' || paymentStatus === 'FAILURE') {
+      // Update booking status to failed
+      booking.status = 'payment_failed';
+      booking.paymentInfo = {
+        ...booking.paymentInfo,
+        status: 'failed',
+        transactionId: req.body.transaction_id || req.body.order_id,
+        transactionDate: new Date()
+      };
+      
+      await booking.save();
+    }
+    
+    // Return success response
+    return res.status(200).json({ success: true });
+    
+  } catch (error) {
+    console.error('Cashfree form webhook handling error:', error);
+    
+    // Always return 200 for webhooks to prevent Cashfree from retrying
+    return res.status(200).json({ 
+      success: false, 
+      message: 'Error processing webhook' 
+    });
+  }
+};
+
+/**
+ * Handle Cashfree Form Payment Return
+ * @route GET /api/payments/cashfree-form/return
+ * @access Public
+ */
+exports.handleCashfreeFormReturn = async (req, res) => {
+  try {
+    // Get booking ID from query parameters
+    const bookingId = req.query.booking_id || req.query.order_id;
+    
+    if (!bookingId) {
+      return res.redirect('/payment-failure?error=Missing+booking+ID');
+    }
+    
+    // Get payment status from query parameters
+    const paymentStatus = req.query.payment_status || req.query.status;
+    
+    if (paymentStatus === 'SUCCESS' || paymentStatus === 'PAID') {
+      // Find the booking
+      const booking = await Booking.findById(bookingId);
+      
+      if (booking) {
+        // Update booking if needed (webhook might have already done this)
+        if (booking.status !== 'confirmed') {
+          booking.status = 'confirmed';
+          booking.paymentInfo = {
+            ...booking.paymentInfo,
+            status: 'completed',
+            transactionId: req.query.transaction_id || req.query.order_id,
+            transactionDate: new Date()
+          };
+          
+          await booking.save();
+          
+          // Update ticket statuses
+          await Ticket.updateMany(
+            { booking: bookingId },
+            { status: 'active' }
+          );
+        }
+        
+        // Redirect to success page with booking info
+        return res.redirect(`/payment-success?bookingId=${booking._id}`);
+      } else {
+        return res.redirect(`/payment-success?transactionId=${bookingId}`);
+      }
+    } else {
+      // Redirect to failure page with error
+      const errorMessage = req.query.error_message || 'Payment was not successful';
+      return res.redirect(`/payment-failure?error=${encodeURIComponent(errorMessage)}&bookingId=${bookingId}`);
+    }
+  } catch (error) {
+    console.error('Cashfree form return handling error:', error);
+    return res.redirect(`/payment-failure?error=Something+went+wrong`);
+  }
+};
+
+/**
+ * Check Cashfree Form Payment Status
+ * @route GET /api/payments/cashfree-form/status/:bookingId
+ * @access Private
+ */
+exports.checkCashfreeFormPaymentStatus = async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    
+    if (!bookingId) {
+      return res.status(400).json({ error: 'Booking ID is required' });
+    }
+    
+    // Find the booking
+    const booking = await Booking.findById(bookingId);
+    
+    if (!booking) {
+      return res.status(404).json({ error: 'Booking not found' });
+    }
+    
+    // Check if the booking belongs to the current user
+    if (booking.user.toString() !== req.user.id.toString()) {
+      return res.status(403).json({ error: 'You can only check your own booking status' });
+    }
+    
+    // Return the booking status
+    return res.json({
+      success: true,
+      status: booking.status,
+      paymentStatus: booking.paymentInfo?.status,
+      transactionId: booking.paymentInfo?.transactionId
+    });
+    
+  } catch (error) {
+    console.error('Check Cashfree form payment status error:', error);
+    res.status(500).json({ error: 'Server error when checking payment status' });
+  }
+};
   module.exports = exports;
