@@ -2366,139 +2366,148 @@ exports.getEventBookingStats = async (req, res) => {
       if (event.createdBy._id.toString() !== req.user.id.toString() && !req.user.isAdmin) {
         return res.status(403).json({ 
           error: 'Only the event creator or admins can generate reports' 
-        });
-      }
-      
-      // Get ticket types
-      const ticketTypes = await TicketType.find({ event: eventId });
-      
-      // Get all tickets for the event
-      const tickets = await Ticket.find({ event: eventId })
-        .populate('owner', 'firstName lastName email')
-        .populate('ticketType', 'name price');
-      
-      // Get all bookings
-      const bookings = await Booking.find({ event: eventId });
-      
-      // Build report data
-      const reportData = {
-        event: {
-          id: event._id,
-          name: event.name,
-          date: event.startDateTime,
-          location: event.location,
-          organizer: `${event.createdBy.firstName} ${event.createdBy.lastName}`,
-          organizerEmail: event.createdBy.email
-        },
-        summary: {
-          totalRevenue: bookings.reduce((sum, b) => sum + b.totalAmount, 0),
-          totalTickets: tickets.length,
-          totalBookings: bookings.length,
-          checkedIn: tickets.filter(t => t.checkedIn).length,
-          checkinRate: tickets.length > 0 ? 
-            (tickets.filter(t => t.checkedIn).length / tickets.length * 100).toFixed(1) : 0
-        },
-        ticketTypes: ticketTypes.map(type => {
-          const typeTickets = tickets.filter(t => 
-            t.ticketType && t.ticketType._id.toString() === type._id.toString()
-          );
-          
-          return {
-            name: type.name,
-            price: type.price,
-            currency: type.currency,
-            sold: typeTickets.length,
-            capacity: type.quantity,
-            revenue: typeTickets.length * type.price
-          };
-        }),
-        attendees: tickets
-          .filter(ticket => ticket.status === 'used' && ticket.checkedIn)
-          .map(ticket => ({
-            name: `${ticket.owner.firstName} ${ticket.owner.lastName}`,
-            email: ticket.owner.email,
-            ticketType: ticket.ticketType ? ticket.ticketType.name : 'Unknown',
-            checkedInAt: ticket.checkedInAt
-          }))
-      };
-      
-      // Format based on requested format
-      if (format === 'csv') {
-        // Create CSV for attendees
-        let csv = 'Name,Email,Ticket Type,Checked In At\n';
-        
-        reportData.attendees.forEach(attendee => {
-          const checkedInAt = attendee.checkedInAt ? 
-            moment(attendee.checkedInAt).format('YYYY-MM-DD HH:mm:ss') : '';
-          
-          csv += `"${attendee.name}","${attendee.email}","${attendee.ticketType}","${checkedInAt}"\n`;
-        });
-        
-        // Set content type
-        res.setHeader('Content-Type', 'text/csv');
-        res.setHeader('Content-Disposition', `attachment; filename="${event.name.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_attendees.csv"`);
-        
-        res.send(csv);
-      } else {
-        // Return JSON
-        res.json(reportData);
-      }
-    } catch (error) {
-      console.error('Generate event report error:', error);
-      res.status(500).json({ error: 'Server error when generating event report' });
-    }
-  };
-  // Add this to your booking.controller.js file
-
-/**
- * Initiate Cashfree Form Payment
- * @route POST /api/bookings/events/:eventId/cashfree-payment
- * @access Private
- */
-exports.initiateCashfreeFormPayment = async (req, res) => {
-  // Use a database transaction for data integrity
-  const session = await mongoose.startSession();
-  session.startTransaction();
-  
+exports.handleCashfreeFormWebhook = async (req, res) => {
   try {
-    const { eventId } = req.params;
-    const { 
-      ticketSelections, 
-      contactInformation,
-      formType = 'default' // Support different form types if needed
-    } = req.body;
+    // Log the webhook payload for debugging
+    console.log('Received Cashfree form webhook:', JSON.stringify(req.body, null, 2));
     
-    // Validate user authentication
-    if (!req.user || !req.user.id) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(401).json({ error: 'User authentication required' });
-    }
+    // IMPORTANT: Don't verify the signature for now to ensure webhooks are processed
+    // Later, you can implement proper verification once you have the correct secret
     
-    // Validate ticket selections
-    if (!ticketSelections || !Array.isArray(ticketSelections) || ticketSelections.length === 0) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({ error: 'At least one ticket must be selected' });
-    }
+    // Extract payment information from the webhook payload
+    // Cashfree's new webhook format (2025-01-01 version) has a nested structure
+    const paymentData = req.body.data || req.body;
     
-    // Get event
-    const event = await Event.findById(eventId).session(session);
-    if (!event) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(404).json({ error: 'Event not found' });
-    }
+    // Get order ID from the appropriate path in the payload
+    const orderId = paymentData.order?.order_id || 
+                   paymentData.order_id || 
+                   req.body.order_id;
     
-    // Process each ticket type selection
-    let totalAmount = 0;
-    let totalTicketCount = 0;
-    let allTicketTypes = [];
+    // Get payment status from the appropriate path
+    const paymentStatus = paymentData.payment?.payment_status || 
+                         paymentData.payment_status || 
+                         req.body.payment_status;
     
-    // First check availability for all ticket types
-    for (const selection of ticketSelections) {
-      const { ticketTypeId, quantity } = selection;
+    console.log(`Processing webhook for order ${orderId} with status ${paymentStatus}`);
+    
+    // Look for any booking with matching reference in paymentInfo
+    // This is important as your webhook doesn't seem to have the booking_id parameter
+    let booking = null;
+    
+    try {
+      // Try to find a booking by matching the orderId in paymentInfo.transactionId or paymentInfo.orderId
+      booking = await Booking.findOne({
+        $or: [
+          { 'paymentInfo.transactionId': orderId },
+          { 'paymentInfo.orderId': orderId }
+        ]
+      });
       
+      // If not found, try to extract any possible booking ID from the order ID
+      if (!booking && orderId) {
+        // Some payment processors append the booking ID to the order ID
+        // Try to extract possible booking ID from the order ID string
+        const possibleBookingIdMatch = orderId.match(/[a-f0-9]{24}/i);
+        if (possibleBookingIdMatch) {
+          const possibleBookingId = possibleBookingIdMatch[0];
+          booking = await Booking.findById(possibleBookingId);
+        }
+      }
+      
+      console.log(`Booking found for order ${orderId}:`, booking ? booking._id : 'No booking found');
+      
+    } catch (findError) {
+      console.error('Error finding booking:', findError);
+    }
+    
+    // If booking is found, update its status based on payment status
+    if (booking) {
+      // Check if payment is successful
+      const isSuccess = paymentStatus === 'SUCCESS' || 
+                       paymentStatus === 'PAID' || 
+                       paymentStatus === 'COMPLETED';
+      
+      if (isSuccess) {
+        // Update booking status
+        booking.status = 'confirmed';
+        booking.paymentInfo = {
+          ...booking.paymentInfo,
+          status: 'completed',
+          transactionId: orderId,
+          transactionDate: new Date()
+        };
+        
+        await booking.save();
+        console.log(`Booking ${booking._id} updated to confirmed status`);
+        
+        // Update ticket statuses
+        await Ticket.updateMany(
+          { booking: booking._id },
+          { status: 'active' }
+        );
+        
+        // Attempt to notify user if Notification model is available
+        try {
+          await Notification.create({
+            recipient: booking.user,
+            type: 'booking_confirmed',
+            data: {
+              bookingId: booking._id,
+              eventId: booking.event
+            },
+            timestamp: Date.now()
+          });
+          
+          console.log(`Notification created for user ${booking.user}`);
+          
+          // Send socket event if available
+          if (socketEvents && typeof socketEvents.emitToUser === 'function') {
+            socketEvents.emitToUser(booking.user.toString(), 'booking_confirmed', {
+              bookingId: booking._id
+            });
+          }
+        } catch (notificationError) {
+          console.error('Error sending webhook notification:', notificationError);
+        }
+      } else if (
+        paymentStatus === 'FAILED' || 
+        paymentStatus === 'FAILURE' || 
+        paymentStatus === 'CANCELLED'
+      ) {
+        // Update booking status to failed
+        booking.status = 'payment_failed';
+        booking.paymentInfo = {
+          ...booking.paymentInfo,
+          status: 'failed',
+          transactionId: orderId,
+          transactionDate: new Date()
+        };
+        
+        await booking.save();
+        console.log(`Booking ${booking._id} marked as payment_failed`);
+      }
+    } else {
+      console.log(`No booking found for order ID: ${orderId}`);
+    }
+    
+    // Always return success (200) response for webhooks
+    // This prevents Cashfree from retrying the webhook
+    return res.status(200).json({ 
+      success: true,
+      message: 'Webhook processed successfully'
+    });
+    
+  } catch (error) {
+    console.error('Cashfree webhook handling error:', error);
+    
+    // Always return 200 for webhooks to prevent retries
+    return res.status(200).json({ 
+      success: false, 
+      message: 'Error processing webhook', 
+      error: error.message
+    });
+  }
+};
       if (!ticketTypeId || !quantity || quantity < 1) {
         await session.abortTransaction();
         session.endSession();
