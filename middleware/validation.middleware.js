@@ -52,7 +52,52 @@ exports.userValidationRules = () => {
       .withMessage('Last name is required')
   ];
 };
-
+// Add to validation.middleware.js
+exports.couponValidationRules = () => {
+  const { body } = require('express-validator');
+  
+  return [
+    body('code')
+      .notEmpty()
+      .withMessage('Coupon code is required')
+      .isString()
+      .withMessage('Coupon code must be a string')
+      .trim()
+      .isLength({ min: 4, max: 20 })
+      .withMessage('Coupon code must be between 4-20 characters'),
+      
+    body('name')
+      .notEmpty()
+      .withMessage('Coupon name is required')
+      .isString()
+      .withMessage('Coupon name must be a string'),
+      
+    body('discountPercentage')
+      .isFloat({ min: 1, max: 100 })
+      .withMessage('Discount percentage must be between 1-100'),
+      
+    body('maxUses')
+      .optional()
+      .isInt({ min: 1 })
+      .withMessage('Max uses must be a positive number'),
+      
+    body('validFrom')
+      .optional()
+      .isISO8601()
+      .withMessage('Invalid valid from date format'),
+      
+    body('validUntil')
+      .optional()
+      .isISO8601()
+      .withMessage('Invalid valid until date format')
+      .custom((value, { req }) => {
+        if (req.body.validFrom && new Date(value) <= new Date(req.body.validFrom)) {
+          throw new Error('Valid until date must be after valid from date');
+        }
+        return true;
+      })
+  ];
+};
 /**
  * Post validation rules
  */
