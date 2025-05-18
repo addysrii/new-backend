@@ -2686,15 +2686,17 @@ exports.handleCashfreeFormWebhook = async (req, res) => {
     const webhookSecret = process.env.CASHFREE_FORM_WEBHOOK_SECRET;
     
     if (signature && webhookSecret) {
-      // Verify signature logic here
+      // Verify signature logic here based on Cashfree's documentation
       // This would depend on Cashfree's webhook signature format
     }
     
     // Get booking ID from the webhook data
+    // Check all possible fields where booking ID might be stored
     const bookingId = req.body.booking_id || 
-                     req.body.order_id || 
-                     req.body.orderId ||
-                     req.body.metadata?.booking_id;
+                      req.body.order_id || 
+                      req.body.orderId ||
+                      req.body.metadata?.booking_id ||
+                      req.body.txnReference;
     
     if (!bookingId) {
       console.error('Missing booking ID in webhook data');
@@ -2717,18 +2719,25 @@ exports.handleCashfreeFormWebhook = async (req, res) => {
     }
     
     // Get payment status from webhook
+    // Check all possible fields where payment status might be stored
     const paymentStatus = req.body.payment_status || 
                           req.body.status || 
-                          req.body.order_status;
+                          req.body.order_status ||
+                          req.body.txStatus;
     
     // Update booking based on payment status
-    if (paymentStatus === 'PAID' || paymentStatus === 'SUCCESS' || paymentStatus === 'COMPLETED') {
+    if (paymentStatus === 'PAID' || 
+        paymentStatus === 'SUCCESS' || 
+        paymentStatus === 'COMPLETED' ||
+        paymentStatus === 'success' ||
+        paymentStatus === 'OK') {
+      
       // Update booking status
       booking.status = 'confirmed';
       booking.paymentInfo = {
         ...booking.paymentInfo,
         status: 'completed',
-        transactionId: req.body.transaction_id || req.body.order_id,
+        transactionId: req.body.transaction_id || req.body.order_id || req.body.txnReference,
         transactionDate: new Date()
       };
       
@@ -2769,13 +2778,17 @@ exports.handleCashfreeFormWebhook = async (req, res) => {
       } catch (notificationError) {
         console.error('Error sending webhook notification:', notificationError);
       }
-    } else if (paymentStatus === 'FAILED' || paymentStatus === 'FAILURE') {
+    } else if (paymentStatus === 'FAILED' || 
+               paymentStatus === 'FAILURE' || 
+               paymentStatus === 'CANCELLED' ||
+               paymentStatus === 'failed' ||
+               paymentStatus === 'cancelled') {
       // Update booking status to failed
       booking.status = 'payment_failed';
       booking.paymentInfo = {
         ...booking.paymentInfo,
         status: 'failed',
-        transactionId: req.body.transaction_id || req.body.order_id,
+        transactionId: req.body.transaction_id || req.body.order_id || req.body.txnReference,
         transactionDate: new Date()
       };
       
