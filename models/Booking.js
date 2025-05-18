@@ -315,25 +315,72 @@ const BookingSchema = new Schema({
   }
 });
 
-BookingSchema.index({ user: 1, event: 1 });
-BookingSchema.index({ bookingNumber: 1 });
-TicketSchema.index({ ticketNumber: 1 });
-TicketSchema.index({ owner: 1 });
-TicketSchema.index({ event: 1, status: 1 });
-
-// Set updatedAt automatically
-BookingSchema.pre('save', function(next) {
-  this.updatedAt = Date.now();
-  next();
+const CouponSchema = new Schema({
+  code: {
+    type: String,
+    required: true,
+    unique: true,
+    uppercase: true,
+    trim: true
+  },
+  name: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  discountPercentage: {
+    type: Number,
+    required: true,
+    min: 1,
+    max: 100
+  },
+  event: {
+    type: Schema.Types.ObjectId,
+    ref: 'Event',
+    required: true
+  },
+  maxUses: {
+    type: Number,
+    default: null // null means unlimited uses
+  },
+  currentUses: {
+    type: Number,
+    default: 0
+  },
+  validFrom: {
+    type: Date,
+    default: Date.now
+  },
+  validUntil: {
+    type: Date
+  },
+  isActive: {
+    type: Boolean,
+    default: true
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now
+  },
+  createdBy: {
+    type: Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  }
 });
 
-// Create models
+// Add index for faster lookups
+CouponSchema.index({ code: 1, event: 1 });
+CouponSchema.index({ event: 1, isActive: 1 });
+
 const TicketType = mongoose.model('TicketType', TicketTypeSchema);
 const Ticket = mongoose.model('Ticket', TicketSchema);
 const Booking = mongoose.model('Booking', BookingSchema);
-
+const Coupon = mongoose.model('Coupon', CouponSchema);
+// Add to exports at the bottom
 module.exports = {
   TicketType,
   Ticket,
-  Booking
+  Booking,
+  Coupon
 };
