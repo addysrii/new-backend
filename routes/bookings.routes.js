@@ -3,7 +3,7 @@ const router = express.Router();
 const bookingController = require('../controllers/booking.controller');
 const { authenticateToken } = require('../middleware/auth.middleware');
 const { validate, ticketTypeValidationRules, bookingValidationRules, 
-        ticketCheckInValidationRules, ticketTransferValidationRules } = require('../middleware/validation.middleware');
+        ticketCheckInValidationRules, ticketTransferValidationRules, couponValidationRules  } = require('../middleware/validation.middleware');
 
 // Debug route - no auth required
 router.get('/debug', (req, res) => {
