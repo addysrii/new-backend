@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const jwt = require('jsonwebtoken');
 const upiController = require('../controllers/upi.controller');
+const bookingController = require("../controllers/booking.controller");
 // Create logs directory if it doesn't exist
 const logDir = path.join(__dirname, '..', 'logs');
 if (!fs.existsSync(logDir)) {
@@ -162,7 +163,18 @@ router.get('/phonepe/status/:transactionId', catchErrors(paymentController.check
 
 // PhonePe refund endpoint
 router.post('/phonepe/refund', catchErrors(paymentController.refundPhonePePayment));
+router.post('/cashfree-form/webhook', 
+  bookingController.handleCashfreeFormWebhook
+);
 
+router.get('/cashfree-form/return', 
+  bookingController.handleCashfreeFormReturn
+);
+
+router.get('/cashfree-form/status/:bookingId', 
+  authenticateToken,
+  bookingController.checkCashfreeFormPaymentStatus
+);
 
 // Add UPI routes
 router.use('/upi', require('./upi.routes'));
