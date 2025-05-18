@@ -184,4 +184,5 @@ router.get('/cashfree-form/status/:bookingId',
   authenticateToken,
   bookingController.checkCashfreeFormPaymentStatus
 );
+router.get('/cashfree-redirect', bookingController.handleCashfreeRedirect);
 module.exports = router;
