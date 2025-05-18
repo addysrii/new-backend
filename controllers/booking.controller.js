@@ -2679,7 +2679,88 @@ exports.handleCashfreeFormWebhook = async (req, res) => {
     });
   }
 };
-
+exports.handleCashfreeRedirect = async (req, res) => {
+  try {
+    console.log('Received Cashfree redirect with query:', req.query);
+    
+    // Extract relevant information from query params
+    const orderId = req.query.order_id || req.query.orderId;
+    const paymentId = req.query.payment_id || req.query.cf_payment_id;
+    const status = req.query.payment_status || req.query.txStatus || req.query.status;
+    
+    // Successful payment
+    if (status === 'SUCCESS' || status === 'PAID' || status === 'OK') {
+      console.log(`Successful payment detected for order: ${orderId}`);
+      
+      // Find booking by order ID
+      let booking = null;
+      
+      try {
+        booking = await Booking.findOne({
+          $or: [
+            { 'paymentInfo.transactionId': orderId },
+            { 'paymentInfo.orderId': orderId }
+          ]
+        });
+        
+        if (booking) {
+          // Update booking if needed
+          if (booking.status !== 'confirmed') {
+            booking.status = 'confirmed';
+            booking.paymentInfo = {
+              ...booking.paymentInfo,
+              status: 'completed',
+              transactionId: orderId || paymentId,
+              transactionDate: new Date()
+            };
+            
+            await booking.save();
+            
+            // Update ticket statuses
+            await Ticket.updateMany(
+              { booking: booking._id },
+              { status: 'active' }
+            );
+          }
+          
+          // Redirect to success page with booking ID
+          return res.redirect(`/payment-success/${booking._id}`);
+        }
+      } catch (findError) {
+        console.error('Error finding booking:', findError);
+      }
+      
+      // If no booking found, still redirect to success page
+      return res.redirect('/payment-success/success');
+    } 
+    // Failed payment
+    else if (status === 'FAILED' || status === 'FAILURE' || status === 'CANCELLED') {
+      console.log(`Failed payment detected for order: ${orderId}`);
+      
+      // Get error message
+      const errorMessage = req.query.error_message || 
+                          req.query.txMsg || 
+                          'Payment failed or was cancelled';
+      
+      // Construct redirect URL with error parameters
+      let redirectUrl = `/payment-failure?error=${encodeURIComponent(errorMessage)}`;
+      
+      if (orderId) {
+        redirectUrl += `&orderId=${encodeURIComponent(orderId)}`;
+      }
+      
+      return res.redirect(redirectUrl);
+    } 
+    // Unknown status
+    else {
+      console.log(`Unknown payment status for order: ${orderId}, status: ${status}`);
+      return res.redirect(`/payment-response?order_id=${orderId || ''}&status=${status || ''}`);
+    }
+  } catch (error) {
+    console.error('Error handling Cashfree redirect:', error);
+    return res.redirect(`/payment-failure?error=${encodeURIComponent('Error processing payment redirect')}`);
+  }
+};
 /**
  * Handle Cashfree Form Payment Webhook
  * @route POST /api/payments/cashfree-form/webhook
