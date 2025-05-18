@@ -5,7 +5,7 @@ const path = require('path');
 const jwt = require('jsonwebtoken');
 const upiController = require('../controllers/upi.controller');
 const bookingController = require("../controllers/booking.controller")
-const authenticateToken = require("../middleware/auth.middleware")
+const { authenticateToken } = require('../middleware/auth.middleware');
 // Create logs directory if it doesn't exist
 const logDir = path.join(__dirname, '..', 'logs');
 if (!fs.existsSync(logDir)) {
