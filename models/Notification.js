@@ -11,6 +11,7 @@ const notificationSchema = new Schema({
   type: {
     type: String,
     enum: [
+      'custom_form_submission',
       'post_reaction',
       'post_comment',
       'comment_reply',
