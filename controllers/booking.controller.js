@@ -1284,6 +1284,335 @@ exports.checkInTicket = async (req, res) => {
    * @route POST /api/bookings/tickets/:ticketId/transfer
    * @access Private
    */
+// Add to your booking.controller.js
+
+/**
+ * Create a coupon
+ * @route POST /api/bookings/events/:eventId/coupons
+ * @access Private (Creator only)
+ */
+exports.createCoupon = async (req, res) => {
+  try {
+    const { eventId } = req.params;
+    const {
+      code,
+      name,
+      discountPercentage,
+      maxUses,
+      validFrom,
+      validUntil
+    } = req.body;
+    
+    // Check if event exists
+    const event = await Event.findById(eventId);
+    if (!event) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+    
+    // Verify user has permission (only creator can create coupons)
+    if (event.createdBy.toString() !== req.user.id.toString()) {
+      return res.status(403).json({ 
+        error: 'Only the event creator can create coupons' 
+      });
+    }
+    
+    // Check if coupon code already exists for this event
+    const existingCoupon = await Coupon.findOne({ 
+      code: code.toUpperCase(), 
+      event: eventId 
+    });
+    
+    if (existingCoupon) {
+      return res.status(400).json({ 
+        error: 'Coupon code already exists for this event' 
+      });
+    }
+    
+    // Create new coupon
+    const coupon = new Coupon({
+      code: code.toUpperCase(),
+      name,
+      discountPercentage,
+      maxUses: maxUses || null,
+      validFrom: validFrom || new Date(),
+      validUntil: validUntil || null,
+      event: eventId,
+      createdBy: req.user.id
+    });
+    
+    await coupon.save();
+    
+    res.status(201).json(coupon);
+  } catch (error) {
+    console.error('Create coupon error:', error);
+    res.status(500).json({ 
+      error: 'Server error when creating coupon',
+      details: error.message 
+    });
+  }
+};
+
+/**
+ * Update a coupon
+ * @route PUT /api/bookings/coupons/:couponId
+ * @access Private (Creator only)
+ */
+exports.updateCoupon = async (req, res) => {
+  try {
+    const { couponId } = req.params;
+    const updateData = req.body;
+    
+    // Get coupon
+    const coupon = await Coupon.findById(couponId);
+    if (!coupon) {
+      return res.status(404).json({ error: 'Coupon not found' });
+    }
+    
+    // Get event to verify permissions
+    const event = await Event.findById(coupon.event);
+    if (!event) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+    
+    // Verify user has permission (only creator can update coupons)
+    if (event.createdBy.toString() !== req.user.id.toString()) {
+      return res.status(403).json({ 
+        error: 'Only the event creator can update coupons' 
+      });
+    }
+    
+    // Don't allow updating code if coupon has been used
+    if (updateData.code && coupon.currentUses > 0) {
+      return res.status(400).json({ 
+        error: 'Cannot change code of a coupon that has been used' 
+      });
+    }
+    
+    // Update fields
+    const allowedUpdates = [
+      'name', 'discountPercentage', 'maxUses', 
+      'validFrom', 'validUntil', 'isActive'
+    ];
+    
+    allowedUpdates.forEach(field => {
+      if (updateData[field] !== undefined) {
+        coupon[field] = updateData[field];
+      }
+    });
+    
+    // If updating code, ensure it's unique
+    if (updateData.code) {
+      const existingCoupon = await Coupon.findOne({ 
+        code: updateData.code.toUpperCase(), 
+        event: coupon.event,
+        _id: { $ne: coupon._id }
+      });
+      
+      if (existingCoupon) {
+        return res.status(400).json({ 
+          error: 'Coupon code already exists for this event' 
+        });
+      }
+      
+      coupon.code = updateData.code.toUpperCase();
+    }
+    
+    await coupon.save();
+    
+    res.json(coupon);
+  } catch (error) {
+    console.error('Update coupon error:', error);
+    res.status(500).json({ 
+      error: 'Server error when updating coupon',
+      details: error.message 
+    });
+  }
+};
+
+/**
+ * Get coupons for an event
+ * @route GET /api/bookings/events/:eventId/coupons
+ * @access Private (Creator only)
+ */
+exports.getEventCoupons = async (req, res) => {
+  try {
+    const { eventId } = req.params;
+    
+    // Check if event exists
+    const event = await Event.findById(eventId);
+    if (!event) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+    
+    // Verify user has permission (only creator can view coupons)
+    if (event.createdBy.toString() !== req.user.id.toString()) {
+      return res.status(403).json({ 
+        error: 'Only the event creator can view coupons' 
+      });
+    }
+    
+    // Get coupons for this event
+    const coupons = await Coupon.find({ event: eventId })
+      .sort({ createdAt: -1 });
+    
+    res.json(coupons);
+  } catch (error) {
+    console.error('Get event coupons error:', error);
+    res.status(500).json({ 
+      error: 'Server error when retrieving coupons',
+      details: error.message 
+    });
+  }
+};
+
+/**
+ * Get coupon usage stats
+ * @route GET /api/bookings/coupons/:couponId/stats
+ * @access Private (Creator only)
+ */
+exports.getCouponStats = async (req, res) => {
+  try {
+    const { couponId } = req.params;
+    
+    // Get coupon
+    const coupon = await Coupon.findById(couponId);
+    if (!coupon) {
+      return res.status(404).json({ error: 'Coupon not found' });
+    }
+    
+    // Get event to verify permissions
+    const event = await Event.findById(coupon.event);
+    if (!event) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+    
+    // Verify user has permission (only creator can view stats)
+    if (event.createdBy.toString() !== req.user.id.toString()) {
+      return res.status(403).json({ 
+        error: 'Only the event creator can view coupon stats' 
+      });
+    }
+    
+    // Get bookings that used this coupon
+    const bookings = await Booking.find({
+      'promoCode.code': coupon.code
+    })
+    .select('bookingNumber totalAmount discountAmount createdAt')
+    .sort({ createdAt: -1 });
+    
+    // Calculate total discount given
+    const totalDiscount = bookings.reduce((sum, booking) => {
+      return sum + (booking.discountAmount || 0);
+    }, 0);
+    
+    res.json({
+      coupon: {
+        id: coupon._id,
+        code: coupon.code,
+        name: coupon.name,
+        discountPercentage: coupon.discountPercentage,
+        maxUses: coupon.maxUses,
+        currentUses: coupon.currentUses,
+        remainingUses: coupon.maxUses ? coupon.maxUses - coupon.currentUses : null,
+        isActive: coupon.isActive,
+        validFrom: coupon.validFrom,
+        validUntil: coupon.validUntil
+      },
+      stats: {
+        totalUses: coupon.currentUses,
+        totalDiscount,
+        bookings: bookings.length,
+        averageDiscount: bookings.length > 0 
+          ? totalDiscount / bookings.length 
+          : 0
+      },
+      recentBookings: bookings.slice(0, 10) // Show last 10 uses
+    });
+  } catch (error) {
+    console.error('Get coupon stats error:', error);
+    res.status(500).json({ 
+      error: 'Server error when retrieving coupon stats',
+      details: error.message 
+    });
+  }
+};
+
+/**
+ * Validate and apply coupon to booking
+ * @route POST /api/bookings/events/:eventId/validate-coupon
+ * @access Private
+ */
+exports.validateCoupon = async (req, res) => {
+  try {
+    const { eventId } = req.params;
+    const { couponCode } = req.body;
+    
+    if (!couponCode) {
+      return res.status(400).json({ error: 'Coupon code is required' });
+    }
+    
+    // Get event
+    const event = await Event.findById(eventId);
+    if (!event) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+    
+    // Find coupon (case insensitive search)
+    const coupon = await Coupon.findOne({ 
+      code: couponCode.toUpperCase(),
+      event: eventId
+    });
+    
+    if (!coupon) {
+      return res.status(404).json({ error: 'Coupon not found' });
+    }
+    
+    // Check if coupon is active
+    if (!coupon.isActive) {
+      return res.status(400).json({ error: 'This coupon is not active' });
+    }
+    
+    // Check validity dates
+    const now = new Date();
+    if (coupon.validFrom > now) {
+      return res.status(400).json({ 
+        error: 'This coupon is not valid yet',
+        validFrom: coupon.validFrom
+      });
+    }
+    
+    if (coupon.validUntil && coupon.validUntil < now) {
+      return res.status(400).json({ 
+        error: 'This coupon has expired',
+        validUntil: coupon.validUntil
+      });
+    }
+    
+    // Check max uses
+    if (coupon.maxUses && coupon.currentUses >= coupon.maxUses) {
+      return res.status(400).json({ 
+        error: 'This coupon has reached its maximum usage limit'
+      });
+    }
+    
+    // Return coupon details (without applying it yet)
+    res.json({
+      valid: true,
+      coupon: {
+        id: coupon._id,
+        code: coupon.code,
+        name: coupon.name,
+        discountPercentage: coupon.discountPercentage
+      }
+    });
+  } catch (error) {
+    console.error('Validate coupon error:', error);
+    res.status(500).json({ 
+      error: 'Server error when validating coupon',
+      details: error.message 
+    });
+  }
+};
   exports.transferTicket = async (req, res) => {
     try {
       const { ticketId } = req.params;
