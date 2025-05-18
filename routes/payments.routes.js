@@ -4,7 +4,8 @@ const fs = require('fs');
 const path = require('path');
 const jwt = require('jsonwebtoken');
 const upiController = require('../controllers/upi.controller');
-const bookingController = require('../controllers/booking.controller')
+const bookingController = require("../controllers/booking.controller")
+import { authenticateToken } from '../middleware/auth.middleware';
 // Create logs directory if it doesn't exist
 const logDir = path.join(__dirname, '..', 'logs');
 if (!fs.existsSync(logDir)) {
@@ -163,6 +164,14 @@ router.get('/phonepe/status/:transactionId', catchErrors(paymentController.check
 
 // PhonePe refund endpoint
 router.post('/phonepe/refund', catchErrors(paymentController.refundPhonePePayment));
+
+
+// Add UPI routes
+router.use('/upi', require('./upi.routes'));
+
+// Webhook route (no authentication required for webhooks)
+router.post('/cashfree/webhook', upiController.handleCashfreeWebhook);
+log('All payment routes registered successfully');
 router.post('/cashfree-form/webhook', 
   bookingController.handleCashfreeFormWebhook
 );
@@ -175,12 +184,4 @@ router.get('/cashfree-form/status/:bookingId',
   authenticateToken,
   bookingController.checkCashfreeFormPaymentStatus
 );
-
-// Add UPI routes
-router.use('/upi', require('./upi.routes'));
-
-// Webhook route (no authentication required for webhooks)
-router.post('/cashfree/webhook', upiController.handleCashfreeWebhook);
-log('All payment routes registered successfully');
-
 module.exports = router;
