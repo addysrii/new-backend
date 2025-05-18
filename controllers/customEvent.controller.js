@@ -85,65 +85,50 @@ exports.createCustomEventForm = async (req, res) => {
  * @route PUT /api/events/:eventId/custom-form/:formId
  * @access Private
  */
+// controllers/customEventController.js
 exports.updateCustomEventForm = async (req, res) => {
   try {
     const { eventId, formId } = req.params;
-    const { 
-      title, 
-      description, 
-      sections, 
-      fields, 
-      settings 
-    } = req.body;
-    
-    // Check if event exists
-    const event = await Event.findById(eventId);
-    if (!event) {
-      return res.status(404).json({ error: 'Event not found' });
-    }
-    
-    // Verify user is creator or host
-    const isCreator = event.createdBy.toString() === req.user.id.toString();
-    const isHost = event.attendees.some(a => 
-      a.user.toString() === req.user.id && a.role === 'host'
-    );
-    
-    if (!isCreator && !isHost) {
-      return res.status(403).json({ 
-        error: 'Only the event creator or hosts can update custom forms' 
+    const formData = req.body;
+
+    // Validate request
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        errors: errors.array(),
+        data: null
       });
     }
-    
-    // Find the form
-    const customForm = await CustomEventForm.findOne({ 
-      _id: formId,
-      event: eventId 
-    });
-    
-    if (!customForm) {
-      return res.status(404).json({ error: 'Custom form not found' });
+
+    // Find and update form
+    const updatedForm = await CustomEventForm.findOneAndUpdate(
+      { _id: formId, event: eventId },
+      formData,
+      { new: true, runValidators: true }
+    );
+
+    if (!updatedForm) {
+      return res.status(404).json({
+        success: false,
+        error: 'Form not found',
+        data: null
+      });
     }
-    
-    // Update form fields
-    if (title) customForm.title = title;
-    if (description !== undefined) customForm.description = description;
-    if (sections) customForm.sections = sections;
-    if (fields) customForm.fields = fields;
-    if (settings) {
-      // Merge settings rather than replace
-      customForm.settings = { ...customForm.settings, ...settings };
-    }
-    
-    await customForm.save();
-    
-    res.json({
+
+    return res.json({
       success: true,
-      form: customForm
+      data: updatedForm,
+      error: null
     });
-    
+
   } catch (error) {
-    console.error('Update custom event form error:', error);
-    res.status(500).json({ error: 'Server error when updating custom event form' });
+    console.error('Update error:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Server error',
+      data: null
+    });
   }
 };
 
