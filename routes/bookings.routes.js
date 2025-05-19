@@ -73,8 +73,5 @@ router.get('/tickets/:ticketId/pdf', authenticateToken, bookingController.downlo
 router.get('/events/:eventId/tickets', authenticateToken, bookingController.getEventTickets);
 router.get('/events/:eventId/stats', authenticateToken, bookingController.getEventBookingStats);
 router.get('/events/:eventId/report', authenticateToken, bookingController.generateEventReport);
-router.post('/events/:eventId/cashfree-payment', 
-  authenticateToken, 
-  bookingController.initiateCashfreeFormPayment
-);
+
 module.exports = router;
