@@ -279,7 +279,9 @@ const BookingSchema = new Schema({
         'free', 
         'phonepe',
         'upi',     // Ensure UPI is properly included
-        'pending'
+        'pending',
+        'cashfree', 
+        'cashfree_sdk'
       ]
     },
     transactionId: String,
