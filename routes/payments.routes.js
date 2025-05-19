@@ -1,11 +1,10 @@
+// routes/payments.routes.js
 const express = require('express');
 const router = express.Router();
 const fs = require('fs');
 const path = require('path');
-const jwt = require('jsonwebtoken');
-const upiController = require('../controllers/upi.controller');
-const bookingController = require("../controllers/booking.controller")
 const { authenticateToken } = require('../middleware/auth.middleware');
+
 // Create logs directory if it doesn't exist
 const logDir = path.join(__dirname, '..', 'logs');
 if (!fs.existsSync(logDir)) {
@@ -23,36 +22,52 @@ const log = (message, data = null) => {
   );
 };
 
-// Import controller directly
-let paymentController;
+// Import controllers
+log('Importing payment controllers');
+
+// Import UPI controller
+let upiController;
 try {
-  log('Importing phonepe.controller directly');
-  paymentController = require('../controllers/phonepe.controller');
+  upiController = require('../controllers/upi.controller');
+  log('Successfully imported upi.controller');
+} catch (error) {
+  log('Failed to import upi.controller', { error: error.message });
+  upiController = {
+    initiateUpiPayment: (req, res) => res.status(500).json({ error: 'UPI payment controller not available' }),
+    verifyUpiPayment: (req, res) => res.status(500).json({ error: 'UPI payment controller not available' }),
+    checkUpiPaymentStatus: (req, res) => res.status(500).json({ error: 'UPI payment controller not available' }),
+    handleCashfreeWebhook: (req, res) => res.status(500).json({ error: 'UPI payment controller not available' })
+  };
+}
+
+// Import PhonePe controller
+let phonepeController;
+try {
+  phonepeController = require('../controllers/phonepe.controller');
   log('Successfully imported phonepe.controller');
 } catch (error) {
   log('Failed to import phonepe.controller', { error: error.message });
-  // Create fallback controller with dummy methods
-  paymentController = {
-    initiatePhonePePayment: (req, res) => {
-      log('Dummy initiatePhonePePayment called');
-      res.status(500).json({ error: 'Payment controller not properly initialized' });
-    },
-    checkPhonePePaymentStatus: (req, res) => {
-      log('Dummy checkPhonePePaymentStatus called');
-      res.status(500).json({ error: 'Payment controller not properly initialized' });
-    },
-    handlePhonePeCallback: (req, res) => {
-      log('Dummy handlePhonePeCallback called');
-      res.status(500).json({ error: 'Payment controller not properly initialized' });
-    },
-    handlePhonePeRedirect: (req, res) => {
-      log('Dummy handlePhonePeRedirect called');
-      res.status(500).json({ error: 'Payment controller not properly initialized' });
-    },
-    refundPhonePePayment: (req, res) => {
-      log('Dummy refundPhonePePayment called');
-      res.status(500).json({ error: 'Payment controller not properly initialized' });
-    }
+  phonepeController = {
+    initiatePhonePePayment: (req, res) => res.status(500).json({ error: 'PhonePe payment controller not available' }),
+    checkPhonePePaymentStatus: (req, res) => res.status(500).json({ error: 'PhonePe payment controller not available' }),
+    handlePhonePeCallback: (req, res) => res.status(500).json({ error: 'PhonePe payment controller not available' }),
+    handlePhonePeRedirect: (req, res) => res.status(500).json({ error: 'PhonePe payment controller not available' }),
+    refundPhonePePayment: (req, res) => res.status(500).json({ error: 'PhonePe payment controller not available' })
+  };
+}
+
+// Import Cashfree controller
+let cashfreeController;
+try {
+  cashfreeController = require('../controllers/cashfree.controller');
+  log('Successfully imported cashfree.controller');
+} catch (error) {
+  log('Failed to import cashfree.controller', { error: error.message });
+  cashfreeController = {
+    initiateCashfreePayment: (req, res) => res.status(500).json({ error: 'Cashfree payment controller not available' }),
+    verifyCashfreePayment: (req, res) => res.status(500).json({ error: 'Cashfree payment controller not available' }),
+    handleCashfreeWebhook: (req, res) => res.status(500).json({ error: 'Cashfree payment controller not available' }),
+    handleCashfreeRedirect: (req, res) => res.status(500).json({ error: 'Cashfree payment controller not available' })
   };
 }
 
@@ -74,7 +89,6 @@ const logRequest = (req, res, next) => {
 };
 
 // Simple error handling wrapper
-// Replace lines 78-97 with this safer version
 const catchErrors = (controllerFn) => {
   return async (req, res, next) => {
     try {
@@ -119,70 +133,93 @@ router.get('/debug', (req, res) => {
   res.json({
     message: 'Payment routes debug info',
     routes,
-    controller: {
-      available: Object.keys(paymentController)
+    controllers: {
+      upi: Object.keys(upiController),
+      phonepe: Object.keys(phonepeController),
+      cashfree: Object.keys(cashfreeController)
     }
   });
 });
 
-// PhonePe routes - all public, no validation for testing
-log('Registering PhonePe routes with no validation');
+// === CASHFREE ROUTES ===
+// Cashfree payment initialization endpoint
+router.post('/cashfree/initiate', authenticateToken, catchErrors(cashfreeController.initiateCashfreePayment));
 
-// Public PhonePe payment initialization endpoint
-router.post('/phonepe/initiate', (req, res, next) => {
-  log('PhonePe initiate endpoint reached, validating manually');
-  
-  // Manually validate only essential fields
-  const { amount, bookingId } = req.body;
-  
-  if (!amount || isNaN(amount) || amount <= 0) {
-    log('Invalid amount provided', { amount });
-    return res.status(400).json({ 
-      error: 'Amount must be a positive number' 
-    });
-  }
-  
-  if (!bookingId) {
-    log('Missing bookingId');
-    return res.status(400).json({ 
-      error: 'Booking ID is required' 
-    });
-  }
-  
-  log('Manual validation passed, proceeding to controller');
-  next();
-}, catchErrors(paymentController.initiatePhonePePayment));
+// Cashfree payment verification endpoint
+router.post('/cashfree/verify', authenticateToken, catchErrors(cashfreeController.verifyCashfreePayment));
+
+// Cashfree webhook endpoint (no authentication)
+router.post('/cashfree/webhook', catchErrors(cashfreeController.handleCashfreeWebhook));
+
+// Cashfree redirect handler
+router.get('/cashfree/redirect', catchErrors(cashfreeController.handleCashfreeRedirect));
+
+// === PHONEPE ROUTES ===
+// PhonePe payment initialization endpoint
+router.post('/phonepe/initiate', catchErrors(phonepeController.initiatePhonePePayment));
 
 // PhonePe callback endpoint
-router.post('/phonepe/callback', catchErrors(paymentController.handlePhonePeCallback));
+router.post('/phonepe/callback', catchErrors(phonepeController.handlePhonePeCallback));
 
 // PhonePe redirect endpoint
-router.get('/phonepe/redirect', catchErrors(paymentController.handlePhonePeRedirect));
+router.get('/phonepe/redirect', catchErrors(phonepeController.handlePhonePeRedirect));
 
 // Check payment status endpoint
-router.get('/phonepe/status/:transactionId', catchErrors(paymentController.checkPhonePePaymentStatus));
+router.get('/phonepe/status/:transactionId', catchErrors(phonepeController.checkPhonePePaymentStatus));
 
 // PhonePe refund endpoint
-router.post('/phonepe/refund', catchErrors(paymentController.refundPhonePePayment));
+router.post('/phonepe/refund', catchErrors(phonepeController.refundPhonePePayment));
 
+// === UPI ROUTES ===
+// UPI payment routes
+router.post('/upi/initiate', authenticateToken, catchErrors(upiController.initiateUpiPayment));
+router.post('/upi/verify', authenticateToken, catchErrors(upiController.verifyUpiPayment));
+router.get('/upi/status/:orderId', authenticateToken, catchErrors(upiController.checkUpiPaymentStatus));
 
-// Add UPI routes
-router.use('/upi', require('./upi.routes'));
+// UPI Webhook route (no authentication)
+router.post('/upi/webhook', catchErrors(upiController.handleCashfreeWebhook));
 
-// Webhook route (no authentication required for webhooks)
-router.post('/cashfree/webhook', upiController.handleCashfreeWebhook);
+// Generic payment router (for future expansion)
+router.post('/initiate', authenticateToken, (req, res) => {
+  // Determine which payment method to use based on request data
+  const paymentMethod = req.body.paymentMethod?.toLowerCase() || 'cashfree';
+  
+  log(`Payment initiation requested via method: ${paymentMethod}`);
+  
+  switch (paymentMethod) {
+    case 'upi':
+      return upiController.initiateUpiPayment(req, res);
+    case 'phonepe':
+      return phonepeController.initiatePhonePePayment(req, res);
+    case 'cashfree':
+    case 'cashfree_sdk':
+    default:
+      return cashfreeController.initiateCashfreePayment(req, res);
+  }
+});
+
+router.post('/verify', authenticateToken, (req, res) => {
+  // Determine which payment method to use based on request data
+  const paymentMethod = req.body.paymentMethod?.toLowerCase() || 'cashfree';
+  
+  log(`Payment verification requested via method: ${paymentMethod}`);
+  
+  switch (paymentMethod) {
+    case 'upi':
+      return upiController.verifyUpiPayment(req, res);
+    case 'phonepe':
+      if (req.body.transactionId) {
+        return phonepeController.checkPhonePePaymentStatus(req, res);
+      }
+      return res.status(400).json({ error: 'Transaction ID required for PhonePe verification' });
+    case 'cashfree':
+    case 'cashfree_sdk':
+    default:
+      return cashfreeController.verifyCashfreePayment(req, res);
+  }
+});
+
+// Log successful routes registration
 log('All payment routes registered successfully');
-router.post('/cashfree-form/webhook', 
-  bookingController.handleCashfreeFormWebhook
-);
 
-router.get('/cashfree-form/return', 
-  bookingController.handleCashfreeFormReturn
-);
-
-router.get('/cashfree-form/status/:bookingId', 
-  authenticateToken,
-  bookingController.checkCashfreeFormPaymentStatus
-);
-router.get('/cashfree-redirect', bookingController.handleCashfreeRedirect);
 module.exports = router;
