@@ -239,7 +239,7 @@ exports.bookingValidationRules = () => {
         const validMethods = [
           'credit_card', 'debit_card', 'paypal', 'apple_pay', 
           'google_pay', 'bank_transfer', 'cash', 'free', 
-          'phonepe', 'pending', 'upi'
+          'phonepe', 'pending', 'upi','cashfree', 'cashfree_sdk'
         ];
         
         // Check normalized version
