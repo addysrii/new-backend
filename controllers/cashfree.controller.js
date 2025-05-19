@@ -5,7 +5,7 @@ const { Booking, Ticket } = require('../models/Booking');
 const { Notification } = require('../models/Notification');
 const socketEvents = require('../utils/socketEvents');
 const logger = require('../utils/logger');
-const { Cashfree } = require('cashfree-pg');
+
 /**
  * Generate a unique order ID
  * @returns {string} Unique order ID
