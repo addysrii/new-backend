@@ -12,7 +12,67 @@ const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 const QRCode = require('qrcode');
 const moment = require('moment-timezone');
-
+async function sendBookingConfirmationEmail(booking, event, user, isPaid = false) {
+  try {
+    const contactEmail = booking.contactInformation?.email || user.email;
+    
+    if (!contactEmail) {
+      console.error('No recipient email found for booking confirmation');
+      return;
+    }
+    
+    // Get user details if not fully provided
+    let userDetails = user;
+    if (!user.firstName || !user.lastName) {
+      userDetails = await User.findById(user.id).select('firstName lastName email');
+    }
+    
+    // Format event date and time
+    const eventDate = new Date(event.startDateTime).toLocaleDateString();
+    const eventTime = new Date(event.startDateTime).toLocaleTimeString();
+    
+    // Check if we can use the template or fall back to direct HTML
+    if (emailService.templates && emailService.templates['booking-confirmation']) {
+      // Using template approach
+      const tickets = await Ticket.find({ booking: booking._id }).populate('ticketType');
+      await emailService.sendBookingConfirmation({
+        ...booking.toObject(),
+        user: userDetails,
+        event
+      }, tickets);
+      console.log(`Template-based confirmation email sent to ${contactEmail} for booking #${booking.bookingNumber}`);
+    } else {
+      // Fallback to direct HTML approach
+      const paymentText = isPaid 
+        ? `Payment of ${booking.totalAmount} ${booking.currency} has been received.` 
+        : 'Your free booking has been confirmed.';
+        
+      await emailService.sendEmail({
+        to: contactEmail,
+        subject: `Booking Confirmed: ${event.name}`,
+        text: `Your booking (#${booking.bookingNumber}) for ${event.name} has been confirmed. ${paymentText} Your ticket(s) are ready.`,
+        html: `<h1>Booking Confirmed</h1>
+              <p>Hello ${userDetails?.firstName || 'there'},</p>
+              <p>Your booking (#${booking.bookingNumber}) for ${event.name} has been confirmed.</p>
+              <p>${paymentText}</p>
+              <p>Your ticket(s) are ready. You can view them in the app or download them from your bookings page.</p>
+              <p>Event Details:</p>
+              <ul>
+                <li><strong>Event:</strong> ${event.name}</li>
+                <li><strong>Date:</strong> ${eventDate}</li>
+                <li><strong>Time:</strong> ${eventTime}</li>
+                <li><strong>Location:</strong> ${event.location || 'Online'}</li>
+              </ul>
+              <p>Thank you for your booking!</p>`
+      });
+      
+      console.log(`Direct HTML confirmation email sent to ${contactEmail} for booking #${booking.bookingNumber}`);
+    }
+  } catch (emailError) {
+    console.error('Error sending confirmation email:', emailError);
+    console.error(emailError.stack);
+  }
+}
 /**
  * Get event ticket types
  * @route GET /api/bookings/events/:eventId/ticket-types
@@ -621,6 +681,14 @@ exports.createBooking = async (req, res) => {
     
     // Handle different scenarios based on booking type
     if (isFreeBooking) {
+      // For free bookings, send confirmation email
+      try {
+        await sendBookingConfirmationEmail(booking, event, req.user, false);
+      } catch (emailError) {
+        console.error('Error sending confirmation email for free booking:', emailError);
+        // Continue with the booking process even if email fails
+      }
+      
       return res.status(200).json({
         success: true,
         booking: {
@@ -631,31 +699,41 @@ exports.createBooking = async (req, res) => {
       });
     }
     
-    // Payment method specific handling (e.g., PhonePe)
-    if (finalPaymentMethod === 'phonepe') {
+    // Payment method specific handling (e.g., Cashfree)
+    if (finalPaymentMethod === 'cashfree' || finalPaymentMethod === 'cashfree_sdk') {
       try {
+        const cashfreeService = require('../services/cashfreeService');
+        // Generate a unique order ID
+        const orderId = `order_${booking._id.toString().substring(0, 8)}_${Date.now()}`;
+        
         const paymentData = {
-          amount: discountedAmount,
-          userId: req.user.id,
-          bookingId: booking._id.toString(),
-          eventName: event.name,
-          userContact: {
-            phone: req.user.phone || contactInformation.phone,
-            email: req.user.email || contactInformation.email
-          },
-          returnUrl: returnUrl || 'eventapp://payment-response'
+          orderId: orderId,
+          orderAmount: discountedAmount,
+          orderCurrency: booking.currency || 'INR',
+          customerEmail: req.user.email || contactInformation.email,
+          customerPhone: req.user.phone || contactInformation.phone,
+          customerName: `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim(),
+          returnUrl: returnUrl || 'eventapp://payment-response',
+          notifyUrl: `${process.env.API_BASE_URL || 'https://api.eventapp.com'}/api/payments/cashfree/webhook`,
+          bookingId: booking._id.toString()
         };
         
-        const paymentResponse = await phonePeService.initiatePayment(paymentData);
+        // Update booking with order ID information before initiating payment
+        booking.paymentInfo.orderId = orderId;
+        await booking.save({ session });
+        
+        const paymentResponse = await cashfreeService.initiatePayment(paymentData);
         
         return paymentResponse.success 
           ? res.status(200).json({
               success: true,
               booking: responseBooking,
               payment: {
-                method: 'phonepe',
-                transactionId: paymentResponse.transactionId,
-                redirectUrl: paymentResponse.redirectUrl
+                method: 'cashfree',
+                orderId: orderId,
+                paymentLink: paymentResponse.paymentLink,
+                orderToken: paymentResponse.orderToken,
+                cfOrderId: paymentResponse.cfOrderId
               }
             })
           : res.status(400).json({
@@ -668,6 +746,55 @@ exports.createBooking = async (req, res) => {
         return res.status(500).json({
           success: false,
           message: 'Error initializing payment',
+          booking: responseBooking
+        });
+      }
+    }
+    
+    // For UPI payment
+    if (finalPaymentMethod === 'upi') {
+      try {
+        const upiService = require('../services/cashfreeUpiService');
+        
+        const paymentData = {
+          amount: discountedAmount,
+          bookingId: booking._id.toString(),
+          userId: req.user.id,
+          eventName: event.name,
+          customerName: `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim(),
+          customerPhone: req.user.phone || contactInformation.phone,
+          customerEmail: req.user.email || contactInformation.email
+        };
+        
+        const paymentResponse = await upiService.createUpiOrder(paymentData);
+        
+        if (!paymentResponse.success) {
+          return res.status(400).json({
+            success: false,
+            message: paymentResponse.message || 'Failed to initialize UPI payment',
+            booking: responseBooking
+          });
+        }
+        
+        // Update booking with order ID
+        booking.paymentInfo.orderId = paymentResponse.orderId;
+        await booking.save({ session });
+        
+        return res.status(200).json({
+          success: true,
+          booking: responseBooking,
+          payment: {
+            method: 'upi',
+            orderId: paymentResponse.orderId,
+            paymentLink: paymentResponse.paymentLink,
+            upiData: paymentResponse.upiData
+          }
+        });
+      } catch (paymentError) {
+        console.error('UPI payment initiation error:', paymentError);
+        return res.status(500).json({
+          success: false,
+          message: 'Error initializing UPI payment',
           booking: responseBooking
         });
       }
@@ -2446,6 +2573,163 @@ exports.getEventBookingStats = async (req, res) => {
     } catch (error) {
       console.error('Generate event report error:', error);
       res.status(500).json({ error: 'Server error when generating event report' });
+    }
+  };
+  exports.handlePaymentConfirmation = async (req, res) => {
+    try {
+      const { bookingId, orderId, transactionId, paymentMethod } = req.body;
+      
+      if (!bookingId) {
+        return res.status(400).json({ error: 'Booking ID is required' });
+      }
+      
+      // Find the booking
+      const booking = await Booking.findById(bookingId);
+      if (!booking) {
+        return res.status(404).json({ error: 'Booking not found' });
+      }
+      
+      // Verify ownership
+      if (booking.user.toString() !== req.user.id.toString()) {
+        return res.status(403).json({ error: 'You do not have permission to update this booking' });
+      }
+      
+      // If booking is already confirmed, just return success
+      if (booking.status === 'confirmed') {
+        return res.json({
+          success: true,
+          message: 'Booking is already confirmed',
+          booking: {
+            id: booking._id,
+            status: booking.status
+          }
+        });
+      }
+      
+      // Verify payment based on the payment method
+      let paymentVerified = false;
+      let verificationDetails = {};
+      
+      if (paymentMethod === 'cashfree' || paymentMethod === 'cashfree_sdk') {
+        // Verify with Cashfree service
+        const cashfreeController = require('./cashfree.controller');
+        
+        try {
+          const verificationResponse = await cashfreeController.verifyCashfreePayment({
+            body: { orderId }
+          }, { json: () => ({}) }, () => {});
+          
+          paymentVerified = verificationResponse && 
+                            verificationResponse.status === 'PAYMENT_SUCCESS';
+          verificationDetails = verificationResponse || {};
+        } catch (verifyError) {
+          console.error('Cashfree verification error:', verifyError);
+          return res.status(500).json({ 
+            success: false, 
+            error: 'Payment verification failed'
+          });
+        }
+      } else if (paymentMethod === 'upi') {
+        // Verify with UPI service
+        const upiController = require('./upi.controller');
+        
+        try {
+          const verificationResponse = await upiController.verifyUpiPayment({
+            body: { orderId, bookingId }
+          }, { json: () => ({}) }, () => {});
+          
+          paymentVerified = verificationResponse && 
+                            verificationResponse.status === 'PAYMENT_SUCCESS';
+          verificationDetails = verificationResponse || {};
+        } catch (verifyError) {
+          console.error('UPI verification error:', verifyError);
+          return res.status(500).json({ 
+            success: false, 
+            error: 'Payment verification failed'
+          });
+        }
+      } else {
+        return res.status(400).json({ 
+          success: false, 
+          error: 'Unsupported payment method'
+        });
+      }
+      
+      if (!paymentVerified) {
+        return res.status(400).json({
+          success: false,
+          message: 'Payment has not been confirmed yet',
+          details: verificationDetails
+        });
+      }
+      
+      // Payment is verified, update booking status
+      booking.status = 'confirmed';
+      booking.paymentInfo.status = 'completed';
+      booking.paymentInfo.transactionId = transactionId || orderId;
+      booking.paymentInfo.paidAt = new Date();
+      
+      await booking.save();
+      
+      // Update ticket statuses
+      await Ticket.updateMany(
+        { booking: bookingId },
+        { status: 'active' }
+      );
+      
+      // Get necessary data for email
+      const event = await Event.findById(booking.event);
+      const user = await User.findById(booking.user);
+      
+      // Send confirmation email
+      try {
+        await sendBookingConfirmationEmail(booking, event, user, true);
+      } catch (emailError) {
+        console.error('Error sending confirmation email after payment:', emailError);
+        // Continue processing even if email fails
+      }
+      
+      // Send notification
+      try {
+        await Notification.create({
+          recipient: req.user.id,
+          type: 'booking_confirmed',
+          data: {
+            bookingId: booking._id,
+            eventId: booking.event,
+            eventName: event ? event.name : 'Event'
+          },
+          timestamp: Date.now()
+        });
+        
+        // Send socket event if available
+        if (socketEvents && typeof socketEvents.emitToUser === 'function') {
+          socketEvents.emitToUser(req.user.id.toString(), 'booking_confirmed', {
+            bookingId: booking._id,
+            eventName: event ? event.name : 'Event'
+          });
+        }
+      } catch (notifyError) {
+        console.error('Error sending notification:', notifyError);
+        // Continue processing even if notification fails
+      }
+      
+      // Return success response
+      res.json({
+        success: true,
+        message: 'Payment confirmed and booking updated',
+        booking: {
+          id: booking._id,
+          status: booking.status,
+          paymentStatus: booking.paymentInfo.status
+        }
+      });
+    } catch (error) {
+      console.error('Payment confirmation error:', error);
+      res.status(500).json({ 
+        success: false,
+        error: 'Server error when confirming payment'
+      });
     }
   };
   
