@@ -1,10 +1,13 @@
 // controllers/cashfree.controller.js
 const crypto = require('crypto');
 const axios = require('axios');
-const { Booking, Ticket } = require('../models/Booking');
-const { Notification } = require('../models/Notification');
-const socketEvents = require('../utils/socketEvents');
-const logger = require('../utils/logger');
+const { Booking, Ticket } = require('../models/Booking.js');
+const { Event } = require('../models/Event.js'); // Add this import
+const { User } = require('../models/User.js'); // Add this import
+const { Notification } = require('../models/Notification.js');
+const emailService = require('../services/emailService.js'); // Add this import
+const socketEvents = require('../utils/socketEvents.js');
+const logger = require('../utils/logger')
 
 /**
  * Generate a unique order ID
@@ -17,6 +20,16 @@ function generateOrderId() {
   const orderId = hash.digest('hex');
   return orderId.substr(0, 12);
 }
+
+
+/**
+ * Helper function to send booking confirmation email
+ * @param {Object} booking - The booking object
+ * @param {Object} event - The event object
+ * @param {Object} user - The user object
+ * @param {Boolean} isPaid - Whether this is a paid booking
+ */
+
 
 /**
  * Process successful payment
@@ -487,5 +500,69 @@ exports.handleCashfreeRedirect = async (req, res) => {
     return res.redirect('/payment-failure?error=Something+went+wrong');
   }
 };
+
+
+/**
+ * Helper function to send booking confirmation email
+ * @param {Object} booking - The booking object
+ * @param {Object} event - The event object
+ * @param {Object} user - The user object
+ * @param {Boolean} isPaid - Whether this is a paid booking
+ */
+async function sendBookingConfirmationEmail(booking, event, user, isPaid = false) {
+    try {
+      const contactEmail = booking.contactInformation?.email || user.email;
+      
+      if (!contactEmail) {
+        logger.error('No recipient email found for booking confirmation');
+        return;
+      }
+      
+      // Format event date and time
+      const eventDate = new Date(event.startDateTime).toLocaleDateString();
+      const eventTime = new Date(event.startDateTime).toLocaleTimeString();
+      
+      // Check if we can use the template or fall back to direct HTML
+      if (emailService.templates && emailService.templates['booking-confirmation']) {
+        // Using template approach
+        const tickets = await Ticket.find({ booking: booking._id }).populate('ticketType');
+        await emailService.sendBookingConfirmation({
+          ...booking.toObject(),
+          user,
+          event
+        }, tickets);
+        logger.info(`Template-based confirmation email sent to ${contactEmail} for booking #${booking.bookingNumber}`);
+      } else {
+        // Fallback to direct HTML approach
+        const paymentText = isPaid 
+          ? `Payment of ${booking.totalAmount} ${booking.currency} has been received.` 
+          : 'Your free booking has been confirmed.';
+          
+        await emailService.sendEmail({
+          to: contactEmail,
+          subject: `Booking Confirmed: ${event.name}`,
+          text: `Your booking (#${booking.bookingNumber}) for ${event.name} has been confirmed. ${paymentText} Your ticket(s) are ready.`,
+          html: `<h1>Booking Confirmed</h1>
+                <p>Hello ${user?.firstName || 'there'},</p>
+                <p>Your booking (#${booking.bookingNumber}) for ${event.name} has been confirmed.</p>
+                <p>${paymentText}</p>
+                <p>Your ticket(s) are ready. You can view them in the app or download them from your bookings page.</p>
+                <p>Event Details:</p>
+                <ul>
+                  <li><strong>Event:</strong> ${event.name}</li>
+                  <li><strong>Date:</strong> ${eventDate}</li>
+                  <li><strong>Time:</strong> ${eventTime}</li>
+                  <li><strong>Location:</strong> ${event.location || 'Online'}</li>
+                </ul>
+                <p>Thank you for your booking!</p>`
+        });
+        
+        logger.info(`Direct HTML confirmation email sent to ${contactEmail} for booking #${booking.bookingNumber}`);
+      }
+    } catch (emailError) {
+      logger.error('Error sending confirmation email:', emailError);
+      logger.error(emailError.stack);
+    }
+  }
 
 module.exports = exports;
