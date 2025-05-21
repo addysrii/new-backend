@@ -352,7 +352,7 @@ exports.verifyCashfreePayment = async (req, res) => {
     
     // Map Cashfree status to our status
     const paymentStatus = response.data.order_status === 'PAID' ? 'PAYMENT_SUCCESS' : 'PAYMENT_PENDING';
-    
+    console.log(paymentStatus)
     // If payment is successful, update booking status
     if (paymentStatus === 'PAYMENT_SUCCESS' && booking.status !== 'confirmed') {
       await processSuccessfulPayment(booking, {
