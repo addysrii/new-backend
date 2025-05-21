@@ -84,6 +84,18 @@ async function processSuccessfulPayment(booking, paymentData) {
         timestamp: Date.now()
       });
       
+      // Try sending email confirmation
+      try {
+        const event = await Event.findById(booking.event);
+        const user = await User.findById(booking.user);
+        if (event && user) {
+          await sendBookingConfirmationEmail(booking, event, user, true);
+          logger.info(`Confirmation email sent for booking ${booking._id}`);
+        }
+      } catch (emailError) {
+        logger.error(`Error sending confirmation email: ${emailError.message}`);
+      }
+      
       // Send socket event if available
       if (socketEvents && typeof socketEvents.emitToUser === 'function') {
         socketEvents.emitToUser(booking.user.toString(), 'booking_confirmed', {
