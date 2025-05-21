@@ -411,7 +411,6 @@ exports.handleCashfreeWebhook = async (req, res) => {
       logger.warn('Missing webhook signature in request');
     } else {
       // Verify signature logic here (optional)
-      // This would depend on Cashfree's webhook signature format
       logger.debug('Webhook signature received');
     }
     
@@ -420,42 +419,87 @@ exports.handleCashfreeWebhook = async (req, res) => {
     
     // Process the webhook data asynchronously
     const webhookData = req.body;
+    const eventType = webhookData.type;
     
-    // Get order ID from the webhook data
-    const orderId = webhookData.data?.order?.order_id || webhookData.orderId;
+    logger.info(`Processing webhook event: ${eventType}`);
     
-    if (!orderId) {
-      logger.error('Order ID not found in webhook data');
-      return;
-    }
-    
-    // Get payment status from webhook
-    const orderStatus = webhookData.data?.order?.order_status || webhookData.orderStatus;
-    const paymentSuccess = orderStatus === 'PAID';
-    
-    if (paymentSuccess) {
-      // Find booking with this order ID
-      const booking = await Booking.findOne({ 'paymentInfo.orderId': orderId });
-      
-      if (booking && booking.status !== 'confirmed') {
-        logger.info(`Processing webhook payment success for order ${orderId}, booking ${booking._id}`);
+    // Handle different event types
+    switch(eventType) {
+      case 'PAYMENT_SUCCESS':
+      case 'ORDER_PAID':
+        // Process payment success
+        const orderId = webhookData.data?.order?.order_id || webhookData.orderId;
         
-        // Process successful payment
-        await processSuccessfulPayment(booking, {
-          orderId: orderId,
-          status: 'PAYMENT_SUCCESS',
-          orderAmount: webhookData.data?.order?.order_amount || 0,
-          transactionId: webhookData.data?.order?.cf_order_id || orderId
-        });
+        if (!orderId) {
+          logger.error('Order ID not found in payment webhook data');
+          return;
+        }
         
-        logger.info(`Successfully processed webhook payment for order ${orderId}`);
-      } else if (booking) {
-        logger.info(`Booking ${booking._id} already confirmed, ignoring webhook`);
-      } else {
-        logger.warn(`Booking not found for webhook order ${orderId}`);
-      }
-    } else {
-      logger.info(`Webhook received with order status: ${orderStatus}`);
+        // Find booking with this order ID
+        const booking = await Booking.findOne({ 'paymentInfo.orderId': orderId });
+        
+        if (booking && booking.status !== 'confirmed') {
+          logger.info(`Processing webhook payment success for order ${orderId}, booking ${booking._id}`);
+          
+          // Process successful payment
+          await processSuccessfulPayment(booking, {
+            orderId: orderId,
+            status: 'PAYMENT_SUCCESS',
+            orderAmount: webhookData.data?.order?.order_amount || 0,
+            transactionId: webhookData.data?.order?.cf_order_id || orderId
+          });
+          
+          logger.info(`Successfully processed webhook payment for order ${orderId}`);
+        } else if (booking) {
+          logger.info(`Booking ${booking._id} already confirmed, ignoring webhook`);
+        } else {
+          logger.warn(`Booking not found for webhook order ${orderId}`);
+        }
+        break;
+        
+      case 'SETTLEMENT_SUCCESS':
+        // Process settlement success event
+        const settlementData = webhookData.data?.settlement;
+        
+        if (settlementData) {
+          logger.info(`Settlement success received: ID ${settlementData.settlement_id}, Amount: ${settlementData.settlement_amount}`);
+          
+          // You can record this settlement information in your database if needed
+          // This is useful for reconciliation of your payments with your bank account
+          
+          // Example: Update settlement status in your database
+          // await Settlement.create({
+          //   settlementId: settlementData.settlement_id,
+          //   status: settlementData.status,
+          //   utr: settlementData.utr,
+          //   amount: settlementData.settlement_amount,
+          //   date: settlementData.settled_on
+          // });
+        } else {
+          logger.error('Settlement data not found in webhook');
+        }
+        break;
+        
+      case 'PAYMENT_FAILED':
+        // Handle payment failure
+        const failedOrderId = webhookData.data?.order?.order_id;
+        
+        if (failedOrderId) {
+          logger.info(`Payment failed for order ${failedOrderId}`);
+          
+          // You can update the booking status to 'failed' here if needed
+          const failedBooking = await Booking.findOne({ 'paymentInfo.orderId': failedOrderId });
+          
+          if (failedBooking) {
+            failedBooking.paymentInfo.status = 'failed';
+            await failedBooking.save();
+            logger.info(`Updated booking ${failedBooking._id} to failed status`);
+          }
+        }
+        break;
+        
+      default:
+        logger.info(`Unhandled webhook event type: ${eventType}`);
     }
   } catch (error) {
     logger.error(`Cashfree webhook handling error: ${error.message}`, {
