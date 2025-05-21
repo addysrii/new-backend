@@ -347,9 +347,9 @@ exports.verifyCashfreePayment = async (req, res) => {
         'x-api-version': '2022-09-01'
       }
     });
-    
+
     logger.debug(`Payment verification result: ${JSON.stringify(response.data)}`);
-    
+    console.log(response.data)
     // Map Cashfree status to our status
     const paymentStatus = response.data.payment_status === 'SUCCESS' ? 'PAYMENT_SUCCESS' : 'PAYMENT_PENDING';
     console.log(paymentStatus)
