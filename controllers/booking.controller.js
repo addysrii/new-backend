@@ -14,12 +14,22 @@ const QRCode = require('qrcode');
 const moment = require('moment-timezone');
 async function sendBookingConfirmationEmail(booking, event, user, isPaid = false) {
   try {
-    const contactEmail = booking.contactInformation?.email || user.email;
+    console.log('Starting email confirmation process...');
+    console.log('Booking details:', {
+      id: booking._id,
+      bookingNumber: booking.bookingNumber,
+      contactEmail: booking.contactInformation?.email,
+      userEmail: user?.email
+    });
+    
+    const contactEmail = booking.contactInformation?.email || user?.email;
     
     if (!contactEmail) {
       console.error('No recipient email found for booking confirmation');
       return;
     }
+    
+    console.log('Recipient email:', contactEmail);
     
     // Get user details if not fully provided
     let userDetails = user;
@@ -69,8 +79,13 @@ async function sendBookingConfirmationEmail(booking, event, user, isPaid = false
       console.log(`Direct HTML confirmation email sent to ${contactEmail} for booking #${booking.bookingNumber}`);
     }
   } catch (emailError) {
-    console.error('Error sending confirmation email:', emailError);
-    console.error(emailError.stack);
+    console.error('Detailed email error:', {
+      message: emailError.message,
+      stack: emailError.stack,
+      response: emailError.response,
+      bookingId: booking?._id
+    });
+    throw emailError; // Consider re-throwing to make failures visible
   }
 }
 /**
