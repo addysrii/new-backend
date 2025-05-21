@@ -351,7 +351,7 @@ exports.verifyCashfreePayment = async (req, res) => {
     logger.debug(`Payment verification result: ${JSON.stringify(response.data)}`);
     
     // Map Cashfree status to our status
-    const paymentStatus = response.data.order_status === 'PAID' ? 'PAYMENT_SUCCESS' : 'PAYMENT_PENDING';
+    const paymentStatus = response.data.payment_status === 'SUCCESS' ? 'PAYMENT_SUCCESS' : 'PAYMENT_PENDING';
     console.log(paymentStatus)
     // If payment is successful, update booking status
     if (paymentStatus === 'PAYMENT_SUCCESS' && booking.status !== 'confirmed') {
