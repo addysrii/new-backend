@@ -110,189 +110,196 @@ async function processSuccessfulPayment(booking, paymentData) {
  * @access Private
  */
 exports.initiateCashfreePayment = async (req, res) => {
-    try {
-      const { 
-        amount, 
-        bookingId,
-        eventName = 'Event Booking',
-        // Accept these from the request but provide fallbacks
-        customerPhone,
-        customerEmail,
-        customerName
-      } = req.body;
-      
-      // Validate required fields
-      if (!amount || !bookingId) {
-        logger.warn('Missing required fields for Cashfree payment', { 
-          hasAmount: !!amount, 
-          hasBookingId: !!bookingId 
-        });
-        return res.status(400).json({ error: 'Amount and booking ID are required' });
-      }
-      
-      logger.info(`Processing Cashfree payment request: bookingId=${bookingId}, amount=${amount}`);
-      
-      // Find the booking and populate user data
-      const booking = await Booking.findById(bookingId)
-        .populate('event', 'name createdBy')
-        .populate('user', 'firstName lastName email phone');
-      
-      if (!booking) {
-        logger.error(`Booking not found: ${bookingId}`);
-        return res.status(404).json({ error: 'Booking not found' });
-      }
-      
-      // Verify booking ownership
-      if (booking.user._id.toString() !== req.user.id.toString()) {
-        logger.warn(`Unauthorized payment attempt: User ${req.user.id} attempted to pay for booking ${bookingId} owned by user ${booking.user._id}`);
-        return res.status(403).json({ error: 'You can only pay for your own bookings' });
-      }
-      
-      // Get Cashfree API credentials from environment variables
-      const clientId = process.env.CASHFREE_APP_ID;
-      const clientSecret = process.env.CASHFREE_SECRET_KEY;
-      const isProduction = process.env.CASHFREE_ENV === 'PRODUCTION';
-      
-      if (!clientId || !clientSecret) {
-        logger.error('Cashfree API credentials not configured');
-        return res.status(500).json({ error: 'Payment service is not properly configured' });
-      }
-      
-      // Generate a unique order ID
-      const orderId = await generateOrderId();
-      
-      // Get user object either from populated booking.user or req.user
-      const user = booking.user || req.user;
-      
-      // CRITICAL: Ensure there's a phone number - multiple fallbacks
-      let phone = customerPhone;
-      
-      // If no explicit phone passed, try to get from booking contact info
-      if (!phone && booking.contactInformation && booking.contactInformation.phone) {
+  try {
+    const { 
+      amount, 
+      bookingId,
+      eventName = 'Event Booking',
+      // Accept these from the request but provide fallbacks
+      customerPhone,
+      customerEmail,
+      customerName
+    } = req.body;
+    
+    // Validate required fields
+    if (!amount || !bookingId) {
+      logger.warn('Missing required fields for Cashfree payment', { 
+        hasAmount: !!amount, 
+        hasBookingId: !!bookingId 
+      });
+      return res.status(400).json({ error: 'Amount and booking ID are required' });
+    }
+    
+    logger.info(`Processing Cashfree payment request: bookingId=${bookingId}, amount=${amount}`);
+    
+    // Find the booking and populate user data
+    const booking = await Booking.findById(bookingId)
+      .populate('event', 'name createdBy')
+      .populate('user', 'firstName lastName email phone');
+    
+    if (!booking) {
+      logger.error(`Booking not found: ${bookingId}`);
+      return res.status(404).json({ error: 'Booking not found' });
+    }
+    
+    // Verify booking ownership
+    if (booking.user._id.toString() !== req.user.id.toString()) {
+      logger.warn(`Unauthorized payment attempt: User ${req.user.id} attempted to pay for booking ${bookingId} owned by user ${booking.user._id}`);
+      return res.status(403).json({ error: 'You can only pay for your own bookings' });
+    }
+    
+    // Get Cashfree API credentials from environment variables
+    const clientId = process.env.CASHFREE_APP_ID;
+    const clientSecret = process.env.CASHFREE_SECRET_KEY;
+    const isProduction = process.env.CASHFREE_ENV === 'PRODUCTION';
+    
+    if (!clientId || !clientSecret) {
+      logger.error('Cashfree API credentials not configured');
+      return res.status(500).json({ error: 'Payment service is not properly configured' });
+    }
+    
+    // Generate a unique order ID
+    const orderId = await generateOrderId();
+    
+    // Get user object either from populated booking.user or req.user
+    const user = booking.user || req.user;
+    
+    // Phone number collection with proper validation
+    let phone = customerPhone;
+    
+    // Priority 1: Explicitly provided phone in request
+    if (!phone) {
+      // Priority 2: Phone from booking contact info
+      if (booking.contactInformation && booking.contactInformation.phone) {
         phone = booking.contactInformation.phone;
         logger.debug(`Using phone from booking contact info: ${phone}`);
       }
-      
-      // If still no phone, try user record
-      if (!phone && user && user.phone) {
+      // Priority 3: Phone from user record
+      else if (user && user.phone) {
         phone = user.phone;
         logger.debug(`Using phone from user record: ${phone}`);
       }
+    }
+    
+    // Validate phone number format
+    if (phone) {
+      // Remove all non-digit characters
+      phone = phone.replace(/\D/g, '');
       
-      // Last resort: use a default phone
-      if (!phone) {
-        phone = "9999999999"; // Default phone
-        logger.debug(`Using default phone number: ${phone}`);
-      }
-      
-      // Ensure name is properly formatted
-      const name = customerName || 
-                  (user ? `${user.firstName || ''} ${user.lastName || ''}`.trim() : '') || 
-                  'Customer';
-      
-      // Ensure email is available
-      const email = customerEmail || 
-                   (booking.contactInformation?.email) ||
-                   (user?.email) || 
-                   'customer@example.com';
-      
-      // Create order request payload with guaranteed customer details
-      const orderRequest = {
-        order_id: orderId,
-        order_amount: parseFloat(amount).toFixed(2),
-        order_currency: "INR",
-        order_note: `Payment for ${eventName}`,
-        customer_details: {
-          customer_id: req.user.id,
-          customer_name: name,
-          customer_email: email,
-          customer_phone: phone
-        }
-      };
-      
-      logger.debug('Cashfree order payload:', orderRequest);
-      
-      // Validate the payload before sending to Cashfree
-      if (!orderRequest.customer_details.customer_phone || 
-          orderRequest.customer_details.customer_phone.trim() === '') {
-        logger.error('Missing customer phone number in payload');
+      // Indian phone numbers should be 10 digits starting with 6-9
+      if (!/^[6-9]\d{9}$/.test(phone)) {
+        logger.error(`Invalid phone number format: ${phone}`);
         return res.status(400).json({ 
-          error: 'Customer phone number is required for payment processing',
-          details: 'Please provide a phone number in your user profile or with the payment request'
+          error: 'Invalid Indian phone number format',
+          details: 'Please provide a 10-digit phone number starting with 6-9'
         });
       }
-      
-      // Cashfree API URL based on environment
-      const apiUrl = isProduction
-        ? 'https://api.cashfree.com/pg/orders'
-        : 'https://sandbox.cashfree.com/pg/orders';
-      
-      // Make API request to Cashfree
-      const response = await axios.post(apiUrl, orderRequest, {
-        headers: {
-          'Content-Type': 'application/json',
-          'x-client-id': clientId,
-          'x-client-secret': clientSecret,
-          'x-api-version': '2022-09-01'
-        }
-      });
-      
-      logger.info(`Cashfree order created: ${orderId}`);
-      
-      // Update booking with order details
-      booking.paymentInfo = {
-        ...booking.paymentInfo,
-        method: 'cashfree_sdk',
-        status: 'pending',
-        orderId: orderId
-      };
-      
-      await booking.save();
-      
-      // Return success response with payment details
-      return res.status(200).json({
-        success: true,
-        orderId: orderId,
-        orderToken: response.data.payment_session_id,
-        cfOrderId: response.data.cf_order_id,
-        paymentLink: response.data.payment_link,
-        bookingId: booking._id
-      });
-    } catch (error) {
-      // Enhanced error handling with specific error types
-      let statusCode = 500;
-      let errorMessage = 'Server error when initiating Cashfree payment';
-      
-      // Extract Cashfree API error details if available
-      if (error.response && error.response.data) {
-        const apiError = error.response.data;
-        logger.error('Cashfree API error response:', apiError);
-        
-        if (apiError.code === 'customer_details.customer_phone_missing') {
-          statusCode = 400;
-          errorMessage = 'Customer phone number is required for payment processing';
-        } else if (apiError.message) {
-          errorMessage = `Cashfree error: ${apiError.message}`;
-        }
-      }
-      
-      // Log error details
-      logger.error(`Cashfree payment initiation error: ${error.message}`, {
-        stack: error.stack,
-        bookingId: req.body.bookingId,
-        response: error.response?.data,
-        statusCode
-      });
-      
-      res.status(statusCode).json({ 
-        success: false,
-        error: errorMessage,
-        message: error.message,
-        details: error.response?.data
+      logger.debug(`Phone number validated successfully: ${phone}`);
+    } else {
+      logger.error('No phone number found for payment processing');
+      return res.status(400).json({ 
+        error: 'Phone number is required for payment processing',
+        details: 'Please provide a phone number in your user profile or with the payment request'
       });
     }
-  };
-
+    
+    // Ensure name is properly formatted
+    const name = customerName || 
+                (user ? `${user.firstName || ''} ${user.lastName || ''}`.trim() : '') || 
+                'Customer';
+    
+    // Ensure email is available
+    const email = customerEmail || 
+                 (booking.contactInformation?.email) ||
+                 (user?.email) || 
+                 'customer@example.com';
+    
+    // Create order request payload with guaranteed customer details
+    const orderRequest = {
+      order_id: orderId,
+      order_amount: parseFloat(amount).toFixed(2),
+      order_currency: "INR",
+      order_note: `Payment for ${eventName}`,
+      customer_details: {
+        customer_id: req.user.id,
+        customer_name: name,
+        customer_email: email,
+        customer_phone: phone // Use the validated phone number
+      }
+    };
+    
+    logger.debug('Cashfree order payload:', orderRequest);
+    
+    // Cashfree API URL based on environment
+    const apiUrl = isProduction
+      ? 'https://api.cashfree.com/pg/orders'
+      : 'https://sandbox.cashfree.com/pg/orders';
+    
+    // Make API request to Cashfree
+    const response = await axios.post(apiUrl, orderRequest, {
+      headers: {
+        'Content-Type': 'application/json',
+        'x-client-id': clientId,
+        'x-client-secret': clientSecret,
+        'x-api-version': '2022-09-01'
+      }
+    });
+    
+    logger.info(`Cashfree order created: ${orderId}`);
+    
+    // Update booking with order details
+    booking.paymentInfo = {
+      ...booking.paymentInfo,
+      method: 'cashfree_sdk',
+      status: 'pending',
+      orderId: orderId
+    };
+    
+    await booking.save();
+    
+    // Return success response with payment details
+    return res.status(200).json({
+      success: true,
+      orderId: orderId,
+      orderToken: response.data.payment_session_id,
+      cfOrderId: response.data.cf_order_id,
+      paymentLink: response.data.payment_link,
+      bookingId: booking._id
+    });
+  } catch (error) {
+    // Enhanced error handling with specific error types
+    let statusCode = 500;
+    let errorMessage = 'Server error when initiating Cashfree payment';
+    
+    // Extract Cashfree API error details if available
+    if (error.response && error.response.data) {
+      const apiError = error.response.data;
+      logger.error('Cashfree API error response:', apiError);
+      
+      if (apiError.code === 'customer_details.customer_phone_missing') {
+        statusCode = 400;
+        errorMessage = 'Customer phone number is required for payment processing';
+      } else if (apiError.message) {
+        errorMessage = `Cashfree error: ${apiError.message}`;
+      }
+    }
+    
+    // Log error details
+    logger.error(`Cashfree payment initiation error: ${error.message}`, {
+      stack: error.stack,
+      bookingId: req.body.bookingId,
+      response: error.response?.data,
+      statusCode
+    });
+    
+    res.status(statusCode).json({ 
+      success: false,
+      error: errorMessage,
+      message: error.message,
+      details: error.response?.data
+    });
+  }
+};
 /**
  * Verify Cashfree payment
  * @route POST /api/payments/cashfree/verify
