@@ -349,7 +349,7 @@ exports.verifyCashfreePayment = async (req, res) => {
     });
 
     logger.debug(`Payment verification result: ${JSON.stringify(response.data)}`);
-    console.log(response.data)
+    console.log("this is data",response.data)
     // Map Cashfree status to our status
     const paymentStatus = response.data.payment_status === 'SUCCESS' ? 'PAYMENT_SUCCESS' : 'PAYMENT_PENDING';
     console.log(paymentStatus)
