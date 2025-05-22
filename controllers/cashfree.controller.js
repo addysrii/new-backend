@@ -121,6 +121,11 @@ async function processSuccessfulPayment(booking, paymentData) {
  * @route POST /api/payments/cashfree/initiate
  * @access Private
  */
+/**
+ * Initiate Cashfree payment
+ * @route POST /api/payments/cashfree/initiate
+ * @access Private
+ */
 exports.initiateCashfreePayment = async (req, res) => {
   try {
     const { 
@@ -139,7 +144,10 @@ exports.initiateCashfreePayment = async (req, res) => {
         hasAmount: !!amount, 
         hasBookingId: !!bookingId 
       });
-      return res.status(400).json({ error: 'Amount and booking ID are required' });
+      return res.status(400).json({ 
+        success: false,
+        error: 'Amount and booking ID are required' 
+      });
     }
     
     logger.info(`Processing Cashfree payment request: bookingId=${bookingId}, amount=${amount}`);
@@ -151,13 +159,32 @@ exports.initiateCashfreePayment = async (req, res) => {
     
     if (!booking) {
       logger.error(`Booking not found: ${bookingId}`);
-      return res.status(404).json({ error: 'Booking not found' });
+      return res.status(404).json({ 
+        success: false,
+        error: 'Booking not found' 
+      });
     }
     
     // Verify booking ownership
     if (booking.user._id.toString() !== req.user.id.toString()) {
       logger.warn(`Unauthorized payment attempt: User ${req.user.id} attempted to pay for booking ${bookingId} owned by user ${booking.user._id}`);
-      return res.status(403).json({ error: 'You can only pay for your own bookings' });
+      return res.status(403).json({ 
+        success: false,
+        error: 'You can only pay for your own bookings' 
+      });
+    }
+    
+    // Check if booking is already confirmed
+    if (booking.status === 'confirmed') {
+      logger.info(`Booking ${bookingId} is already confirmed`);
+      return res.status(400).json({
+        success: false,
+        error: 'Booking is already confirmed',
+        booking: {
+          id: booking._id,
+          status: booking.status
+        }
+      });
     }
     
     // Get Cashfree API credentials from environment variables
@@ -167,11 +194,15 @@ exports.initiateCashfreePayment = async (req, res) => {
     
     if (!clientId || !clientSecret) {
       logger.error('Cashfree API credentials not configured');
-      return res.status(500).json({ error: 'Payment service is not properly configured' });
+      return res.status(500).json({ 
+        success: false,
+        error: 'Payment service is not properly configured' 
+      });
     }
     
     // Generate a unique order ID
-    const orderId = await generateOrderId();
+    const orderId = generateOrderId();
+    logger.info(`Generated order ID: ${orderId} for booking: ${bookingId}`);
     
     // Get user object either from populated booking.user or req.user
     const user = booking.user || req.user;
@@ -202,6 +233,7 @@ exports.initiateCashfreePayment = async (req, res) => {
       if (!/^[6-9]\d{9}$/.test(phone)) {
         logger.error(`Invalid phone number format: ${phone}`);
         return res.status(400).json({ 
+          success: false,
           error: 'Invalid Indian phone number format',
           details: 'Please provide a 10-digit phone number starting with 6-9'
         });
@@ -210,6 +242,7 @@ exports.initiateCashfreePayment = async (req, res) => {
     } else {
       logger.error('No phone number found for payment processing');
       return res.status(400).json({ 
+        success: false,
         error: 'Phone number is required for payment processing',
         details: 'Please provide a phone number in your user profile or with the payment request'
       });
@@ -226,21 +259,31 @@ exports.initiateCashfreePayment = async (req, res) => {
                  (user?.email) || 
                  'customer@example.com';
     
-    // Create order request payload with guaranteed customer details
+    // Create order request payload with validated URLs
     const orderRequest = {
       order_id: orderId,
       order_amount: parseFloat(amount).toFixed(2),
       order_currency: "INR",
-      order_note: `Payment for ${eventName}`,
+      order_note: `Payment for ${eventName.substring(0, 50)}`, // Truncate if needed
       customer_details: {
         customer_id: req.user.id,
         customer_name: name,
         customer_email: email,
         customer_phone: phone // Use the validated phone number
+      },
+      order_meta: {
+        return_url: `${process.env.FRONTEND_URL || 'https://meetkats.com'}/payment-response?orderId=${encodeURIComponent(orderId)}&bookingId=${encodeURIComponent(bookingId)}`,
+        notify_url: `${process.env.API_BASE_URL || 'https://new-backend-w86d.onrender.com'}/api/payments/cashfree/webhook`
       }
     };
     
-    logger.debug('Cashfree order payload:', orderRequest);
+    logger.debug('Cashfree order payload prepared', {
+      orderId: orderRequest.order_id,
+      amount: orderRequest.order_amount,
+      returnUrl: orderRequest.order_meta.return_url,
+      notifyUrl: orderRequest.order_meta.notify_url,
+      customerId: orderRequest.customer_details.customer_id
+    });
     
     // Cashfree API URL based on environment
     const apiUrl = isProduction
@@ -248,67 +291,178 @@ exports.initiateCashfreePayment = async (req, res) => {
       : 'https://sandbox.cashfree.com/pg/orders';
     
     // Make API request to Cashfree
-    const response = await axios.post(apiUrl, orderRequest, {
-      headers: {
-        'Content-Type': 'application/json',
-        'x-client-id': clientId,
-        'x-client-secret': clientSecret,
-        'x-api-version': '2022-09-01'
+    let cashfreeResponse;
+    try {
+      cashfreeResponse = await axios.post(apiUrl, orderRequest, {
+        headers: {
+          'Content-Type': 'application/json',
+          'x-client-id': clientId,
+          'x-client-secret': clientSecret,
+          'x-api-version': '2022-09-01'
+        },
+        timeout: 15000 // 15 seconds timeout
+      });
+      
+      logger.info(`Cashfree API response received for order: ${orderId}`, {
+        status: cashfreeResponse.status,
+        cfOrderId: cashfreeResponse.data?.cf_order_id,
+        paymentSessionId: cashfreeResponse.data?.payment_session_id ? 'Present' : 'Missing'
+      });
+    } catch (cashfreeError) {
+      logger.error(`Cashfree API request failed for order ${orderId}:`, {
+        message: cashfreeError.message,
+        status: cashfreeError.response?.status,
+        data: cashfreeError.response?.data
+      });
+      
+      // Enhanced error handling with specific error types
+      let statusCode = 500;
+      let errorMessage = 'Payment service error';
+      
+      if (cashfreeError.response?.data) {
+        const apiError = cashfreeError.response.data;
+        
+        if (apiError.code === 'customer_details.customer_phone_missing') {
+          statusCode = 400;
+          errorMessage = 'Customer phone number is required for payment processing';
+        } else if (apiError.message) {
+          errorMessage = `Payment service error: ${apiError.message}`;
+        }
       }
+      
+      return res.status(statusCode).json({ 
+        success: false,
+        error: errorMessage,
+        details: cashfreeError.response?.data || cashfreeError.message
+      });
+    }
+    
+    // Process and validate the response
+    if (!cashfreeResponse.data || !cashfreeResponse.data.order_id) {
+      logger.error(`Invalid response from Cashfree API for order ${orderId}:`, cashfreeResponse.data);
+      return res.status(500).json({
+        success: false,
+        error: 'Invalid response from payment service'
+      });
+    }
+    
+    logger.info(`Cashfree order created successfully: ${orderId}`, {
+      cfOrderId: cashfreeResponse.data.cf_order_id,
+      paymentSessionId: cashfreeResponse.data.payment_session_id,
+      paymentLink: cashfreeResponse.data.payment_link || 'Not provided'
     });
     
-    logger.info(`Cashfree order created: ${orderId}`);
+    // CRITICAL: Update booking with order details BEFORE responding
+    const previousPaymentInfo = { ...booking.paymentInfo };
     
-    // Update booking with order details
     booking.paymentInfo = {
       ...booking.paymentInfo,
       method: 'cashfree_sdk',
-      status: 'pending',
-      orderId: orderId
+      status: 'processing', // Changed from 'pending' to 'processing' to indicate payment initiated
+      orderId: orderId, // This is the key field for webhook lookup
+      cfOrderId: cashfreeResponse.data.cf_order_id,
+      orderToken: cashfreeResponse.data.payment_session_id,
+      paymentLink: cashfreeResponse.data.payment_link,
+      initiatedAt: new Date(),
+      responseData: {
+        orderId: orderId,
+        cfOrderId: cashfreeResponse.data.cf_order_id,
+        orderToken: cashfreeResponse.data.payment_session_id,
+        paymentLink: cashfreeResponse.data.payment_link,
+        orderAmount: parseFloat(amount),
+        currency: 'INR'
+      }
     };
     
-    await booking.save();
-    
-    // Return success response with payment details
-    return res.status(200).json({
-      success: true,
-      orderId: orderId,
-      orderToken: response.data.payment_session_id,
-      cfOrderId: response.data.cf_order_id,
-      paymentLink: response.data.payment_link,
-      bookingId: booking._id
-    });
-  } catch (error) {
-    // Enhanced error handling with specific error types
-    let statusCode = 500;
-    let errorMessage = 'Server error when initiating Cashfree payment';
-    
-    // Extract Cashfree API error details if available
-    if (error.response && error.response.data) {
-      const apiError = error.response.data;
-      logger.error('Cashfree API error response:', apiError);
+    // Save booking with error handling
+    try {
+      await booking.save();
+      logger.info(`Booking ${bookingId} updated successfully with order ID: ${orderId}`, {
+        previousStatus: booking.status,
+        newPaymentMethod: booking.paymentInfo.method,
+        newPaymentStatus: booking.paymentInfo.status,
+        storedOrderId: booking.paymentInfo.orderId
+      });
+    } catch (saveError) {
+      logger.error(`Failed to save booking ${bookingId} after Cashfree order creation:`, {
+        error: saveError.message,
+        stack: saveError.stack
+      });
       
-      if (apiError.code === 'customer_details.customer_phone_missing') {
-        statusCode = 400;
-        errorMessage = 'Customer phone number is required for payment processing';
-      } else if (apiError.message) {
-        errorMessage = `Cashfree error: ${apiError.message}`;
-      }
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to update booking with payment information'
+      });
     }
     
-    // Log error details
-    logger.error(`Cashfree payment initiation error: ${error.message}`, {
+    // VERIFICATION: Immediately verify the booking was saved correctly
+    try {
+      const verifyBooking = await Booking.findById(bookingId).select('paymentInfo status');
+      logger.info(`Verification - Booking ${bookingId} after save:`, {
+        status: verifyBooking.status,
+        paymentMethod: verifyBooking.paymentInfo?.method,
+        paymentStatus: verifyBooking.paymentInfo?.status,
+        storedOrderId: verifyBooking.paymentInfo?.orderId,
+        orderIdMatch: verifyBooking.paymentInfo?.orderId === orderId
+      });
+      
+      // Test the exact query that webhook will use
+      const webhookTestQuery = await Booking.findOne({ 'paymentInfo.orderId': orderId });
+      logger.info(`Webhook test query for order ${orderId}:`, {
+        querySuccessful: !!webhookTestQuery,
+        foundBookingId: webhookTestQuery?._id?.toString(),
+        expectedBookingId: bookingId,
+        idsMatch: webhookTestQuery?._id?.toString() === bookingId
+      });
+      
+      if (!webhookTestQuery) {
+        logger.error(`CRITICAL: Webhook test query failed for order ${orderId}. This will cause webhook processing to fail!`);
+      }
+      
+    } catch (verifyError) {
+      logger.error(`Error during booking verification:`, verifyError);
+    }
+    
+    // Prepare success response
+    const successResponse = {
+      success: true,
+      orderId: orderId,
+      orderToken: cashfreeResponse.data.payment_session_id,
+      cfOrderId: cashfreeResponse.data.cf_order_id,
+      paymentLink: cashfreeResponse.data.payment_link,
+      bookingId: booking._id,
+      expiresAt: cashfreeResponse.data.order_expiry_time,
+      // Additional metadata for frontend
+      paymentMeta: {
+        amount: parseFloat(amount),
+        currency: 'INR',
+        customerName: name,
+        customerEmail: email,
+        eventName: eventName
+      }
+    };
+    
+    logger.info(`Payment initiation completed successfully for booking ${bookingId}, order ${orderId}`);
+    
+    // Return success response with payment details
+    return res.status(200).json(successResponse);
+    
+  } catch (error) {
+    // Comprehensive error logging
+    logger.error(`Cashfree payment initiation error:`, {
+      message: error.message,
       stack: error.stack,
-      bookingId: req.body.bookingId,
-      response: error.response?.data,
-      statusCode
+      bookingId: req.body?.bookingId,
+      amount: req.body?.amount,
+      userId: req.user?.id
     });
     
-    res.status(statusCode).json({ 
+    // User-friendly error response
+    res.status(500).json({ 
       success: false,
-      error: errorMessage,
-      message: error.message,
-      details: error.response?.data
+      error: 'Server error when initiating payment',
+      message: 'Please try again or contact support if the issue persists',
+      requestId: req.id // Include request ID if available for debugging
     });
   }
 };
@@ -417,16 +571,6 @@ exports.handleCashfreeWebhook = async (req, res) => {
   try {
     logger.info('Received Cashfree webhook notification');
     
-    // Get signature from headers for verification
-    const signature = req.headers['x-webhook-signature'];
-    
-    if (!signature) {
-      logger.warn('Missing webhook signature in request');
-    } else {
-      // Verify signature logic here (optional)
-      logger.debug('Webhook signature received');
-    }
-    
     // Acknowledge receipt immediately with 200 response
     res.status(200).json({ received: true });
     
@@ -440,7 +584,7 @@ exports.handleCashfreeWebhook = async (req, res) => {
     switch(eventType) {
       case 'PAYMENT_SUCCESS':
       case 'ORDER_PAID':
-      case 'PAYMENT_SUCCESS_WEBHOOK': // Add this new event type!
+      case 'PAYMENT_SUCCESS_WEBHOOK': // This is the type we're receiving
         // Process payment success
         const orderId = webhookData.data?.order?.order_id;
         
@@ -451,10 +595,46 @@ exports.handleCashfreeWebhook = async (req, res) => {
         
         logger.info(`Processing payment success for order: ${orderId}`);
         
-        // Find booking with this order ID
-        const booking = await Booking.findOne({ 'paymentInfo.orderId': orderId });
+        // ENHANCED BOOKING LOOKUP - Try multiple approaches
+        let booking = null;
         
-        if (booking && booking.status !== 'confirmed') {
+        // First try: Direct match on paymentInfo.orderId
+        booking = await Booking.findOne({ 'paymentInfo.orderId': orderId });
+        
+        if (!booking) {
+          logger.warn(`Direct lookup failed for order ${orderId}, trying alternative queries`);
+          
+          // Second try: Check if order ID is stored differently
+          booking = await Booking.findOne({ 
+            $or: [
+              { 'paymentInfo.orderId': orderId },
+              { 'paymentInfo.transactionId': orderId },
+              { 'paymentInfo.responseData.orderId': orderId }
+            ]
+          });
+        }
+        
+        if (!booking) {
+          // Third try: Log all recent bookings to debug
+          const recentBookings = await Booking.find({
+            createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } // Last 24 hours
+          }).select('_id paymentInfo createdAt').limit(10);
+          
+          logger.error(`Still no booking found for order ${orderId}. Recent bookings:`, 
+            recentBookings.map(b => ({
+              id: b._id,
+              orderId: b.paymentInfo?.orderId,
+              method: b.paymentInfo?.method,
+              createdAt: b.createdAt
+            }))
+          );
+          
+          return;
+        }
+        
+        logger.info(`Found booking ${booking._id} for order ${orderId}`);
+        
+        if (booking.status !== 'confirmed') {
           logger.info(`Processing webhook payment success for order ${orderId}, booking ${booking._id}`);
           
           // Process successful payment
@@ -466,14 +646,11 @@ exports.handleCashfreeWebhook = async (req, res) => {
           });
           
           logger.info(`Successfully processed webhook payment for order ${orderId}`);
-        } else if (booking) {
-          logger.info(`Booking ${booking._id} already confirmed, ignoring webhook`);
         } else {
-          logger.warn(`Booking not found for webhook order ${orderId}`);
+          logger.info(`Booking ${booking._id} already confirmed, ignoring webhook`);
         }
         break;
         
-      // Rest of the cases remain the same...
       default:
         logger.info(`Unhandled webhook event type: ${eventType}`);
     }
