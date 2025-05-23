@@ -2590,162 +2590,90 @@ exports.getEventBookingStats = async (req, res) => {
       res.status(500).json({ error: 'Server error when generating event report' });
     }
   };
-  exports.handlePaymentConfirmation = async (req, res) => {
-    try {
-      const { bookingId, orderId, transactionId, paymentMethod } = req.body;
-      
-      if (!bookingId) {
-        return res.status(400).json({ error: 'Booking ID is required' });
-      }
-      
-      // Find the booking
-      const booking = await Booking.findById(bookingId);
-      if (!booking) {
-        return res.status(404).json({ error: 'Booking not found' });
-      }
-      
-      // Verify ownership
-      if (booking.user.toString() !== req.user.id.toString()) {
-        return res.status(403).json({ error: 'You do not have permission to update this booking' });
-      }
-      
-      // If booking is already confirmed, just return success
-      if (booking.status === 'confirmed') {
-        return res.json({
-          success: true,
-          message: 'Booking is already confirmed',
-          booking: {
-            id: booking._id,
-            status: booking.status
-          }
-        });
-      }
-      
-      // Verify payment based on the payment method
-      let paymentVerified = false;
-      let verificationDetails = {};
-      
-      if (paymentMethod === 'cashfree' || paymentMethod === 'cashfree_sdk') {
-        // Verify with Cashfree service
-        const cashfreeController = require('./cashfree.controller');
-        
-        try {
-          const verificationResponse = await cashfreeController.verifyCashfreePayment({
-            body: { orderId }
-          }, { json: () => ({}) }, () => {});
-          
-          paymentVerified = verificationResponse && 
-                            verificationResponse.status === 'PAYMENT_SUCCESS';
-          verificationDetails = verificationResponse || {};
-        } catch (verifyError) {
-          console.error('Cashfree verification error:', verifyError);
-          return res.status(500).json({ 
-            success: false, 
-            error: 'Payment verification failed'
-          });
-        }
-      } else if (paymentMethod === 'upi') {
-        // Verify with UPI service
-        const upiController = require('./upi.controller');
-        
-        try {
-          const verificationResponse = await upiController.verifyUpiPayment({
-            body: { orderId, bookingId }
-          }, { json: () => ({}) }, () => {});
-          
-          paymentVerified = verificationResponse && 
-                            verificationResponse.status === 'PAYMENT_SUCCESS';
-          verificationDetails = verificationResponse || {};
-        } catch (verifyError) {
-          console.error('UPI verification error:', verifyError);
-          return res.status(500).json({ 
-            success: false, 
-            error: 'Payment verification failed'
-          });
-        }
-      } else {
-        return res.status(400).json({ 
-          success: false, 
-          error: 'Unsupported payment method'
-        });
-      }
-      
-      if (!paymentVerified) {
-        return res.status(400).json({
-          success: false,
-          message: 'Payment has not been confirmed yet',
-          details: verificationDetails
-        });
-      }
-      
-      // Payment is verified, update booking status
-      booking.status = 'confirmed';
-      booking.paymentInfo.status = 'completed';
-      booking.paymentInfo.transactionId = transactionId || orderId;
-      booking.paymentInfo.paidAt = new Date();
-      
-      await booking.save();
-      
-      // Update ticket statuses
-      await Ticket.updateMany(
-        { booking: bookingId },
-        { status: 'active' }
-      );
-      
-      // Get necessary data for email
-      const event = await Event.findById(booking.event);
-      const user = await User.findById(booking.user);
-      
-      // Send confirmation email
-      try {
-        await sendBookingConfirmationEmail(booking, event, user, true);
-      } catch (emailError) {
-        console.error('Error sending confirmation email after payment:', emailError);
-        // Continue processing even if email fails
-      }
-      
-      // Send notification
-      try {
-        await Notification.create({
-          recipient: req.user.id,
-          type: 'booking_confirmed',
-          data: {
-            bookingId: booking._id,
-            eventId: booking.event,
-            eventName: event ? event.name : 'Event'
-          },
-          timestamp: Date.now()
-        });
-        
-        // Send socket event if available
-        if (socketEvents && typeof socketEvents.emitToUser === 'function') {
-          socketEvents.emitToUser(req.user.id.toString(), 'booking_confirmed', {
-            bookingId: booking._id,
-            eventName: event ? event.name : 'Event'
-          });
-        }
-      } catch (notifyError) {
-        console.error('Error sending notification:', notifyError);
-        // Continue processing even if notification fails
-      }
-      
-      // Return success response
-      res.json({
+exports.handlePaymentConfirmation = async (req, res) => {
+  try {
+    const { bookingId, orderId, transactionId, paymentMethod } = req.body;
+    
+    if (!bookingId) {
+      return res.status(400).json({ error: 'Booking ID is required' });
+    }
+    
+    // Find the booking
+    const booking = await Booking.findById(bookingId);
+    if (!booking) {
+      return res.status(404).json({ error: 'Booking not found' });
+    }
+    
+    // Verify ownership
+    if (booking.user.toString() !== req.user.id.toString()) {
+      return res.status(403).json({ error: 'You do not have permission to update this booking' });
+    }
+    
+    // If booking is already confirmed, just return success
+    if (booking.status === 'confirmed') {
+      return res.json({
         success: true,
-        message: 'Payment confirmed and booking updated',
+        message: 'Booking is already confirmed',
         booking: {
           id: booking._id,
-          status: booking.status,
-          paymentStatus: booking.paymentInfo.status
+          status: booking.status
         }
       });
-    } catch (error) {
-      console.error('Payment confirmation error:', error);
-      res.status(500).json({ 
-        success: false,
-        error: 'Server error when confirming payment'
-      });
     }
-  };
+    
+    // For Cashfree, verify the payment
+    if (paymentMethod === 'cashfree' || paymentMethod === 'cashfree_sdk') {
+      const cashfreeController = require('./cashfree.controller');
+      
+      try {
+        const verifyResponse = await api.post('/api/payments/cashfree/verify', {
+          orderId: orderId || booking.paymentInfo.orderId
+        });
+        
+        if (verifyResponse.data.status === 'PAYMENT_SUCCESS') {
+          booking.status = 'confirmed';
+          booking.paymentInfo.status = 'completed';
+          booking.paymentInfo.transactionId = transactionId || orderId;
+          booking.paymentInfo.paidAt = new Date();
+          
+          await booking.save();
+          
+          // Update ticket statuses
+          await Ticket.updateMany(
+            { booking: bookingId },
+            { status: 'active' }
+          );
+          
+          return res.json({
+            success: true,
+            message: 'Payment confirmed and booking updated',
+            booking: {
+              id: booking._id,
+              status: booking.status,
+              paymentStatus: booking.paymentInfo.status
+            }
+          });
+        }
+      } catch (error) {
+        console.error('Payment verification error:', error);
+        return res.status(500).json({ 
+          success: false, 
+          error: 'Payment verification failed'
+        });
+      }
+    }
+    
+    return res.status(400).json({ 
+      success: false, 
+      error: 'Payment verification required'
+    });
+  } catch (error) {
+    console.error('Payment confirmation error:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Server error when confirming payment'
+    });
+  }
+};
   
   module.exports = exports;
