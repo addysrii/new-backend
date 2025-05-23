@@ -483,38 +483,49 @@ logger.info(`Booking save verified successfully for order ${orderId}`);
 exports.verifyCashfreePayment = async (req, res) => {
   try {
     const { orderId } = req.body;
-    
-    if (!orderId) {
-      logger.warn('Missing order ID for payment verification');
-      return res.status(400).json({ error: 'Order ID is required' });
-    }
-    
     logger.info(`Verifying Cashfree payment. OrderID: ${orderId}`);
-    
-    // Find booking by order ID in payment info
+
+    if (!orderId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Order ID is required'
+      });
+    }
+
+    // Find booking first
     const booking = await Booking.findOne({ 'paymentInfo.orderId': orderId });
     
     if (!booking) {
       logger.warn(`Booking not found with order ID: ${orderId}`);
-      return res.status(404).json({ error: 'Booking not found' });
+      return res.status(404).json({
+        success: false,
+        error: 'Booking not found'
+      });
     }
-    
-    // Get Cashfree API credentials
-    const clientId = process.env.CASHFREE_APP_ID;
-    const clientSecret = process.env.CASHFREE_SECRET_KEY;
-    const isProduction = process.env.CASHFREE_ENV === 'PRODUCTION';
-    
-    if (!clientId || !clientSecret) {
-      logger.error('Cashfree API credentials not configured');
-      return res.status(500).json({ error: 'Payment service is not properly configured' });
+
+    // Check if already confirmed (from webhook)
+    if (booking.status === 'confirmed' && booking.paymentInfo.status === 'completed') {
+      logger.info(`Booking ${booking._id} already confirmed via webhook`);
+      return res.json({
+        success: true,
+        status: 'PAYMENT_SUCCESS',
+        message: 'Payment already confirmed',
+        booking: {
+          id: booking._id,
+          status: booking.status,
+          paymentStatus: booking.paymentInfo.status
+        }
+      });
     }
-    
-    // Cashfree API URL based on environment
-    const apiUrl = isProduction
+
+    // Verify with Cashfree API
+    const clientId = process.env.CASHFREE_CLIENT_ID;
+    const clientSecret = process.env.CASHFREE_CLIENT_SECRET;
+    const environment = process.env.CASHFREE_ENV || 'TEST';
+    const apiUrl = environment === 'PRODUCTION' 
       ? `https://api.cashfree.com/pg/orders/${orderId}`
       : `https://sandbox.cashfree.com/pg/orders/${orderId}`;
-    
-    // Make API request to Cashfree to verify payment
+
     const response = await axios.get(apiUrl, {
       headers: {
         'x-client-id': clientId,
@@ -523,49 +534,84 @@ exports.verifyCashfreePayment = async (req, res) => {
       }
     });
 
-    logger.debug(`Payment verification result: ${JSON.stringify(response.data)}`);
-    console.log("this is data",response.data)
-    // Map Cashfree status to our status
-    const paymentStatus = response.data.payment_status === 'SUCCESS' ? 'PAYMENT_SUCCESS' : 'PAYMENT_PENDING';
-    console.log(paymentStatus)
-    // If payment is successful, update booking status
-    if (paymentStatus === 'PAYMENT_SUCCESS' && booking.status !== 'confirmed') {
-      await processSuccessfulPayment(booking, {
-        orderId: orderId,
-        status: paymentStatus,
-        orderAmount: response.data.order_amount,
-        transactionId: response.data.cf_order_id || orderId
-      });
-      
-      return res.json({
-        success: true,
-        status: paymentStatus,
-        message: 'Payment verified successfully',
-        bookingId: booking._id,
-        orderId: orderId
-      });
-    } else {
-      // Payment is still pending or already processed
-      return res.json({
-        success: true,
-        status: paymentStatus,
-        message: paymentStatus === 'PAYMENT_SUCCESS' ? 'Payment successful' : 'Payment not confirmed yet',
-        bookingId: booking._id,
-        orderId: orderId
-      });
+    const orderData = response.data;
+    console.log('Cashfree order data:', orderData);
+
+    // Check if order is paid
+    if (orderData.order_status === 'PAID') {
+      // Get payment details
+      const paymentsUrl = environment === 'PRODUCTION'
+        ? `https://api.cashfree.com/pg/orders/${orderId}/payments`
+        : `https://sandbox.cashfree.com/pg/orders/${orderId}/payments`;
+
+      try {
+        const paymentsResponse = await axios.get(paymentsUrl, {
+          headers: {
+            'x-client-id': clientId,
+            'x-client-secret': clientSecret,
+            'x-api-version': '2022-09-01'
+          }
+        });
+
+        const payments = paymentsResponse.data;
+        const successfulPayment = payments.find(p => p.payment_status === 'SUCCESS');
+
+        if (successfulPayment) {
+          // Update booking if not already updated
+          if (booking.status !== 'confirmed') {
+            await processSuccessfulPayment(booking, {
+              orderId: orderId,
+              status: 'PAYMENT_SUCCESS',
+              orderAmount: orderData.order_amount,
+              transactionId: successfulPayment.cf_payment_id
+            });
+          }
+
+          return res.json({
+            success: true,
+            status: 'PAYMENT_SUCCESS',
+            message: 'Payment verified successfully',
+            booking: {
+              id: booking._id,
+              status: 'confirmed',
+              paymentStatus: 'completed'
+            }
+          });
+        }
+      } catch (paymentError) {
+        logger.error('Error fetching payment details:', paymentError);
+      }
     }
+
+    // Map Cashfree status to our status
+    let status = 'PAYMENT_PENDING';
+    if (orderData.order_status === 'PAID') {
+      status = 'PAYMENT_SUCCESS';
+    } else if (orderData.order_status === 'EXPIRED' || orderData.order_status === 'TERMINATED') {
+      status = 'PAYMENT_FAILED';
+    }
+
+    return res.json({
+      success: true,
+      status: status,
+      message: `Payment status: ${orderData.order_status}`,
+      booking: {
+        id: booking._id,
+        status: booking.status,
+        paymentStatus: booking.paymentInfo.status
+      }
+    });
+
   } catch (error) {
-    // Log error details
-    logger.error(`Cashfree payment verification error: ${error.message}`, {
-      stack: error.stack,
+    logger.error(`Cashfree payment verification error:`, {
       orderId: req.body.orderId,
-      response: error.response?.data
+      error: error.message,
+      stack: error.stack
     });
     
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      error: 'Server error when verifying Cashfree payment',
-      message: error.message
+      error: 'Failed to verify payment status'
     });
   }
 };
