@@ -14,13 +14,11 @@ const logger = require('../utils/logger')
  * @returns {string} Unique order ID
  */
 function generateOrderId() {
-  const uniqueId = crypto.randomBytes(16).toString('hex');
-  const hash = crypto.createHash('sha256');
-  hash.update(uniqueId);
-  const orderId = hash.digest('hex');
-  return orderId.substr(0, 12);
+  // Use a simpler, more consistent format
+  const timestamp = Date.now().toString(36);
+  const randomStr = crypto.randomBytes(4).toString('hex');
+  return `${timestamp}${randomStr}`.substring(0, 12);
 }
-
 
 /**
  * Helper function to send booking confirmation email
@@ -383,6 +381,17 @@ exports.initiateCashfreePayment = async (req, res) => {
         newPaymentStatus: booking.paymentInfo.status,
         storedOrderId: booking.paymentInfo.orderId
       });
+      const verifyBooking = await Booking.findById(bookingId).select('paymentInfo.orderId').exec();
+if (!verifyBooking || verifyBooking.paymentInfo.orderId !== orderId) {
+  logger.error(`CRITICAL: Booking save verification failed!`, {
+    bookingId,
+    expectedOrderId: orderId,
+    actualOrderId: verifyBooking?.paymentInfo?.orderId
+  });
+  throw new Error('Failed to save payment information');
+}
+
+logger.info(`Booking save verified successfully for order ${orderId}`);
     } catch (saveError) {
       logger.error(`Failed to save booking ${bookingId} after Cashfree order creation:`, {
         error: saveError.message,
