@@ -11,6 +11,7 @@ const notificationSchema = new Schema({
   type: {
     type: String,
     enum: [
+      'booking_confirmed',
       'event_response',
       'event_updated',
       'custom_form_submission',
