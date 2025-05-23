@@ -569,7 +569,10 @@ exports.verifyCashfreePayment = async (req, res) => {
 // Update in controllers/cashfree.controller.js
 exports.handleCashfreeWebhook = async (req, res) => {
   try {
-    logger.info('Received Cashfree webhook notification');
+    logger.info('Received Cashfree webhook notification', {
+      headers: req.headers,
+      body: JSON.stringify(req.body)
+    });
     
     // Acknowledge receipt immediately with 200 response
     res.status(200).json({ received: true });
@@ -584,50 +587,42 @@ exports.handleCashfreeWebhook = async (req, res) => {
     switch(eventType) {
       case 'PAYMENT_SUCCESS':
       case 'ORDER_PAID':
-      case 'PAYMENT_SUCCESS_WEBHOOK': // This is the type we're receiving
-        // Process payment success
+      case 'PAYMENT_SUCCESS_WEBHOOK':
+        // Extract order ID from the correct path in webhook data
         const orderId = webhookData.data?.order?.order_id;
         
         if (!orderId) {
-          logger.error('Order ID not found in payment webhook data');
+          logger.error('Order ID not found in payment webhook data', {
+            webhookStructure: JSON.stringify(webhookData, null, 2)
+          });
           return;
         }
         
         logger.info(`Processing payment success for order: ${orderId}`);
         
-        // ENHANCED BOOKING LOOKUP - Try multiple approaches
-        let booking = null;
-        
-        // First try: Direct match on paymentInfo.orderId
-        booking = await Booking.findOne({ 'paymentInfo.orderId': orderId });
+        // Find booking by the exact order ID format you're using
+        let booking = await Booking.findOne({ 
+          'paymentInfo.orderId': orderId 
+        }).exec();
         
         if (!booking) {
-          logger.warn(`Direct lookup failed for order ${orderId}, trying alternative queries`);
+          logger.warn(`Direct lookup failed for order ${orderId}, trying with string conversion`);
           
-          // Second try: Check if order ID is stored differently
+          // Sometimes MongoDB might have issues with string matching, try explicit string conversion
           booking = await Booking.findOne({ 
-            $or: [
-              { 'paymentInfo.orderId': orderId },
-              { 'paymentInfo.transactionId': orderId },
-              { 'paymentInfo.responseData.orderId': orderId }
-            ]
-          });
+            'paymentInfo.orderId': orderId.toString() 
+          }).exec();
         }
         
         if (!booking) {
-          // Third try: Log all recent bookings to debug
-          const recentBookings = await Booking.find({
-            createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } // Last 24 hours
-          }).select('_id paymentInfo createdAt').limit(10);
+          // Log the exact structure of a recent booking to debug
+          const sampleBooking = await Booking.findOne({
+            'paymentInfo.method': 'cashfree_sdk'
+          }).select('paymentInfo').exec();
           
-          logger.error(`Still no booking found for order ${orderId}. Recent bookings:`, 
-            recentBookings.map(b => ({
-              id: b._id,
-              orderId: b.paymentInfo?.orderId,
-              method: b.paymentInfo?.method,
-              createdAt: b.createdAt
-            }))
-          );
+          logger.error(`No booking found for order ${orderId}. Sample booking structure:`, {
+            samplePaymentInfo: sampleBooking?.paymentInfo
+          });
           
           return;
         }
@@ -635,14 +630,11 @@ exports.handleCashfreeWebhook = async (req, res) => {
         logger.info(`Found booking ${booking._id} for order ${orderId}`);
         
         if (booking.status !== 'confirmed') {
-          logger.info(`Processing webhook payment success for order ${orderId}, booking ${booking._id}`);
-          
-          // Process successful payment
           await processSuccessfulPayment(booking, {
             orderId: orderId,
             status: 'PAYMENT_SUCCESS',
             orderAmount: webhookData.data?.order?.order_amount || 0,
-            transactionId: webhookData.data?.payment?.cf_payment_id || webhookData.data?.payment_gateway_details?.gateway_payment_id || orderId
+            transactionId: webhookData.data?.payment?.cf_payment_id || orderId
           });
           
           logger.info(`Successfully processed webhook payment for order ${orderId}`);
