@@ -284,6 +284,8 @@ const BookingSchema = new Schema({
         'cashfree_sdk'
       ]
     },
+       orderId: String,  // Make sure this field exists
+    cfOrderId: String,
     transactionId: String,
     transactionDate: Date,
     lastFour: String, // Last four digits of card if applicable
