@@ -8,12 +8,12 @@ class EmailService {
   constructor() {
     // Create reusable transporter object using SMTP transport
     this.transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
-      port: process.env.SMTP_PORT,
-      secure: process.env.SMTP_SECURE === 'true',
+      host: process.env.EMAIL_HOST,
+      port: process.env.EMAIL_PORT,
+      secure: process.env.EMAIL_SECURE === 'true',
       auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASS
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASSWORD
       }
     });
     
@@ -82,7 +82,7 @@ class EmailService {
       
       // Build mail options
       const mailOptions = {
-        from: `"${process.env.EMAIL_FROM_NAME || 'Event Booking System'}" <${process.env.EMAIL_FROM_ADDRESS || process.env.SMTP_USER}>`,
+        from: `"${process.env.EMAIL_FROM_NAME || 'Event Booking System'}" <${process.env.EMAIL_FROM_ADDRESS || process.env.EMAIL_USER}>`,
         to,
         subject: subject || 'Message from Event Booking System',
         attachments: attachments || []
@@ -149,7 +149,7 @@ class EmailService {
           totalAmount: booking.totalAmount,
           currency: booking.currency,
           ticketCount: tickets.length,
-          appUrl: process.env.APP_URL || 'https://yourbookingapp.com'
+          appUrl: process.env.FRONTEND_URL || 'https://yourbookingapp.com'
         },
         attachments: [
           {
