@@ -531,7 +531,7 @@ exports.getSubmission = async (req, res) => {
     }
     
     // Check if user has permission to view
-    const isOwner = submission.user._id.toString() === req.user.id;
+    const isOwner = submission.user._id.toString() === req.user.id.toString();
     
     // If not owner, check if user is event creator or host
     if (!isOwner) {
