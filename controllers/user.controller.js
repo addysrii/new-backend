@@ -12,59 +12,8 @@ const Settings = require('../models/Settings');
  * @access Private
  */
 const updateUserInterests = (body, currentInterests = {}) => {
-  const { interests, interestTopics, interestIndustries } = body;
-  
-  // Initialize with existing interests
-  const result = {
-    topics: currentInterests.topics || [],
-    industries: currentInterests.industries || []
-  };
-  
-  // Handle different interest formats
-  if (interests) {
-    if (Array.isArray(interests)) {
-      // Old format - array of strings
-      result.topics = interests;
-      result.industries = [];
-    } else if (typeof interests === 'object') {
-      // New format - object with topics and industries
-      result.topics = interests.topics || result.topics;
-      result.industries = interests.industries || result.industries;
-    } else if (typeof interests === 'string') {
-      // Comma-separated string
-      result.topics = interests.split(',').map(item => item.trim());
-      result.industries = [];
-    }
-  }
-  
-  // Override with specific updates
-  if (interestTopics) {
-    result.topics = Array.isArray(interestTopics) ? interestTopics : interestTopics.split(',').map(item => item.trim());
-  }
-  
-  if (interestIndustries) {
-    result.industries = Array.isArray(interestIndustries) ? interestIndustries : interestIndustries.split(',').map(item => item.trim());
-  }
-  
-  return result;
 };
 exports.getCurrentUser = async (req, res) => {
-  try {
-    const user = await User.findById(req.user.id)
-      .select('-password -security.passwordResetToken -security.passwordResetExpires')
-      .populate('connections', 'firstName lastName profileImage username')
-      .populate('settings')
-      .populate('skills'); // Populate skills to get skill objects
-    
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-    
-    res.json(user);
-  } catch (error) {
-    console.error('Error fetching current user:', error);
-    res.status(500).json({ error: 'Server error' });
-  }
 };
 
 /**
@@ -109,9 +58,9 @@ exports.updateProfile = async (req, res) => {
       const skillIds = [];
       
       for (const skillName of skillNames) {
-        let skill = await Skill.findOne({ name: skillName.toLowerCase() });
+        let skill = await User.findOne({ name: skillName.toLowerCase() });
         if (!skill) {
-          skill = new Skill({ name: skillName.toLowerCase() });
+          skill = new User({ name: skillName.toLowerCase() });
           await skill.save();
         }
         skillIds.push(skill._id);
