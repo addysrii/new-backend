@@ -1,9 +1,10 @@
 // controllers/user.controller.js
+// controllers/user.controller.js
 const { User } = require('../models/User');
 const mongoose = require('mongoose');
 const ObjectId = mongoose.Types.ObjectId;
 const { ProfileView } = require('../models/User');
-const {Achievement,Project} = require('../models/Portfolio')
+const { Achievement, Project } = require('../models/Portfolio');
 const Settings = require('../models/Settings');
 
 /**
@@ -11,9 +12,52 @@ const Settings = require('../models/Settings');
  * @route GET /api/me
  * @access Private
  */
-const updateUserInterests = (body, currentInterests = {}) => {
-};
 exports.getCurrentUser = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id)
+      .select('-password -security.passwordResetToken -security.passwordResetExpires')
+      .populate('skills')
+      .populate('settings');
+    
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    res.json(user);
+  } catch (error) {
+    console.error('Error fetching current user:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+/**
+ * Helper function to update user interests
+ */
+const updateUserInterests = (newInterests, currentInterests = {}) => {
+  // If interests is already an object, use it directly
+  if (typeof newInterests === 'object' && !Array.isArray(newInterests)) {
+    return {
+      topics: newInterests.topics || currentInterests.topics || [],
+      industries: newInterests.industries || currentInterests.industries || []
+    };
+  } 
+  // If interests is an array (old format), convert to new format
+  else if (Array.isArray(newInterests)) {
+    return {
+      topics: newInterests,
+      industries: currentInterests.industries || []
+    };
+  } 
+  // If interests is a string, parse it
+  else if (typeof newInterests === 'string') {
+    const interestsArray = newInterests.split(',').map(interest => interest.trim());
+    return {
+      topics: interestsArray,
+      industries: currentInterests.industries || []
+    };
+  }
+  
+  return currentInterests;
 };
 
 /**
@@ -40,6 +84,12 @@ exports.updateProfile = async (req, res) => {
       socialLinks
     } = req.body;
     
+    // Get current user to access existing data
+    const currentUser = await User.findById(req.user.id);
+    if (!currentUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
     // Build profile object
     const profileFields = {};
     
@@ -52,44 +102,35 @@ exports.updateProfile = async (req, res) => {
     if (birthday) profileFields.birthday = birthday;
     if (gender) profileFields.gender = gender;
     
-    // Handle skills - convert skill names to ObjectIds
+    // Handle skills - Check if Skill model exists, otherwise store as strings
     if (skills) {
-      let skillNames = Array.isArray(skills) ? skills : skills.split(',').map(skill => skill.trim());
-      const skillIds = [];
-      
-      for (const skillName of skillNames) {
-        let skill = await User.findOne({ name: skillName.toLowerCase() });
-        if (!skill) {
-          skill = new User({ name: skillName.toLowerCase() });
-          await skill.save();
+      try {
+        let skillNames = Array.isArray(skills) ? skills : skills.split(',').map(skill => skill.trim());
+        
+        // Try to find Skill model, if it doesn't exist, store as strings
+        const SkillModel = mongoose.model('Skill');
+        const skillIds = [];
+        
+        for (const skillName of skillNames) {
+          let skill = await SkillModel.findOne({ name: skillName.toLowerCase() });
+          if (!skill) {
+            skill = new SkillModel({ name: skillName.toLowerCase() });
+            await skill.save();
+          }
+          skillIds.push(skill._id);
         }
-        skillIds.push(skill._id);
+        
+        profileFields.skills = skillIds;
+      } catch (error) {
+        // If Skill model doesn't exist, store as strings
+        console.warn('Skill model not found, storing skills as strings');
+        profileFields.skills = Array.isArray(skills) ? skills : skills.split(',').map(skill => skill.trim());
       }
-      
-      profileFields.skills = skillIds;
     }
     
     // Handle interests - properly handle different formats
     if (interests) {
-      // If interests is already an object, use it directly
-      if (typeof interests === 'object' && !Array.isArray(interests)) {
-        profileFields.interests = interests;
-      } 
-      // If interests is an array (old format), convert to new format
-      else if (Array.isArray(interests)) {
-        profileFields.interests = {
-          topics: interests,
-          industries: []
-        };
-      } 
-      // If interests is a string, parse it
-      else if (typeof interests === 'string') {
-        const interestsArray = interests.split(',').map(interest => interest.trim());
-        profileFields.interests = {
-          topics: interestsArray,
-          industries: []
-        };
-      }
+      profileFields.interests = updateUserInterests(interests, currentUser.interests);
     }
     
     // Handle profile image upload
@@ -104,19 +145,16 @@ exports.updateProfile = async (req, res) => {
     
     // Handle education
     if (education) {
-      // Ensure education is an array
       profileFields.education = Array.isArray(education) ? education : [education];
     }
     
     // Handle experience
     if (experience) {
-      // Ensure experience is an array
       profileFields.experience = Array.isArray(experience) ? experience : [experience];
     }
     
     // Handle languages
     if (languages) {
-      // Ensure languages is an array
       profileFields.languages = Array.isArray(languages) ? languages : [languages];
     }
     
@@ -171,12 +209,16 @@ exports.getUserProfile = async (req, res) => {
     
     // Record profile view if viewing another user's profile
     if (req.user && req.user.id !== userId) {
-      // Create profile view record
-      await ProfileView.create({
-        viewer: req.user.id,
-        viewed: userId,
-        timestamp: Date.now()
-      });
+      try {
+        await ProfileView.create({
+          viewer: req.user.id,
+          viewed: userId,
+          timestamp: Date.now()
+        });
+      } catch (viewError) {
+        console.error('Error recording profile view:', viewError);
+        // Don't fail the request if profile view recording fails
+      }
     }
     
     res.json(user);
@@ -186,7 +228,6 @@ exports.getUserProfile = async (req, res) => {
   }
 };
 
-
 /**
  * Delete user account
  * @route DELETE /api/account
@@ -194,16 +235,38 @@ exports.getUserProfile = async (req, res) => {
  */
 exports.deleteAccount = async (req, res) => {
   try {
-    // Delete the user
-    await User.findByIdAndDelete(req.user.id);
+    // Start a transaction for data consistency
+    const session = await mongoose.startSession();
+    session.startTransaction();
     
-    // TODO: Also clean up related data:
-    // - Remove user from connections
-    // - Delete posts, comments, etc.
-    // - Delete profile views
-    // - Any other user-related data
-    
-    res.json({ message: 'Account deleted successfully' });
+    try {
+      // Delete the user
+      await User.findByIdAndDelete(req.user.id).session(session);
+      
+      // Clean up related data
+      await ProfileView.deleteMany({
+        $or: [
+          { viewer: req.user.id },
+          { viewed: req.user.id }
+        ]
+      }).session(session);
+      
+      // Delete user settings
+      await Settings.findOneAndDelete({ user: req.user.id }).session(session);
+      
+      // TODO: Also clean up other related data:
+      // - Remove user from connections
+      // - Delete posts, comments, etc.
+      // - Any other user-related data
+      
+      await session.commitTransaction();
+      res.json({ message: 'Account deleted successfully' });
+    } catch (error) {
+      await session.abortTransaction();
+      throw error;
+    } finally {
+      session.endSession();
+    }
   } catch (error) {
     console.error('Error deleting account:', error);
     res.status(500).json({ error: 'Server error' });
@@ -223,9 +286,19 @@ exports.recordProfileView = async (req, res) => {
       return res.status(400).json({ error: 'User ID is required' });
     }
     
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ error: 'Invalid user ID format' });
+    }
+    
     // Don't record if viewing own profile
     if (req.user.id === userId) {
       return res.status(400).json({ error: 'Cannot record view for your own profile' });
+    }
+    
+    // Check if target user exists
+    const targetUser = await User.findById(userId);
+    if (!targetUser) {
+      return res.status(404).json({ error: 'Target user not found' });
     }
     
     // Create a new profile view
@@ -270,13 +343,15 @@ exports.getProfileViewers = async (req, res) => {
     const viewersMap = new Map();
     
     profileViews.forEach(view => {
-      const viewerId = view.viewer._id.toString();
-      
-      if (!viewersMap.has(viewerId) || viewersMap.get(viewerId).timestamp < view.timestamp) {
-        viewersMap.set(viewerId, {
-          ...view,
-          viewer: view.viewer
-        });
+      if (view.viewer) { // Check if viewer exists (not deleted)
+        const viewerId = view.viewer._id.toString();
+        
+        if (!viewersMap.has(viewerId) || viewersMap.get(viewerId).timestamp < view.timestamp) {
+          viewersMap.set(viewerId, {
+            ...view,
+            viewer: view.viewer
+          });
+        }
       }
     });
     
@@ -390,11 +465,14 @@ exports.getProfileViewActivity = async (req, res) => {
       .populate('viewer', 'firstName lastName username profileImage headline')
       .lean();
     
+    // Filter out views where viewer doesn't exist (deleted users)
+    const validViews = profileViews.filter(view => view.viewer);
+    
     // Count total
     const total = await ProfileView.countDocuments({ viewed: req.user.id });
     
     res.json({
-      activity: profileViews,
+      activity: validViews,
       pagination: {
         total,
         page,
@@ -424,6 +502,14 @@ exports.updateProfileViewPrivacy = async (req, res) => {
       settings = new Settings({
         user: req.user.id
       });
+    }
+    
+    // Initialize nested objects if they don't exist
+    if (!settings.privacySettings) {
+      settings.privacySettings = {};
+    }
+    if (!settings.notificationSettings) {
+      settings.notificationSettings = {};
     }
     
     // Update privacy settings
@@ -487,6 +573,11 @@ exports.updateSettings = async (req, res) => {
       });
     }
     
+    // Initialize appSettings if it doesn't exist
+    if (!settings.appSettings) {
+      settings.appSettings = {};
+    }
+    
     // Update settings fields
     if (req.body.theme) {
       settings.appSettings.theme = req.body.theme;
@@ -532,6 +623,11 @@ exports.updatePrivacySettings = async (req, res) => {
       settings = new Settings({
         user: req.user.id
       });
+    }
+    
+    // Initialize privacySettings if it doesn't exist
+    if (!settings.privacySettings) {
+      settings.privacySettings = {};
     }
     
     // Update privacy settings fields
@@ -596,6 +692,11 @@ exports.updateNotificationSettings = async (req, res) => {
       settings = new Settings({
         user: req.user.id
       });
+    }
+    
+    // Initialize notificationSettings if it doesn't exist
+    if (!settings.notificationSettings) {
+      settings.notificationSettings = {};
     }
     
     // Update notification settings fields
@@ -670,6 +771,11 @@ exports.updateAppSettings = async (req, res) => {
       });
     }
     
+    // Initialize appSettings if it doesn't exist
+    if (!settings.appSettings) {
+      settings.appSettings = {};
+    }
+    
     // Update app settings fields
     if (theme) {
       settings.appSettings.theme = theme;
@@ -716,8 +822,12 @@ exports.connectCalendar = async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
     
+    // Initialize integrations if it doesn't exist
+    if (!user.integrations) {
+      user.integrations = {};
+    }
+    
     // Add calendar integration
-    user.integrations = user.integrations || {};
     user.integrations.calendar = {
       provider,
       accessToken,
@@ -852,6 +962,7 @@ exports.syncCalendarEvents = async (req, res) => {
     res.status(500).json({ error: 'Server error' });
   }
 };
+
 
 /**
  * Connect social media account
