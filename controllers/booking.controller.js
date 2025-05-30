@@ -859,10 +859,18 @@ exports.getUserBookings = async (req, res) => {
       .populate('tickets')
       .sort({ createdAt: -1 });
     
+    // Filter out bookings where the event has been deleted (event is null)
+    bookings = bookings.filter(booking => booking.event !== null);
+    
     // Filter by upcoming/past events if requested
     if (upcoming === 'true' || upcoming === 'false') {
       const now = new Date();
       bookings = bookings.filter(booking => {
+        // Additional safety check - skip if event is null
+        if (!booking.event || !booking.event.startDateTime) {
+          return false;
+        }
+        
         const isUpcoming = new Date(booking.event.startDateTime) > now;
         return upcoming === 'true' ? isUpcoming : !isUpcoming;
       });
@@ -871,6 +879,18 @@ exports.getUserBookings = async (req, res) => {
     // Add status for display
     const enhancedBookings = bookings.map(booking => {
       const bookingObj = booking.toObject();
+      
+      // Additional safety check for the mapping operation
+      if (!booking.event || !booking.event.startDateTime) {
+        console.warn(`Booking ${booking._id} has null or invalid event, skipping enhancement`);
+        return {
+          ...bookingObj,
+          displayStatus: 'invalid',
+          isUpcoming: false,
+          ticketCount: booking.tickets.length,
+          eventDeleted: true
+        };
+      }
       
       // Calculate some useful info
       const now = new Date();
