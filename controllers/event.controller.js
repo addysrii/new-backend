@@ -2009,7 +2009,91 @@ exports.getEventAnalytics = async (req, res) => {
     res.status(500).json({ error: 'Server error when retrieving event analytics' });
   }
 };
+exports.enableEventCertificates = async (req, res) => {
+  try {
+    const { eventId } = req.params;
+    const { templateId, autoIssue = false, requireCompletion = false } = req.body;
 
+    const event = await Event.findById(eventId);
+    if (!event) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+
+    // Check permissions
+    const isCreator = event.createdBy.toString() === req.user.id;
+    const isHost = event.attendees.some(a => 
+      a.user.toString() === req.user.id && a.role === 'host'
+    );
+
+    if (!isCreator && !isHost) {
+      return res.status(403).json({ error: 'Permission denied' });
+    }
+
+    // Update event with certificate settings
+    event.certificateSettings = {
+      enabled: true,
+      templateId,
+      autoIssue,
+      requireCompletion,
+      enabledAt: new Date(),
+      enabledBy: req.user.id
+    };
+
+    await event.save();
+
+    res.json({
+      success: true,
+      message: 'Certificates enabled for event',
+      settings: event.certificateSettings
+    });
+  } catch (error) {
+    console.error('Enable event certificates error:', error);
+    res.status(500).json({ error: 'Server error when enabling certificates' });
+  }
+};
+
+/**
+ * Disable certificates for an event
+ * @route PUT /api/events/:eventId/certificates/disable
+ * @access Private
+ */
+exports.disableEventCertificates = async (req, res) => {
+  try {
+    const { eventId } = req.params;
+
+    const event = await Event.findById(eventId);
+    if (!event) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+
+    // Check permissions
+    const isCreator = event.createdBy.toString() === req.user.id;
+    const isHost = event.attendees.some(a => 
+      a.user.toString() === req.user.id && a.role === 'host'
+    );
+
+    if (!isCreator && !isHost) {
+      return res.status(403).json({ error: 'Permission denied' });
+    }
+
+    event.certificateSettings = {
+      ...event.certificateSettings,
+      enabled: false,
+      disabledAt: new Date(),
+      disabledBy: req.user.id
+    };
+
+    await event.save();
+
+    res.json({
+      success: true,
+      message: 'Certificates disabled for event'
+    });
+  } catch (error) {
+    console.error('Disable event certificates error:', error);
+    res.status(500).json({ error: 'Server error when disabling certificates' });
+  }
+};
 /**
  * Update attendee role
  * @route PUT /api/events/:eventId/attendees/:userId/role
