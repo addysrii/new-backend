@@ -173,6 +173,34 @@ const eventSchema = new Schema({
       enum: ['text', 'number', 'date', 'boolean', 'url', 'email', 'select'],
       default: 'text'
     },
+    certificateSettings: {
+  enabled: {
+    type: Boolean,
+    default: false
+  },
+  templateId: {
+    type: Schema.Types.ObjectId,
+    ref: 'CertificateTemplate'
+  },
+  autoIssue: {
+    type: Boolean,
+    default: false
+  },
+  requireCompletion: {
+    type: Boolean,
+    default: false
+  },
+  enabledAt: Date,
+  enabledBy: {
+    type: Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  disabledAt: Date,
+  disabledBy: {
+    type: Schema.Types.ObjectId,
+    ref: 'User'
+  }
+},
     label: {
       type: String,
       required: true,
