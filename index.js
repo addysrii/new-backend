@@ -957,7 +957,11 @@ if (eventController) {
     app.post('/api/events/:eventId/calendar', authenticateToken, eventController.addToCalendar);
     app.post('/api/events/:eventId/comments', authenticateToken, eventController.addEventComment);
     app.post('/api/events/:eventId/photos', authenticateToken, eventUpload.single('photo'), eventController.addEventPhoto);
-    
+    app.use('/api/certificates', require('./routes/certificate.routes'));
+
+// Add these routes to your existing event routes section:
+app.put('/api/events/:eventId/certificates/enable', authenticateToken, eventController.enableEventCertificates);
+app.put('/api/events/:eventId/certificates/disable', authenticateToken, eventController.disableEventCertificates);
     // Finally: Define nested routes with parameters
     app.put('/api/events/:eventId/attendees/:userId/role', authenticateToken, eventController.updateAttendeeRole);
     app.put('/api/events/:eventId/attendees/:userId/approve', authenticateToken, eventController.approveAttendee);
