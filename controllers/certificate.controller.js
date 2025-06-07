@@ -1,5 +1,4 @@
 
-
 const { Certificate, CertificateTemplate } = require('../models/Certificate');
 const { Event } = require('../models/Event');
 const { User } = require('../models/User');
@@ -361,12 +360,16 @@ exports.issueCertificates = async (req, res) => {
           }
         });
 
-        // Generate verification URL
-        certificate.verificationUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/verify-certificate/${certificate.certificateId}`;
+        // FIXED: Generate proper verification URL using actual domain
+        const baseUrl = process.env.FRONTEND_URL || 
+                       `${req.protocol}://${req.get('host')}` || 
+                       'http://localhost:3000';
+        
+        certificate.verificationUrl = `${baseUrl}/verify-certificate/${certificate.certificateId}`;
 
         await certificate.save();
 
-        // Generate QR code
+        // Generate QR code with proper URL
         const qrData = {
           certificateId: certificate.certificateId,
           verificationUrl: certificate.verificationUrl,
@@ -375,7 +378,7 @@ exports.issueCertificates = async (req, res) => {
           issuedAt: certificate.issuedAt
         };
 
-        const qrCodeData = await QRCode.toDataURL(JSON.stringify(qrData));
+        const qrCodeData = await QRCode.toDataURL(certificate.verificationUrl);
         certificate.qrCode = qrCodeData;
         await certificate.save();
 
@@ -412,7 +415,8 @@ exports.issueCertificates = async (req, res) => {
         id: cert._id,
         certificateId: cert.certificateId,
         recipient: cert.certificateData.recipientName,
-        issuedAt: cert.issuedAt
+        issuedAt: cert.issuedAt,
+        verificationUrl: cert.verificationUrl
       })),
       errorDetails: errors
     });
