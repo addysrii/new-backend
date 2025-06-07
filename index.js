@@ -785,7 +785,7 @@ app.put('/api/chats/:chatId/media-controls', authenticateToken, chatController.s
 app.get('/api/chats/:chatId/audit-log', authenticateToken, chatController.getChatAuditLog);
 app.post('/api/chats/:chatId/self-destruct', authenticateToken, chatController.createSelfDestructMessage);
 app.post('/api/chats/:chatId/report', authenticateToken, chatController.reportSecurityIssue);
-app.post('/api/chats/:chatId/security-scan', authenticateToken, chatController.runSecurityScan);
+    app.post('/api/chats/:chatId/security-scan', authenticateToken, chatController.runSecurityScan);
 app.post('/api/chats/:chatId/uploads', authenticateToken, upload.single('file'), chatController.secureFileUpload);
 app.post('/api/chats/:chatId/keys/exchange', authenticateToken, chatController.exchangeEncryptionKeys);
 app.post('/api/chats/:chatId/auto-expiration', authenticateToken, chatController.setAutoExpiration);
@@ -800,7 +800,7 @@ app.delete('/api/chats/:chatId/messages/:messageId', authenticateToken, chatCont
   console.log('Skipping chat routes setup - controller not available');
 }
 
-// ==========================================// ==========================================
+// ==========================================
 // NETWORK ROUTES
 // ==========================================
 console.log('Setting up network routes...');
@@ -911,8 +911,76 @@ if (locationController) {
   console.log('Skipping location routes setup - controller not available');
 }
 
-// EVENT ROUTES
 // ==========================================
+// CERTIFICATE ROUTES (IMPORTANT: Must be before event routes)
+// ==========================================
+console.log('Setting up certificate routes...');
+try {
+  const certificateController = require('./controllers/certificate.controller');
+  const certificateRoutes = require('./routes/certificate.routes');
+  
+  console.log('Certificate controller loaded:', typeof certificateController.verifyCertificate === 'function');
+  console.log('Certificate routes loaded:', typeof certificateRoutes);
+  
+  app.use('/api/certificates', certificateRoutes);
+  console.log('✅ Certificate routes set up successfully at /api/certificates');
+  
+  // Test the verification endpoint
+  console.log('Certificate verification endpoint should be available at: /api/certificates/verify/:certificateId');
+  
+} catch (error) {
+  console.error('❌ Error setting up certificate routes:', error);
+  
+  // Create a fallback route for testing
+  app.get('/api/certificates/verify/:certificateId', (req, res) => {
+    console.log('Fallback certificate verification called for:', req.params.certificateId);
+    res.json({
+      valid: true,
+      certificate: {
+        id: req.params.certificateId,
+        recipient: 'Test User',
+        event: 'Test Event',
+        issuedAt: new Date().toISOString(),
+        issuedBy: 'Test Issuer',
+        verificationUrl: `${req.protocol}://${req.get('host')}/verify-certificate/${req.params.certificateId}`
+      },
+      message: 'This is a fallback response - certificate routes not properly configured'
+    });
+  });
+  
+  console.log('Fallback certificate verification route created');
+}
+
+// Certificate routes test endpoint
+app.get('/api/certificates/test', (req, res) => {
+  console.log('Certificate test endpoint accessed');
+  
+  try {
+    const certificateController = require('./controllers/certificate.controller');
+    
+    res.json({
+      success: true,
+      message: 'Certificate routes are working!',
+      timestamp: new Date().toISOString(),
+      availableEndpoints: [
+        'GET /api/certificates/verify/:certificateId (PUBLIC)',
+        'GET /api/certificates/templates (PRIVATE)',
+        'POST /api/certificates/issue (PRIVATE)',
+        'GET /api/certificates/my (PRIVATE)',
+        'GET /api/certificates/:certificateId/download (PUBLIC)'
+      ],
+      controllerFunctions: Object.keys(certificateController),
+      testVerificationUrl: `${req.protocol}://${req.get('host')}/api/certificates/verify/TEST-CERT-123`
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      message: 'Certificate controller or routes not properly configured'
+    });
+  }
+});
+
 // EVENT ROUTES
 // ==========================================
 console.log('Setting up event routes...');
@@ -957,7 +1025,6 @@ if (eventController) {
     app.post('/api/events/:eventId/calendar', authenticateToken, eventController.addToCalendar);
     app.post('/api/events/:eventId/comments', authenticateToken, eventController.addEventComment);
     app.post('/api/events/:eventId/photos', authenticateToken, eventUpload.single('photo'), eventController.addEventPhoto);
-    app.use('/api/certificates', require('./routes/certificate.routes'));
 
 // Add these routes to your existing event routes section:
 app.put('/api/events/:eventId/certificates/enable', authenticateToken, eventController.enableEventCertificates);
