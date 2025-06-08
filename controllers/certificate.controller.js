@@ -1,4 +1,4 @@
-
+// controllers/certificate.controller.js - Fixed version
 const { Certificate, CertificateTemplate } = require('../models/Certificate');
 const { Event } = require('../models/Event');
 const { User } = require('../models/User');
@@ -6,103 +6,29 @@ const cloudStorage = require('../utils/cloudStorage');
 const certificateService = require('../services/certificateService');
 const { validationResult } = require('express-validator');
 const QRCode = require('qrcode');
+const mongoose = require('mongoose');
 
 /**
- * Create a new certificate template
- * @route POST /api/certificates/templates
- * @access Private
- */
-exports.createTemplate = async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
-    const {
-      name,
-      description,
-      eventId,
-      isDefault,
-      design,
-      layout,
-      customFields
-    } = req.body;
-
-    // Validate event if provided
-    if (eventId) {
-      const event = await Event.findById(eventId);
-      if (!event) {
-        return res.status(404).json({ error: 'Event not found' });
-      }
-
-      // Check if user has permission to create template for this event
-      const isCreator = event.createdBy.toString() === req.user.id;
-      const isHost = event.attendees.some(a => 
-        a.user.toString() === req.user.id && a.role === 'host'
-      );
-
-      if (!isCreator && !isHost) {
-        return res.status(403).json({ error: 'Permission denied' });
-      }
-    }
-
-    const template = new CertificateTemplate({
-      name,
-      description,
-      createdBy: req.user.id,
-      event: eventId,
-      isDefault: isDefault || false,
-      design: design || {},
-      layout: layout || {},
-      customFields: customFields || []
-    });
-
-    // Handle background image upload
-    if (req.files && req.files.backgroundImage) {
-      const uploadResult = await cloudStorage.uploadFile(req.files.backgroundImage[0]);
-      template.design.backgroundImage = {
-        url: uploadResult.url,
-        filename: req.files.backgroundImage[0].originalname
-      };
-    }
-
-    // Handle logo upload
-    if (req.files && req.files.logo) {
-      const uploadResult = await cloudStorage.uploadFile(req.files.logo[0]);
-      template.design.logo = {
-        url: uploadResult.url,
-        filename: req.files.logo[0].originalname
-      };
-    }
-
-    await template.save();
-
-    const populatedTemplate = await CertificateTemplate.findById(template._id)
-      .populate('createdBy', 'firstName lastName username')
-      .populate('event', 'name startDateTime');
-
-    res.status(201).json(populatedTemplate);
-  } catch (error) {
-    console.error('Create certificate template error:', error);
-    res.status(500).json({ error: 'Server error when creating certificate template' });
-  }
-};
-
-/**
- * Get certificate templates
+ * Get certificate templates - FIXED
  * @route GET /api/certificates/templates
  * @access Private
  */
 exports.getTemplates = async (req, res) => {
   try {
+    console.log('getTemplates called with query:', req.query);
+    
     const { eventId, isDefault, page = 1, limit = 10 } = req.query;
     
     let query = {};
     
-    // Filter by event
+    // Handle eventId parameter properly
     if (eventId) {
+      // Validate ObjectId format
+      if (!mongoose.Types.ObjectId.isValid(eventId)) {
+        return res.status(400).json({ error: 'Invalid event ID format' });
+      }
       query.event = eventId;
+      console.log('Filtering by eventId:', eventId);
     } else {
       // Show user's templates and default templates
       query.$or = [
@@ -117,6 +43,8 @@ exports.getTemplates = async (req, res) => {
 
     query.isActive = true;
 
+    console.log('Template query:', JSON.stringify(query));
+
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
     const templates = await CertificateTemplate.find(query)
@@ -128,8 +56,12 @@ exports.getTemplates = async (req, res) => {
 
     const total = await CertificateTemplate.countDocuments(query);
 
+    console.log(`Found ${templates.length} templates out of ${total} total`);
+
     res.json({
+      success: true,
       templates,
+      data: templates, // Include both for compatibility
       pagination: {
         total,
         page: parseInt(page),
@@ -144,139 +76,88 @@ exports.getTemplates = async (req, res) => {
 };
 
 /**
- * Get a specific certificate template
- * @route GET /api/certificates/templates/:templateId
+ * Get certificates for an event - FIXED
+ * @route GET /api/certificates/event/:eventId
  * @access Private
  */
-exports.getTemplate = async (req, res) => {
+exports.getEventCertificates = async (req, res) => {
   try {
-    const { templateId } = req.params;
+    const { eventId } = req.params;
+    const { status, page = 1, limit = 10 } = req.query;
 
-    const template = await CertificateTemplate.findById(templateId)
-      .populate('createdBy', 'firstName lastName username')
-      .populate('event', 'name startDateTime');
+    console.log('getEventCertificates called with:', { eventId, status, page, limit });
 
-    if (!template) {
-      return res.status(404).json({ error: 'Certificate template not found' });
+    // Validate eventId format
+    if (!mongoose.Types.ObjectId.isValid(eventId)) {
+      return res.status(400).json({ error: 'Invalid event ID format' });
     }
 
-    res.json(template);
-  } catch (error) {
-    console.error('Get certificate template error:', error);
-    res.status(500).json({ error: 'Server error when retrieving certificate template' });
-  }
-};
-
-/**
- * Update a certificate template
- * @route PUT /api/certificates/templates/:templateId
- * @access Private
- */
-exports.updateTemplate = async (req, res) => {
-  try {
-    const { templateId } = req.params;
-    const {
-      name,
-      description,
-      design,
-      layout,
-      customFields,
-      isActive
-    } = req.body;
-
-    const template = await CertificateTemplate.findById(templateId);
-
-    if (!template) {
-      return res.status(404).json({ error: 'Certificate template not found' });
+    // Validate event and permissions
+    const event = await Event.findById(eventId);
+    if (!event) {
+      return res.status(404).json({ error: 'Event not found' });
     }
 
-    // Check permissions
-    if (template.createdBy.toString() !== req.user.id) {
+    console.log('Event found:', { id: event._id, name: event.name, createdBy: event.createdBy });
+
+    const isCreator = event.createdBy.toString() === req.user.id;
+    const isHost = event.attendees && event.attendees.some(a => 
+      a.user && a.user.toString() === req.user.id && a.role === 'host'
+    );
+
+    console.log('Permissions check:', { isCreator, isHost, userId: req.user.id });
+
+    if (!isCreator && !isHost) {
       return res.status(403).json({ error: 'Permission denied' });
     }
 
-    // Update fields
-    if (name) template.name = name;
-    if (description !== undefined) template.description = description;
-    if (design) template.design = { ...template.design, ...design };
-    if (layout) template.layout = { ...template.layout, ...layout };
-    if (customFields) template.customFields = customFields;
-    if (isActive !== undefined) template.isActive = isActive;
-
-    // Handle file uploads
-    if (req.files && req.files.backgroundImage) {
-      const uploadResult = await cloudStorage.uploadFile(req.files.backgroundImage[0]);
-      template.design.backgroundImage = {
-        url: uploadResult.url,
-        filename: req.files.backgroundImage[0].originalname
-      };
+    let query = { event: eventId };
+    if (status) {
+      query.status = status;
     }
 
-    if (req.files && req.files.logo) {
-      const uploadResult = await cloudStorage.uploadFile(req.files.logo[0]);
-      template.design.logo = {
-        url: uploadResult.url,
-        filename: req.files.logo[0].originalname
-      };
-    }
+    console.log('Certificate query:', JSON.stringify(query));
 
-    await template.save();
+    const skip = (parseInt(page) - 1) * parseInt(limit);
 
-    const updatedTemplate = await CertificateTemplate.findById(templateId)
-      .populate('createdBy', 'firstName lastName username')
-      .populate('event', 'name startDateTime');
+    const certificates = await Certificate.find(query)
+      .populate('recipient', 'firstName lastName email')
+      .populate('template', 'name')
+      .populate('issuedBy', 'firstName lastName')
+      .sort({ issuedAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit));
 
-    res.json(updatedTemplate);
+    const total = await Certificate.countDocuments(query);
+
+    console.log(`Found ${certificates.length} certificates out of ${total} total`);
+
+    res.json({
+      success: true,
+      certificates,
+      data: certificates, // Include both for compatibility
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        pages: Math.ceil(total / parseInt(limit))
+      }
+    });
   } catch (error) {
-    console.error('Update certificate template error:', error);
-    res.status(500).json({ error: 'Server error when updating certificate template' });
+    console.error('Get event certificates error:', error);
+    res.status(500).json({ error: 'Server error when retrieving certificates' });
   }
 };
 
 /**
- * Delete a certificate template
- * @route DELETE /api/certificates/templates/:templateId
- * @access Private
- */
-exports.deleteTemplate = async (req, res) => {
-  try {
-    const { templateId } = req.params;
-
-    const template = await CertificateTemplate.findById(templateId);
-
-    if (!template) {
-      return res.status(404).json({ error: 'Certificate template not found' });
-    }
-
-    // Check permissions
-    if (template.createdBy.toString() !== req.user.id) {
-      return res.status(403).json({ error: 'Permission denied' });
-    }
-
-    // Check if template is being used
-    const certificatesCount = await Certificate.countDocuments({ template: templateId });
-    if (certificatesCount > 0) {
-      return res.status(400).json({ 
-        error: 'Cannot delete template that is being used by certificates' 
-      });
-    }
-
-    await CertificateTemplate.findByIdAndDelete(templateId);
-
-    res.json({ message: 'Certificate template deleted successfully' });
-  } catch (error) {
-    console.error('Delete certificate template error:', error);
-    res.status(500).json({ error: 'Server error when deleting certificate template' });
-  }
-};
-
-/**
- * Issue certificates to event attendees
+ * Issue certificates to event attendees - FIXED
  * @route POST /api/certificates/issue
  * @access Private
  */
 exports.issueCertificates = async (req, res) => {
   try {
+    console.log('issueCertificates called with body:', req.body);
+    
     const {
       eventId,
       templateId,
@@ -284,6 +165,19 @@ exports.issueCertificates = async (req, res) => {
       customMessage,
       sendEmail = true
     } = req.body;
+
+    // Validate required fields
+    if (!eventId || !templateId) {
+      return res.status(400).json({ error: 'Event ID and Template ID are required' });
+    }
+
+    // Validate ObjectId formats
+    if (!mongoose.Types.ObjectId.isValid(eventId)) {
+      return res.status(400).json({ error: 'Invalid event ID format' });
+    }
+    if (!mongoose.Types.ObjectId.isValid(templateId)) {
+      return res.status(400).json({ error: 'Invalid template ID format' });
+    }
 
     // Validate event
     const event = await Event.findById(eventId)
@@ -293,9 +187,11 @@ exports.issueCertificates = async (req, res) => {
       return res.status(404).json({ error: 'Event not found' });
     }
 
+    console.log('Event found:', { id: event._id, name: event.name });
+
     // Check permissions
     const isCreator = event.createdBy.toString() === req.user.id;
-    const isHost = event.attendees.some(a => 
+    const isHost = event.attendees && event.attendees.some(a => 
       a.user && a.user._id && a.user._id.toString() === req.user.id && a.role === 'host'
     );
 
@@ -309,14 +205,24 @@ exports.issueCertificates = async (req, res) => {
       return res.status(404).json({ error: 'Certificate template not found' });
     }
 
-    // Get attendees to issue certificates to
-    let targetAttendees = event.attendees.filter(a => a.status === 'going');
+    console.log('Template found:', { id: template._id, name: template.name });
 
-    if (attendeeIds && attendeeIds.length > 0) {
+    // Get attendees to issue certificates to
+    let targetAttendees = event.attendees ? event.attendees.filter(a => a.status === 'going') : [];
+
+    if (attendeeIds && Array.isArray(attendeeIds) && attendeeIds.length > 0) {
+      // Validate attendee IDs
+      const validAttendeeIds = attendeeIds.filter(id => mongoose.Types.ObjectId.isValid(id));
+      if (validAttendeeIds.length !== attendeeIds.length) {
+        return res.status(400).json({ error: 'Some attendee IDs are invalid' });
+      }
+      
       targetAttendees = targetAttendees.filter(a => 
-        attendeeIds.includes(a.user._id.toString())
+        validAttendeeIds.includes(a.user._id.toString())
       );
     }
+
+    console.log(`Target attendees: ${targetAttendees.length}`);
 
     if (targetAttendees.length === 0) {
       return res.status(400).json({ error: 'No eligible attendees found' });
@@ -324,6 +230,9 @@ exports.issueCertificates = async (req, res) => {
 
     const issuedCertificates = [];
     const errors = [];
+
+    // Get current user for issuer info
+    const issuer = await User.findById(req.user.id);
 
     // Issue certificates to each attendee
     for (const attendee of targetAttendees) {
@@ -356,11 +265,11 @@ exports.issueCertificates = async (req, res) => {
             recipientName: `${attendee.user.firstName} ${attendee.user.lastName}`,
             eventName: event.name,
             completionDate: new Date(),
-            issuerName: req.user.firstName + ' ' + req.user.lastName
+            issuerName: `${issuer.firstName} ${issuer.lastName}`
           }
         });
 
-        // FIXED: Generate proper verification URL using actual domain
+        // Generate proper verification URL
         const baseUrl = process.env.FRONTEND_URL || 
                        `${req.protocol}://${req.get('host')}` || 
                        'http://localhost:3000';
@@ -369,23 +278,22 @@ exports.issueCertificates = async (req, res) => {
 
         await certificate.save();
 
-        // Generate QR code with proper URL
-        const qrData = {
-          certificateId: certificate.certificateId,
-          verificationUrl: certificate.verificationUrl,
-          recipient: certificate.certificateData.recipientName,
-          event: certificate.certificateData.eventName,
-          issuedAt: certificate.issuedAt
-        };
+        console.log('Certificate created:', { id: certificate.certificateId, recipient: certificate.certificateData.recipientName });
 
-        const qrCodeData = await QRCode.toDataURL(certificate.verificationUrl);
-        certificate.qrCode = qrCodeData;
-        await certificate.save();
+        // Generate QR code
+        try {
+          const qrCodeData = await QRCode.toDataURL(certificate.verificationUrl);
+          certificate.qrCode = qrCodeData;
+          await certificate.save();
+        } catch (qrError) {
+          console.error('QR Code generation error:', qrError);
+          // Continue without QR code
+        }
 
         issuedCertificates.push(certificate);
 
         // Send email if requested
-        if (sendEmail) {
+        if (sendEmail && certificateService && certificateService.sendCertificateEmail) {
           try {
             await certificateService.sendCertificateEmail(
               certificate,
@@ -407,10 +315,16 @@ exports.issueCertificates = async (req, res) => {
       }
     }
 
+    console.log(`Issued ${issuedCertificates.length} certificates, ${errors.length} errors`);
+
     res.json({
       success: true,
       issued: issuedCertificates.length,
       errors: errors.length,
+      data: {
+        issued: issuedCertificates.length,
+        errors: errors.length
+      },
       certificates: issuedCertificates.map(cert => ({
         id: cert._id,
         certificateId: cert.certificateId,
@@ -427,59 +341,279 @@ exports.issueCertificates = async (req, res) => {
 };
 
 /**
- * Get certificates for an event
- * @route GET /api/certificates/event/:eventId
+ * Create a new certificate template - FIXED
+ * @route POST /api/certificates/templates
  * @access Private
  */
-exports.getEventCertificates = async (req, res) => {
+exports.createTemplate = async (req, res) => {
   try {
-    const { eventId } = req.params;
-    const { status, page = 1, limit = 10 } = req.query;
-
-    // Validate event and permissions
-    const event = await Event.findById(eventId);
-    if (!event) {
-      return res.status(404).json({ error: 'Event not found' });
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
     }
 
-    const isCreator = event.createdBy.toString() === req.user.id;
-    const isHost = event.attendees.some(a => 
-      a.user && a.user.toString() === req.user.id && a.role === 'host'
-    );
+    console.log('createTemplate called with body:', req.body);
+    console.log('Files:', req.files);
 
-    if (!isCreator && !isHost) {
+    const {
+      name,
+      description,
+      eventId,
+      isDefault,
+      design,
+      layout,
+      customFields
+    } = req.body;
+
+    // Validate event if provided
+    if (eventId) {
+      if (!mongoose.Types.ObjectId.isValid(eventId)) {
+        return res.status(400).json({ error: 'Invalid event ID format' });
+      }
+      
+      const event = await Event.findById(eventId);
+      if (!event) {
+        return res.status(404).json({ error: 'Event not found' });
+      }
+
+      // Check if user has permission to create template for this event
+      const isCreator = event.createdBy.toString() === req.user.id;
+      const isHost = event.attendees && event.attendees.some(a => 
+        a.user && a.user.toString() === req.user.id && a.role === 'host'
+      );
+
+      if (!isCreator && !isHost) {
+        return res.status(403).json({ error: 'Permission denied' });
+      }
+    }
+
+    const template = new CertificateTemplate({
+      name,
+      description,
+      createdBy: req.user.id,
+      event: eventId || undefined,
+      isDefault: isDefault === 'true' || isDefault === true || false,
+      design: design ? (typeof design === 'string' ? JSON.parse(design) : design) : {},
+      layout: layout ? (typeof layout === 'string' ? JSON.parse(layout) : layout) : {},
+      customFields: customFields ? (typeof customFields === 'string' ? JSON.parse(customFields) : customFields) : []
+    });
+
+    // Handle background image upload
+    if (req.files && req.files.backgroundImage) {
+      try {
+        const uploadResult = await cloudStorage.uploadFile(req.files.backgroundImage[0]);
+        template.design.backgroundImage = {
+          url: uploadResult.url,
+          filename: req.files.backgroundImage[0].originalname
+        };
+      } catch (uploadError) {
+        console.error('Background image upload error:', uploadError);
+        // Continue without background image
+      }
+    }
+
+    // Handle logo upload
+    if (req.files && req.files.logo) {
+      try {
+        const uploadResult = await cloudStorage.uploadFile(req.files.logo[0]);
+        template.design.logo = {
+          url: uploadResult.url,
+          filename: req.files.logo[0].originalname
+        };
+      } catch (uploadError) {
+        console.error('Logo upload error:', uploadError);
+        // Continue without logo
+      }
+    }
+
+    await template.save();
+
+    const populatedTemplate = await CertificateTemplate.findById(template._id)
+      .populate('createdBy', 'firstName lastName username')
+      .populate('event', 'name startDateTime');
+
+    console.log('Template created:', { id: template._id, name: template.name });
+
+    res.status(201).json({
+      success: true,
+      data: populatedTemplate,
+      template: populatedTemplate // Include both for compatibility
+    });
+  } catch (error) {
+    console.error('Create certificate template error:', error);
+    res.status(500).json({ error: 'Server error when creating certificate template' });
+  }
+};
+
+// Include all other existing methods with minimal changes...
+// (keeping the rest of the controller methods unchanged but adding better error handling)
+
+/**
+ * Get a specific certificate template
+ * @route GET /api/certificates/templates/:templateId
+ * @access Private
+ */
+exports.getTemplate = async (req, res) => {
+  try {
+    const { templateId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(templateId)) {
+      return res.status(400).json({ error: 'Invalid template ID format' });
+    }
+
+    const template = await CertificateTemplate.findById(templateId)
+      .populate('createdBy', 'firstName lastName username')
+      .populate('event', 'name startDateTime');
+
+    if (!template) {
+      return res.status(404).json({ error: 'Certificate template not found' });
+    }
+
+    res.json({
+      success: true,
+      data: template,
+      template: template
+    });
+  } catch (error) {
+    console.error('Get certificate template error:', error);
+    res.status(500).json({ error: 'Server error when retrieving certificate template' });
+  }
+};
+
+/**
+ * Update a certificate template
+ * @route PUT /api/certificates/templates/:templateId
+ * @access Private
+ */
+exports.updateTemplate = async (req, res) => {
+  try {
+    const { templateId } = req.params;
+    const {
+      name,
+      description,
+      design,
+      layout,
+      customFields,
+      isActive,
+      isDefault
+    } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(templateId)) {
+      return res.status(400).json({ error: 'Invalid template ID format' });
+    }
+
+    const template = await CertificateTemplate.findById(templateId);
+
+    if (!template) {
+      return res.status(404).json({ error: 'Certificate template not found' });
+    }
+
+    // Check permissions
+    if (template.createdBy.toString() !== req.user.id) {
       return res.status(403).json({ error: 'Permission denied' });
     }
 
-    let query = { event: eventId };
-    if (status) {
-      query.status = status;
+    // Update fields
+    if (name) template.name = name;
+    if (description !== undefined) template.description = description;
+    if (design) {
+      const designData = typeof design === 'string' ? JSON.parse(design) : design;
+      template.design = { ...template.design, ...designData };
+    }
+    if (layout) {
+      const layoutData = typeof layout === 'string' ? JSON.parse(layout) : layout;
+      template.layout = { ...template.layout, ...layoutData };
+    }
+    if (customFields) {
+      const customFieldsData = typeof customFields === 'string' ? JSON.parse(customFields) : customFields;
+      template.customFields = customFieldsData;
+    }
+    if (isActive !== undefined) template.isActive = isActive === 'true' || isActive === true;
+    if (isDefault !== undefined) template.isDefault = isDefault === 'true' || isDefault === true;
+
+    // Handle file uploads
+    if (req.files && req.files.backgroundImage) {
+      try {
+        const uploadResult = await cloudStorage.uploadFile(req.files.backgroundImage[0]);
+        template.design.backgroundImage = {
+          url: uploadResult.url,
+          filename: req.files.backgroundImage[0].originalname
+        };
+      } catch (uploadError) {
+        console.error('Background image upload error:', uploadError);
+      }
     }
 
-    const skip = (parseInt(page) - 1) * parseInt(limit);
+    if (req.files && req.files.logo) {
+      try {
+        const uploadResult = await cloudStorage.uploadFile(req.files.logo[0]);
+        template.design.logo = {
+          url: uploadResult.url,
+          filename: req.files.logo[0].originalname
+        };
+      } catch (uploadError) {
+        console.error('Logo upload error:', uploadError);
+      }
+    }
 
-    const certificates = await Certificate.find(query)
-      .populate('recipient', 'firstName lastName email')
-      .populate('template', 'name')
-      .populate('issuedBy', 'firstName lastName')
-      .sort({ issuedAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit));
+    await template.save();
 
-    const total = await Certificate.countDocuments(query);
+    const updatedTemplate = await CertificateTemplate.findById(templateId)
+      .populate('createdBy', 'firstName lastName username')
+      .populate('event', 'name startDateTime');
 
     res.json({
-      certificates,
-      pagination: {
-        total,
-        page: parseInt(page),
-        limit: parseInt(limit),
-        pages: Math.ceil(total / parseInt(limit))
-      }
+      success: true,
+      data: updatedTemplate,
+      template: updatedTemplate
     });
   } catch (error) {
-    console.error('Get event certificates error:', error);
-    res.status(500).json({ error: 'Server error when retrieving certificates' });
+    console.error('Update certificate template error:', error);
+    res.status(500).json({ error: 'Server error when updating certificate template' });
+  }
+};
+
+/**
+ * Delete a certificate template
+ * @route DELETE /api/certificates/templates/:templateId
+ * @access Private
+ */
+exports.deleteTemplate = async (req, res) => {
+  try {
+    const { templateId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(templateId)) {
+      return res.status(400).json({ error: 'Invalid template ID format' });
+    }
+
+    const template = await CertificateTemplate.findById(templateId);
+
+    if (!template) {
+      return res.status(404).json({ error: 'Certificate template not found' });
+    }
+
+    // Check permissions
+    if (template.createdBy.toString() !== req.user.id) {
+      return res.status(403).json({ error: 'Permission denied' });
+    }
+
+    // Check if template is being used
+    const certificatesCount = await Certificate.countDocuments({ template: templateId });
+    if (certificatesCount > 0) {
+      return res.status(400).json({ 
+        error: 'Cannot delete template that is being used by certificates' 
+      });
+    }
+
+    await CertificateTemplate.findByIdAndDelete(templateId);
+
+    res.json({ 
+      success: true,
+      message: 'Certificate template deleted successfully' 
+    });
+  } catch (error) {
+    console.error('Delete certificate template error:', error);
+    res.status(500).json({ error: 'Server error when deleting certificate template' });
   }
 };
 
@@ -511,7 +645,9 @@ exports.getMyCertificates = async (req, res) => {
     });
 
     res.json({
+      success: true,
       certificates,
+      data: certificates,
       pagination: {
         total,
         page: parseInt(page),
@@ -548,20 +684,42 @@ exports.downloadCertificate = async (req, res) => {
       return res.status(400).json({ error: 'Certificate is not issued' });
     }
 
-    // Generate PDF
-    const pdfBuffer = await certificateService.generateCertificatePDF(certificate);
+    // Generate PDF if certificateService is available
+    if (certificateService && certificateService.generateCertificatePDF) {
+      try {
+        const pdfBuffer = await certificateService.generateCertificatePDF(certificate);
 
-    // Update download count
-    certificate.downloadCount += 1;
-    certificate.lastDownloaded = new Date();
-    await certificate.save();
+        // Update download count
+        certificate.downloadCount += 1;
+        certificate.lastDownloaded = new Date();
+        await certificate.save();
 
-    // Set response headers
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="certificate-${certificateId}.pdf"`);
-    res.setHeader('Content-Length', pdfBuffer.length);
+        // Set response headers
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="certificate-${certificateId}.pdf"`);
+        res.setHeader('Content-Length', pdfBuffer.length);
 
-    res.send(pdfBuffer);
+        res.send(pdfBuffer);
+      } catch (pdfError) {
+        console.error('PDF generation error:', pdfError);
+        res.status(500).json({ error: 'Failed to generate PDF' });
+      }
+    } else {
+      // Fallback: return certificate data for client-side PDF generation
+      res.json({
+        success: true,
+        certificate: {
+          id: certificate.certificateId,
+          recipient: certificate.certificateData.recipientName,
+          event: certificate.certificateData.eventName,
+          issuedAt: certificate.issuedAt,
+          issuedBy: certificate.certificateData.issuerName,
+          template: certificate.template,
+          verificationUrl: certificate.verificationUrl,
+          qrCode: certificate.qrCode
+        }
+      });
+    }
   } catch (error) {
     console.error('Download certificate error:', error);
     res.status(500).json({ error: 'Server error when downloading certificate' });
@@ -577,6 +735,8 @@ exports.verifyCertificate = async (req, res) => {
   try {
     const { certificateId } = req.params;
 
+    console.log('Verifying certificate:', certificateId);
+
     const certificate = await Certificate.findOne({ 
       certificateId,
       status: 'issued'
@@ -587,11 +747,18 @@ exports.verifyCertificate = async (req, res) => {
       .populate('issuedBy', 'firstName lastName');
 
     if (!certificate) {
+      console.log('Certificate not found:', certificateId);
       return res.status(404).json({ 
         valid: false, 
         message: 'Certificate not found or invalid' 
       });
     }
+
+    console.log('Certificate found and verified:', {
+      id: certificate.certificateId,
+      recipient: certificate.certificateData.recipientName,
+      event: certificate.certificateData.eventName
+    });
 
     res.json({
       valid: true,
@@ -601,12 +768,16 @@ exports.verifyCertificate = async (req, res) => {
         event: certificate.certificateData.eventName,
         issuedAt: certificate.issuedAt,
         issuedBy: certificate.certificateData.issuerName,
-        verificationUrl: certificate.verificationUrl
+        verificationUrl: certificate.verificationUrl,
+        template: certificate.template ? certificate.template.name : 'Unknown'
       }
     });
   } catch (error) {
     console.error('Verify certificate error:', error);
-    res.status(500).json({ error: 'Server error when verifying certificate' });
+    res.status(500).json({ 
+      valid: false,
+      error: 'Server error when verifying certificate' 
+    });
   }
 };
 
@@ -630,7 +801,7 @@ exports.revokeCertificate = async (req, res) => {
     // Check permissions
     const event = certificate.event;
     const isCreator = event.createdBy.toString() === req.user.id;
-    const isHost = event.attendees.some(a => 
+    const isHost = event.attendees && event.attendees.some(a => 
       a.user && a.user.toString() === req.user.id && a.role === 'host'
     );
 
