@@ -218,37 +218,89 @@ exports.createTemplate = async (req, res) => {
  * @route GET /api/certificates/event/:eventId
  * @access Private
  */
+/**
+ * Get certificates for an event - FIXED VERSION
+ * @route GET /api/certificates/event/:eventId
+ * @access Private
+ */
 exports.getEventCertificates = async (req, res) => {
   try {
     const { eventId } = req.params;
     const { status, page = 1, limit = 10 } = req.query;
 
-    console.log('getEventCertificates called with:', { eventId, status, page, limit });
+    console.log('getEventCertificates called with:', { eventId, status, page, limit, userId: req.user.id });
 
     // Validate eventId format
     if (!mongoose.Types.ObjectId.isValid(eventId)) {
       return res.status(400).json({ error: 'Invalid event ID format' });
     }
 
-    // Validate event and permissions
-    const event = await Event.findById(eventId);
+    // FIXED: Get event with proper population
+    const event = await Event.findById(eventId)
+      .populate('attendees.user', 'firstName lastName email')
+      .populate('createdBy', 'firstName lastName email');
+      
     if (!event) {
       return res.status(404).json({ error: 'Event not found' });
     }
 
-    console.log('Event found:', { id: event._id, name: event.name, createdBy: event.createdBy });
+    console.log('Event found:', { 
+      id: event._id, 
+      name: event.name, 
+      createdBy: event.createdBy._id,
+      attendeesCount: event.attendees ? event.attendees.length : 0
+    });
 
-    const isCreator = event.createdBy.toString() === req.user.id;
-    const isHost = event.attendees && event.attendees.some(a => 
-      a.user && a.user.toString() === req.user.id && a.role === 'host'
-    );
+    // FIXED: Check permissions - same logic as issueCertificates
+    const currentUserId = req.user.id.toString();
+    const isCreator = event.createdBy._id.toString() === currentUserId;
+    
+    // FIXED: Check if user is host - handle populated attendees properly
+    const isHost = event.attendees && event.attendees.some(a => {
+      // Handle both populated and non-populated user fields
+      const userId = a.user._id ? a.user._id.toString() : a.user.toString();
+      const isUserMatch = userId === currentUserId;
+      const isHostRole = a.role === 'host';
+      
+      console.log('Checking attendee for certificates view:', {
+        attendeeUserId: userId,
+        currentUserId: currentUserId,
+        role: a.role,
+        isUserMatch,
+        isHostRole
+      });
+      
+      return isUserMatch && isHostRole;
+    });
 
-    console.log('Permissions check:', { isCreator, isHost, userId: req.user.id });
+    console.log('Permission check for getEventCertificates:', {
+      isCreator,
+      isHost,
+      hasPermission: isCreator || isHost
+    });
 
     if (!isCreator && !isHost) {
-      return res.status(403).json({ error: 'Permission denied' });
+      return res.status(403).json({ 
+        error: 'Permission denied. Only event creators or hosts can view certificates.',
+        debug: {
+          isCreator,
+          isHost,
+          currentUserId,
+          eventCreatedBy: event.createdBy._id.toString(),
+          userIsInAttendees: event.attendees ? event.attendees.some(a => {
+            const userId = a.user._id ? a.user._id.toString() : a.user.toString();
+            return userId === currentUserId;
+          }) : false,
+          attendeesWithRoles: event.attendees ? event.attendees.map(a => ({
+            userId: a.user._id ? a.user._id.toString() : a.user.toString(),
+            role: a.role,
+            status: a.status
+          })) : []
+        }
+      });
     }
 
+    // Build query for certificates
     let query = { event: eventId };
     if (status) {
       query.status = status;
@@ -286,7 +338,6 @@ exports.getEventCertificates = async (req, res) => {
     res.status(500).json({ error: 'Server error when retrieving certificates' });
   }
 };
-
 /**
  * Issue certificates to event attendees - FIXED
  * @route POST /api/certificates/issue
