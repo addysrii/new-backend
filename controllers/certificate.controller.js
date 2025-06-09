@@ -429,6 +429,8 @@ exports.getEventCertificates = async (req, res) => {
  * @route POST /api/certificates/issue
  * @access Private
  */
+// Updated issueCertificates function in certificate.controller.js
+
 exports.issueCertificates = async (req, res) => {
   try {
     console.log('issueCertificates called with body:', req.body);
@@ -438,7 +440,8 @@ exports.issueCertificates = async (req, res) => {
       templateId,
       attendeeIds,
       customMessage,
-      sendEmail = true
+      sendEmail = true,
+      certificateImage // Add this to receive the image from frontend
     } = req.body;
 
     // Validate required fields
@@ -454,7 +457,7 @@ exports.issueCertificates = async (req, res) => {
       return res.status(400).json({ error: 'Invalid template ID format' });
     }
 
-    // FIXED: Get event with proper population
+    // Get event with proper population
     const event = await Event.findById(eventId)
       .populate('attendees.user', 'firstName lastName email')
       .populate('createdBy', 'firstName lastName');
@@ -471,12 +474,10 @@ exports.issueCertificates = async (req, res) => {
       attendeesCount: event.attendees ? event.attendees.length : 0
     });
 
-    // FIXED: Check permissions - Compare ObjectId strings properly
+    // Check permissions
     const isCreator = event.createdBy._id.toString() === req.user.id.toString();
     
-    // FIXED: Check if user is host - handle populated attendees properly
     const isHost = event.attendees && event.attendees.some(a => {
-      // Handle both populated and non-populated user fields
       const userId = a.user._id ? a.user._id.toString() : a.user.toString();
       const isUserMatch = userId === req.user.id.toString();
       const isHostRole = a.role === 'host';
@@ -500,17 +501,7 @@ exports.issueCertificates = async (req, res) => {
 
     if (!isCreator && !isHost) {
       return res.status(403).json({ 
-        error: 'Permission denied. Only event creators or hosts can issue certificates.',
-        debug: {
-          isCreator,
-          isHost,
-          currentUserId: req.user.id,
-          eventCreatedBy: event.createdBy._id.toString(),
-          userIsInAttendees: event.attendees ? event.attendees.some(a => {
-            const userId = a.user._id ? a.user._id.toString() : a.user.toString();
-            return userId === req.user.id.toString();
-          }) : false
-        }
+        error: 'Permission denied. Only event creators or hosts can issue certificates.'
       });
     }
 
@@ -526,13 +517,11 @@ exports.issueCertificates = async (req, res) => {
     let targetAttendees = event.attendees ? event.attendees.filter(a => a.status === 'going') : [];
 
     if (attendeeIds && Array.isArray(attendeeIds) && attendeeIds.length > 0) {
-      // Validate attendee IDs
       const validAttendeeIds = attendeeIds.filter(id => mongoose.Types.ObjectId.isValid(id));
       if (validAttendeeIds.length !== attendeeIds.length) {
         return res.status(400).json({ error: 'Some attendee IDs are invalid' });
       }
       
-      // FIXED: Filter attendees properly with populated user field
       targetAttendees = targetAttendees.filter(a => {
         const userId = a.user._id ? a.user._id.toString() : a.user.toString();
         return validAttendeeIds.includes(userId);
@@ -543,12 +532,7 @@ exports.issueCertificates = async (req, res) => {
 
     if (targetAttendees.length === 0) {
       return res.status(400).json({ 
-        error: 'No eligible attendees found',
-        debug: {
-          totalAttendees: event.attendees ? event.attendees.length : 0,
-          goingAttendees: event.attendees ? event.attendees.filter(a => a.status === 'going').length : 0,
-          requestedAttendeeIds: attendeeIds
-        }
+        error: 'No eligible attendees found'
       });
     }
 
@@ -561,7 +545,6 @@ exports.issueCertificates = async (req, res) => {
     // Issue certificates to each attendee
     for (const attendee of targetAttendees) {
       try {
-        // FIXED: Get user ID properly from populated field
         const attendeeUserId = attendee.user._id ? attendee.user._id : attendee.user;
         
         // Check if certificate already exists
@@ -583,7 +566,7 @@ exports.issueCertificates = async (req, res) => {
         // Create certificate
         const certificate = new Certificate({
           recipient: attendeeUserId,
-          event: eventId,
+          event: eventId, // Store the event ID from frontend
           template: templateId,
           issuedBy: req.user.id,
           status: 'issued',
@@ -592,25 +575,26 @@ exports.issueCertificates = async (req, res) => {
             recipientName: `${attendee.user.firstName} ${attendee.user.lastName}`,
             eventName: event.name,
             completionDate: new Date(),
-            issuerName: `${issuer.firstName} ${issuer.lastName}`
-          }
+            issuerName: `${issuer.firstName} ${issuer.lastName}`,
+            eventId: eventId // Also store in certificateData for easy access
+          },
+          // Store certificate image if provided
+          certificateImage: certificateImage || null
         });
 
-        // Generate proper verification URL
-        const baseUrl = process.env.FRONTEND_URL || 
-                       `${req.protocol}://${req.get('host')}` || 
-                       'http://localhost:3000';
-        
-        certificate.verificationUrl = `${baseUrl}/verify-certificate/${certificate.certificateId}`;
+        // FIXED: Generate verification URL to redirect to meetkats.com
+        const baseUrl = 'https://meetkats.com'; // Use your domain
+        certificate.verificationUrl = `${baseUrl}/certificates/${certificate.certificateId}`;
 
         await certificate.save();
 
         console.log('Certificate created:', { 
           id: certificate.certificateId, 
-          recipient: certificate.certificateData.recipientName 
+          recipient: certificate.certificateData.recipientName,
+          verificationUrl: certificate.verificationUrl
         });
 
-        // Generate QR code
+        // Generate QR code with the verification URL
         try {
           const qrCodeData = await QRCode.toDataURL(certificate.verificationUrl);
           certificate.qrCode = qrCodeData;
@@ -632,7 +616,6 @@ exports.issueCertificates = async (req, res) => {
             );
           } catch (emailError) {
             console.error('Certificate email error:', emailError);
-            // Don't fail the entire process for email errors
           }
         }
       } catch (error) {
@@ -660,7 +643,8 @@ exports.issueCertificates = async (req, res) => {
         certificateId: cert.certificateId,
         recipient: cert.certificateData.recipientName,
         issuedAt: cert.issuedAt,
-        verificationUrl: cert.verificationUrl
+        verificationUrl: cert.verificationUrl,
+        eventId: cert.event // Include event ID in response
       })),
       errorDetails: errors
     });
@@ -669,7 +653,6 @@ exports.issueCertificates = async (req, res) => {
     res.status(500).json({ error: 'Server error when issuing certificates' });
   }
 };
-
 /**
  * Create a new certificate template - FIXED
  * @route POST /api/certificates/templates
