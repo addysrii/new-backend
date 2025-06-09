@@ -932,6 +932,243 @@ try {
   console.error('❌ Error setting up certificate routes:', error);
   
   // Create a fallback route for testing
+  // Add these routes to your main index.js file
+
+// Certificate verification page route (add this to your main routes)
+app.get('/certificates/:certificateId', async (req, res) => {
+  try {
+    const { certificateId } = req.params;
+    
+    console.log('Certificate verification page requested for:', certificateId);
+    
+    // Verify the certificate exists and is valid
+    const certificate = await Certificate.findOne({ 
+      certificateId,
+      status: 'issued'
+    })
+      .populate('recipient', 'firstName lastName')
+      .populate('event', 'name startDateTime location')
+      .populate('template', 'name')
+      .populate('issuedBy', 'firstName lastName');
+
+    if (!certificate) {
+      // Redirect to error page or show 404
+      return res.status(404).send(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>Certificate Not Found - MeetKats</title>
+          <style>
+            body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
+            .error { color: #e74c3c; }
+          </style>
+        </head>
+        <body>
+          <h1 class="error">Certificate Not Found</h1>
+          <p>The certificate with ID <strong>${certificateId}</strong> could not be found or is invalid.</p>
+          <a href="https://meetkats.com">Return to MeetKats</a>
+        </body>
+        </html>
+      `);
+    }
+
+    // Show certificate verification page
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Certificate Verification - MeetKats</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+          body { 
+            font-family: Arial, sans-serif; 
+            margin: 0; 
+            padding: 20px; 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+          }
+          .container { 
+            max-width: 800px; 
+            margin: 0 auto; 
+            background: white; 
+            border-radius: 15px; 
+            padding: 40px; 
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+          }
+          .header { text-align: center; margin-bottom: 30px; }
+          .logo { color: #667eea; font-size: 24px; font-weight: bold; margin-bottom: 10px; }
+          .title { color: #2c3e50; font-size: 28px; margin-bottom: 5px; }
+          .subtitle { color: #7f8c8d; font-size: 16px; }
+          .cert-info { 
+            background: #f8f9fa; 
+            border-radius: 10px; 
+            padding: 30px; 
+            margin: 20px 0; 
+            border-left: 5px solid #667eea;
+          }
+          .cert-field { margin-bottom: 15px; }
+          .cert-label { font-weight: bold; color: #34495e; display: inline-block; width: 140px; }
+          .cert-value { color: #2c3e50; }
+          .verification-badge { 
+            background: #27ae60; 
+            color: white; 
+            padding: 10px 20px; 
+            border-radius: 25px; 
+            display: inline-block; 
+            margin: 20px 0; 
+            font-weight: bold;
+          }
+          .cert-image { 
+            text-align: center; 
+            margin: 20px 0; 
+          }
+          .cert-image img { 
+            max-width: 100%; 
+            border-radius: 10px; 
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1); 
+          }
+          .footer { 
+            text-align: center; 
+            margin-top: 30px; 
+            padding-top: 20px; 
+            border-top: 1px solid #ecf0f1; 
+            color: #7f8c8d; 
+          }
+          .btn { 
+            background: #667eea; 
+            color: white; 
+            padding: 12px 24px; 
+            border-radius: 6px; 
+            text-decoration: none; 
+            display: inline-block; 
+            margin: 10px; 
+          }
+          .btn:hover { background: #5a6fd8; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <div class="logo">🎓 MeetKats</div>
+            <h1 class="title">Certificate Verification</h1>
+            <p class="subtitle">Valid & Authentic Certificate</p>
+          </div>
+          
+          <div class="verification-badge">
+            ✓ Certificate Verified
+          </div>
+          
+          <div class="cert-info">
+            <div class="cert-field">
+              <span class="cert-label">Certificate ID:</span>
+              <span class="cert-value">${certificate.certificateId}</span>
+            </div>
+            <div class="cert-field">
+              <span class="cert-label">Recipient:</span>
+              <span class="cert-value">${certificate.certificateData.recipientName}</span>
+            </div>
+            <div class="cert-field">
+              <span class="cert-label">Event/Course:</span>
+              <span class="cert-value">${certificate.certificateData.eventName}</span>
+            </div>
+            <div class="cert-field">
+              <span class="cert-label">Issued Date:</span>
+              <span class="cert-value">${new Date(certificate.issuedAt).toLocaleDateString()}</span>
+            </div>
+            <div class="cert-field">
+              <span class="cert-label">Issued By:</span>
+              <span class="cert-value">${certificate.certificateData.issuerName}</span>
+            </div>
+            <div class="cert-field">
+              <span class="cert-label">Event ID:</span>
+              <span class="cert-value">${certificate.certificateData.eventId || 'N/A'}</span>
+            </div>
+          </div>
+          
+          ${certificate.certificateImage ? `
+            <div class="cert-image">
+              <h3>Certificate Image:</h3>
+              <img src="${certificate.certificateImage}" alt="Certificate" />
+            </div>
+          ` : ''}
+          
+          <div style="text-align: center;">
+            <a href="/api/certificates/${certificate.certificateId}/download" class="btn">
+              📥 Download Certificate
+            </a>
+            <a href="https://meetkats.com" class="btn">
+              🏠 Return to MeetKats
+            </a>
+          </div>
+          
+          <div class="footer">
+            <p>This certificate was issued through MeetKats platform.</p>
+            <p>Certificate verified on ${new Date().toLocaleDateString()}</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+    
+    res.send(html);
+  } catch (error) {
+    console.error('Certificate verification page error:', error);
+    res.status(500).send('Error loading certificate verification page');
+  }
+});
+
+// Update the existing verify certificate API endpoint
+app.get('/api/certificates/verify/:certificateId', async (req, res) => {
+  try {
+    const { certificateId } = req.params;
+
+    console.log('API: Verifying certificate:', certificateId);
+
+    const certificate = await Certificate.findOne({ 
+      certificateId,
+      status: 'issued'
+    })
+      .populate('recipient', 'firstName lastName')
+      .populate('event', 'name startDateTime location')
+      .populate('template', 'name')
+      .populate('issuedBy', 'firstName lastName');
+
+    if (!certificate) {
+      console.log('Certificate not found:', certificateId);
+      return res.status(404).json({ 
+        valid: false, 
+        message: 'Certificate not found or invalid' 
+      });
+    }
+
+    console.log('Certificate found and verified:', {
+      id: certificate.certificateId,
+      recipient: certificate.certificateData.recipientName,
+      event: certificate.certificateData.eventName
+    });
+
+    res.json({
+      valid: true,
+      certificate: {
+        id: certificate.certificateId,
+        recipient: certificate.certificateData.recipientName,
+        event: certificate.certificateData.eventName,
+        issuedAt: certificate.issuedAt,
+        issuedBy: certificate.certificateData.issuerName,
+        verificationUrl: certificate.verificationUrl,
+        template: certificate.template ? certificate.template.name : 'Unknown',
+        eventId: certificate.certificateData.eventId, // Include event ID
+        certificateImage: certificate.certificateImage // Include image if available
+      }
+    });
+  } catch (error) {
+    console.error('Verify certificate error:', error);
+    res.status(500).json({ 
+      valid: false,
+      error: 'Server error when verifying certificate' 
+    });
+  }
+});
   app.get('/api/certificates/verify/:certificateId', (req, res) => {
     console.log('Fallback certificate verification called for:', req.params.certificateId);
     res.json({
