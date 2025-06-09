@@ -1,3 +1,4 @@
+// models/Certificate.js - FIXED VERSION
 const mongoose = require('mongoose');
 const Schema = mongoose.Schema;
 
@@ -127,6 +128,7 @@ const CertificateSchema = new Schema({
     type: String,
     required: true,
     unique: true
+    // REMOVED: Don't set a default here, let the pre-save middleware handle it
   },
   recipient: {
     type: Schema.Types.ObjectId,
@@ -197,13 +199,62 @@ CertificateTemplateSchema.index({ createdBy: 1 });
 CertificateTemplateSchema.index({ event: 1 });
 CertificateTemplateSchema.index({ isDefault: 1 });
 
-// Generate certificate ID before saving
+// FIXED: Enhanced pre-save middleware for certificate ID generation
 CertificateSchema.pre('save', async function(next) {
-  if (!this.certificateId) {
-    this.certificateId = `CERT-${Date.now()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+  try {
+    // Only generate certificateId if it doesn't exist
+    if (!this.certificateId) {
+      console.log('Generating certificateId for new certificate...');
+      
+      let isUnique = false;
+      let attempts = 0;
+      const maxAttempts = 10;
+      
+      while (!isUnique && attempts < maxAttempts) {
+        // Generate a unique certificate ID
+        const timestamp = Date.now();
+        const randomPart = Math.random().toString(36).substring(2, 8).toUpperCase();
+        const candidateId = `CERT-${timestamp}-${randomPart}`;
+        
+        console.log(`Attempt ${attempts + 1}: Generated candidateId: ${candidateId}`);
+        
+        // Check if this ID already exists
+        const existingCert = await this.constructor.findOne({ 
+          certificateId: candidateId 
+        });
+        
+        if (!existingCert) {
+          this.certificateId = candidateId;
+          isUnique = true;
+          console.log(`✅ Unique certificateId assigned: ${candidateId}`);
+        } else {
+          console.log(`❌ CertificateId collision: ${candidateId} already exists`);
+          attempts++;
+        }
+      }
+      
+      if (!isUnique) {
+        const error = new Error('Failed to generate unique certificate ID after maximum attempts');
+        console.error('Certificate ID generation failed:', error.message);
+        return next(error);
+      }
+    }
+    
+    // Update the timestamp
+    this.updatedAt = Date.now();
+    
+    console.log('Certificate pre-save completed successfully:', {
+      certificateId: this.certificateId,
+      recipient: this.recipient,
+      event: this.event,
+      status: this.status
+    });
+    
+    next();
+  } catch (error) {
+    console.error('Certificate pre-save error:', error);
+    next(error);
   }
-  this.updatedAt = Date.now();
-  next();
 });
 
 CertificateTemplateSchema.pre('save', function(next) {
