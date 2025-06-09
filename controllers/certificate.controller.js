@@ -109,6 +109,11 @@ exports.getTemplates = async (req, res) => {
  * @route POST /api/certificates/templates
  * @access Private
  */
+/**
+ * Create a new certificate template - FIXED VERSION
+ * @route POST /api/certificates/templates
+ * @access Private
+ */
 exports.createTemplate = async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -116,8 +121,10 @@ exports.createTemplate = async (req, res) => {
       return res.status(400).json({ errors: errors.array() });
     }
 
-    console.log('createTemplate called with body:', req.body);
-    console.log('Files:', req.files);
+    console.log('=== CREATE TEMPLATE DEBUG ===');
+    console.log('Request body:', req.body);
+    console.log('Request files:', req.files);
+    console.log('User ID:', req.user.id);
 
     const {
       name,
@@ -129,28 +136,78 @@ exports.createTemplate = async (req, res) => {
       customFields
     } = req.body;
 
-    // Validate event if provided
+    console.log('Extracted fields:', {
+      name,
+      description,
+      eventId,
+      isDefault,
+      hasDesign: !!design,
+      hasLayout: !!layout,
+      hasCustomFields: !!customFields
+    });
+
+    // FIXED: Handle eventId validation differently for global vs event-specific templates
     if (eventId) {
+      console.log('Creating event-specific template for eventId:', eventId);
+      
       if (!mongoose.Types.ObjectId.isValid(eventId)) {
         return res.status(400).json({ error: 'Invalid event ID format' });
       }
       
-      const event = await Event.findById(eventId);
+      // Get event with proper population for permission check
+      const event = await Event.findById(eventId)
+        .populate('attendees.user', 'firstName lastName email')
+        .populate('createdBy', 'firstName lastName email');
+        
       if (!event) {
         return res.status(404).json({ error: 'Event not found' });
       }
 
-      // Check if user has permission to create template for this event
-      const isCreator = event.createdBy.toString() === req.user.id;
-      const isHost = event.attendees && event.attendees.some(a => 
-        a.user && a.user.toString() === req.user.id && a.role === 'host'
-      );
+      console.log('Event found:', {
+        id: event._id,
+        name: event.name,
+        createdBy: event.createdBy._id,
+        attendeesCount: event.attendees ? event.attendees.length : 0
+      });
+
+      // FIXED: Check permissions using the same logic as other functions
+      const currentUserId = req.user.id.toString();
+      const isCreator = event.createdBy._id.toString() === currentUserId;
+      
+      const isHost = event.attendees && event.attendees.some(a => {
+        const userId = a.user._id ? a.user._id.toString() : a.user.toString();
+        return userId === currentUserId && a.role === 'host';
+      });
+
+      console.log('Permission check for template creation:', {
+        currentUserId,
+        eventCreatedBy: event.createdBy._id.toString(),
+        isCreator,
+        isHost,
+        hasPermission: isCreator || isHost
+      });
 
       if (!isCreator && !isHost) {
-        return res.status(403).json({ error: 'Permission denied' });
+        return res.status(403).json({ 
+          error: 'Permission denied. Only event creators or hosts can create templates for this event.',
+          debug: {
+            currentUserId,
+            eventCreatedBy: event.createdBy._id.toString(),
+            isCreator,
+            isHost,
+            attendeesWithRoles: event.attendees ? event.attendees.map(a => ({
+              userId: a.user._id ? a.user._id.toString() : a.user.toString(),
+              role: a.role,
+              status: a.status
+            })) : []
+          }
+        });
       }
+    } else {
+      console.log('Creating global template (no eventId specified)');
     }
 
+    // Create the template
     const template = new CertificateTemplate({
       name,
       description,
@@ -162,14 +219,23 @@ exports.createTemplate = async (req, res) => {
       customFields: customFields ? (typeof customFields === 'string' ? JSON.parse(customFields) : customFields) : []
     });
 
+    console.log('Template object created:', {
+      name: template.name,
+      createdBy: template.createdBy,
+      event: template.event,
+      isDefault: template.isDefault
+    });
+
     // Handle background image upload
     if (req.files && req.files.backgroundImage) {
       try {
+        console.log('Processing background image upload...');
         const uploadResult = await cloudStorage.uploadFile(req.files.backgroundImage[0]);
         template.design.backgroundImage = {
           url: uploadResult.url,
           filename: req.files.backgroundImage[0].originalname
         };
+        console.log('Background image uploaded successfully:', uploadResult.url);
       } catch (uploadError) {
         console.error('Background image upload error:', uploadError);
         // Continue without background image
@@ -179,24 +245,30 @@ exports.createTemplate = async (req, res) => {
     // Handle logo upload
     if (req.files && req.files.logo) {
       try {
+        console.log('Processing logo upload...');
         const uploadResult = await cloudStorage.uploadFile(req.files.logo[0]);
         template.design.logo = {
           url: uploadResult.url,
           filename: req.files.logo[0].originalname
         };
+        console.log('Logo uploaded successfully:', uploadResult.url);
       } catch (uploadError) {
         console.error('Logo upload error:', uploadError);
         // Continue without logo
       }
     }
 
+    console.log('Saving template to database...');
     await template.save();
 
+    console.log('Template saved successfully with ID:', template._id);
+
+    // Populate the template for response
     const populatedTemplate = await CertificateTemplate.findById(template._id)
       .populate('createdBy', 'firstName lastName username')
       .populate('event', 'name startDateTime');
 
-    console.log('Template created:', { 
+    console.log('Template creation completed:', { 
       id: template._id, 
       name: template.name, 
       eventId: template.event,
@@ -209,8 +281,16 @@ exports.createTemplate = async (req, res) => {
       template: populatedTemplate // Include both for compatibility
     });
   } catch (error) {
-    console.error('Create certificate template error:', error);
-    res.status(500).json({ error: 'Server error when creating certificate template' });
+    console.error('=== CREATE TEMPLATE ERROR ===');
+    console.error('Error message:', error.message);
+    console.error('Error stack:', error.stack);
+    console.error('User ID:', req.user?.id);
+    console.error('Request body:', req.body);
+    
+    res.status(500).json({ 
+      error: 'Server error when creating certificate template',
+      details: error.message 
+    });
   }
 };
 /**
