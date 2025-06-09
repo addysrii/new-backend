@@ -292,6 +292,12 @@ exports.getEventCertificates = async (req, res) => {
  * @route POST /api/certificates/issue
  * @access Private
  */
+
+/**
+ * Issue certificates to event attendees - FIXED VERSION
+ * @route POST /api/certificates/issue
+ * @access Private
+ */
 exports.issueCertificates = async (req, res) => {
   try {
     console.log('issueCertificates called with body:', req.body);
@@ -317,24 +323,64 @@ exports.issueCertificates = async (req, res) => {
       return res.status(400).json({ error: 'Invalid template ID format' });
     }
 
-    // Validate event
+    // FIXED: Get event with proper population
     const event = await Event.findById(eventId)
-      .populate('attendees.user', 'firstName lastName email');
+      .populate('attendees.user', 'firstName lastName email')
+      .populate('createdBy', 'firstName lastName');
 
     if (!event) {
       return res.status(404).json({ error: 'Event not found' });
     }
 
-    console.log('Event found:', { id: event._id, name: event.name });
+    console.log('Event found:', { 
+      id: event._id, 
+      name: event.name,
+      createdBy: event.createdBy._id,
+      currentUserId: req.user.id,
+      attendeesCount: event.attendees ? event.attendees.length : 0
+    });
 
-    // Check permissions
-    const isCreator = event.createdBy.toString() === req.user.id;
-    const isHost = event.attendees && event.attendees.some(a => 
-      a.user && a.user._id && a.user._id.toString() === req.user.id && a.role === 'host'
-    );
+    // FIXED: Check permissions - Compare ObjectId strings properly
+    const isCreator = event.createdBy._id.toString() === req.user.id.toString();
+    
+    // FIXED: Check if user is host - handle populated attendees properly
+    const isHost = event.attendees && event.attendees.some(a => {
+      // Handle both populated and non-populated user fields
+      const userId = a.user._id ? a.user._id.toString() : a.user.toString();
+      const isUserMatch = userId === req.user.id.toString();
+      const isHostRole = a.role === 'host';
+      
+      console.log('Checking attendee:', {
+        attendeeUserId: userId,
+        currentUserId: req.user.id.toString(),
+        role: a.role,
+        isUserMatch,
+        isHostRole
+      });
+      
+      return isUserMatch && isHostRole;
+    });
+
+    console.log('Permission check:', {
+      isCreator,
+      isHost,
+      hasPermission: isCreator || isHost
+    });
 
     if (!isCreator && !isHost) {
-      return res.status(403).json({ error: 'Permission denied' });
+      return res.status(403).json({ 
+        error: 'Permission denied. Only event creators or hosts can issue certificates.',
+        debug: {
+          isCreator,
+          isHost,
+          currentUserId: req.user.id,
+          eventCreatedBy: event.createdBy._id.toString(),
+          userIsInAttendees: event.attendees ? event.attendees.some(a => {
+            const userId = a.user._id ? a.user._id.toString() : a.user.toString();
+            return userId === req.user.id.toString();
+          }) : false
+        }
+      });
     }
 
     // Validate template
@@ -355,15 +401,24 @@ exports.issueCertificates = async (req, res) => {
         return res.status(400).json({ error: 'Some attendee IDs are invalid' });
       }
       
-      targetAttendees = targetAttendees.filter(a => 
-        validAttendeeIds.includes(a.user._id.toString())
-      );
+      // FIXED: Filter attendees properly with populated user field
+      targetAttendees = targetAttendees.filter(a => {
+        const userId = a.user._id ? a.user._id.toString() : a.user.toString();
+        return validAttendeeIds.includes(userId);
+      });
     }
 
     console.log(`Target attendees: ${targetAttendees.length}`);
 
     if (targetAttendees.length === 0) {
-      return res.status(400).json({ error: 'No eligible attendees found' });
+      return res.status(400).json({ 
+        error: 'No eligible attendees found',
+        debug: {
+          totalAttendees: event.attendees ? event.attendees.length : 0,
+          goingAttendees: event.attendees ? event.attendees.filter(a => a.status === 'going').length : 0,
+          requestedAttendeeIds: attendeeIds
+        }
+      });
     }
 
     const issuedCertificates = [];
@@ -375,16 +430,19 @@ exports.issueCertificates = async (req, res) => {
     // Issue certificates to each attendee
     for (const attendee of targetAttendees) {
       try {
+        // FIXED: Get user ID properly from populated field
+        const attendeeUserId = attendee.user._id ? attendee.user._id : attendee.user;
+        
         // Check if certificate already exists
         const existingCert = await Certificate.findOne({
-          recipient: attendee.user._id,
+          recipient: attendeeUserId,
           event: eventId,
           status: { $ne: 'revoked' }
         });
 
         if (existingCert) {
           errors.push({
-            userId: attendee.user._id,
+            userId: attendeeUserId,
             name: `${attendee.user.firstName} ${attendee.user.lastName}`,
             error: 'Certificate already issued'
           });
@@ -393,7 +451,7 @@ exports.issueCertificates = async (req, res) => {
 
         // Create certificate
         const certificate = new Certificate({
-          recipient: attendee.user._id,
+          recipient: attendeeUserId,
           event: eventId,
           template: templateId,
           issuedBy: req.user.id,
@@ -416,7 +474,10 @@ exports.issueCertificates = async (req, res) => {
 
         await certificate.save();
 
-        console.log('Certificate created:', { id: certificate.certificateId, recipient: certificate.certificateData.recipientName });
+        console.log('Certificate created:', { 
+          id: certificate.certificateId, 
+          recipient: certificate.certificateData.recipientName 
+        });
 
         // Generate QR code
         try {
@@ -444,9 +505,9 @@ exports.issueCertificates = async (req, res) => {
           }
         }
       } catch (error) {
-        console.error('Certificate issuance error for user:', attendee.user._id, error);
+        console.error('Certificate issuance error for user:', attendee.user._id || attendee.user, error);
         errors.push({
-          userId: attendee.user._id,
+          userId: attendee.user._id || attendee.user,
           name: `${attendee.user.firstName} ${attendee.user.lastName}`,
           error: error.message
         });
