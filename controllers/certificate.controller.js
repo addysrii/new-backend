@@ -8,11 +8,6 @@ const { validationResult } = require('express-validator');
 const QRCode = require('qrcode');
 const mongoose = require('mongoose');
 
-/**
- * Get certificate templates - FIXED
- * @route GET /api/certificates/templates
- * @access Private
- */
 exports.getTemplates = async (req, res) => {
   try {
     console.log('getTemplates called with query:', req.query);
@@ -27,8 +22,15 @@ exports.getTemplates = async (req, res) => {
       if (!mongoose.Types.ObjectId.isValid(eventId)) {
         return res.status(400).json({ error: 'Invalid event ID format' });
       }
-      query.event = eventId;
-      console.log('Filtering by eventId:', eventId);
+      
+      // FIXED: Use $or to include both event-specific templates AND global templates
+      query.$or = [
+        { event: eventId },           // Templates specific to this event
+        { event: null },              // Global templates (no specific event)
+        { event: { $exists: false } } // Templates without event field
+      ];
+      
+      console.log('Filtering for eventId:', eventId, 'with query:', JSON.stringify(query));
     } else {
       // Show user's templates and default templates
       query.$or = [
@@ -38,12 +40,34 @@ exports.getTemplates = async (req, res) => {
     }
 
     if (isDefault !== undefined) {
-      query.isDefault = isDefault === 'true';
+      // If we already have $or, we need to wrap it in $and
+      if (query.$or) {
+        query = {
+          $and: [
+            { $or: query.$or },
+            { isDefault: isDefault === 'true' }
+          ]
+        };
+      } else {
+        query.isDefault = isDefault === 'true';
+      }
     }
 
-    query.isActive = true;
+    // Only show active templates
+    if (query.$and) {
+      query.$and.push({ isActive: true });
+    } else if (query.$or) {
+      query = {
+        $and: [
+          { $or: query.$or },
+          { isActive: true }
+        ]
+      };
+    } else {
+      query.isActive = true;
+    }
 
-    console.log('Template query:', JSON.stringify(query));
+    console.log('Final template query:', JSON.stringify(query, null, 2));
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
@@ -57,6 +81,11 @@ exports.getTemplates = async (req, res) => {
     const total = await CertificateTemplate.countDocuments(query);
 
     console.log(`Found ${templates.length} templates out of ${total} total`);
+    
+    // Log template details for debugging
+    templates.forEach(template => {
+      console.log(`Template: ${template.name}, Event: ${template.event ? template.event._id : 'Global'}, CreatedBy: ${template.createdBy._id}`);
+    });
 
     res.json({
       success: true,
@@ -75,6 +104,115 @@ exports.getTemplates = async (req, res) => {
   }
 };
 
+/**
+ * Create a new certificate template - ENHANCED VERSION
+ * @route POST /api/certificates/templates
+ * @access Private
+ */
+exports.createTemplate = async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    console.log('createTemplate called with body:', req.body);
+    console.log('Files:', req.files);
+
+    const {
+      name,
+      description,
+      eventId,
+      isDefault,
+      design,
+      layout,
+      customFields
+    } = req.body;
+
+    // Validate event if provided
+    if (eventId) {
+      if (!mongoose.Types.ObjectId.isValid(eventId)) {
+        return res.status(400).json({ error: 'Invalid event ID format' });
+      }
+      
+      const event = await Event.findById(eventId);
+      if (!event) {
+        return res.status(404).json({ error: 'Event not found' });
+      }
+
+      // Check if user has permission to create template for this event
+      const isCreator = event.createdBy.toString() === req.user.id;
+      const isHost = event.attendees && event.attendees.some(a => 
+        a.user && a.user.toString() === req.user.id && a.role === 'host'
+      );
+
+      if (!isCreator && !isHost) {
+        return res.status(403).json({ error: 'Permission denied' });
+      }
+    }
+
+    const template = new CertificateTemplate({
+      name,
+      description,
+      createdBy: req.user.id,
+      event: eventId || null, // FIXED: Explicitly set to null if no eventId
+      isDefault: isDefault === 'true' || isDefault === true || false,
+      design: design ? (typeof design === 'string' ? JSON.parse(design) : design) : {},
+      layout: layout ? (typeof layout === 'string' ? JSON.parse(layout) : layout) : {},
+      customFields: customFields ? (typeof customFields === 'string' ? JSON.parse(customFields) : customFields) : []
+    });
+
+    // Handle background image upload
+    if (req.files && req.files.backgroundImage) {
+      try {
+        const uploadResult = await cloudStorage.uploadFile(req.files.backgroundImage[0]);
+        template.design.backgroundImage = {
+          url: uploadResult.url,
+          filename: req.files.backgroundImage[0].originalname
+        };
+      } catch (uploadError) {
+        console.error('Background image upload error:', uploadError);
+        // Continue without background image
+      }
+    }
+
+    // Handle logo upload
+    if (req.files && req.files.logo) {
+      try {
+        const uploadResult = await cloudStorage.uploadFile(req.files.logo[0]);
+        template.design.logo = {
+          url: uploadResult.url,
+          filename: req.files.logo[0].originalname
+        };
+      } catch (uploadError) {
+        console.error('Logo upload error:', uploadError);
+        // Continue without logo
+      }
+    }
+
+    await template.save();
+
+    const populatedTemplate = await CertificateTemplate.findById(template._id)
+      .populate('createdBy', 'firstName lastName username')
+      .populate('event', 'name startDateTime');
+
+    console.log('Template created:', { 
+      id: template._id, 
+      name: template.name, 
+      eventId: template.event,
+      isGlobal: !template.event 
+    });
+
+    res.status(201).json({
+      success: true,
+      data: populatedTemplate,
+      template: populatedTemplate // Include both for compatibility
+    });
+  } catch (error) {
+    console.error('Create certificate template error:', error);
+    res.status(500).json({ error: 'Server error when creating certificate template' });
+  }
+};
 /**
  * Get certificates for an event - FIXED
  * @route GET /api/certificates/event/:eventId
@@ -345,105 +483,7 @@ exports.issueCertificates = async (req, res) => {
  * @route POST /api/certificates/templates
  * @access Private
  */
-exports.createTemplate = async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
 
-    console.log('createTemplate called with body:', req.body);
-    console.log('Files:', req.files);
-
-    const {
-      name,
-      description,
-      eventId,
-      isDefault,
-      design,
-      layout,
-      customFields
-    } = req.body;
-
-    // Validate event if provided
-    if (eventId) {
-      if (!mongoose.Types.ObjectId.isValid(eventId)) {
-        return res.status(400).json({ error: 'Invalid event ID format' });
-      }
-      
-      const event = await Event.findById(eventId);
-      if (!event) {
-        return res.status(404).json({ error: 'Event not found' });
-      }
-
-      // Check if user has permission to create template for this event
-      const isCreator = event.createdBy.toString() === req.user.id;
-      const isHost = event.attendees && event.attendees.some(a => 
-        a.user && a.user.toString() === req.user.id && a.role === 'host'
-      );
-
-      if (!isCreator && !isHost) {
-        return res.status(403).json({ error: 'Permission denied' });
-      }
-    }
-
-    const template = new CertificateTemplate({
-      name,
-      description,
-      createdBy: req.user.id,
-      event: eventId || undefined,
-      isDefault: isDefault === 'true' || isDefault === true || false,
-      design: design ? (typeof design === 'string' ? JSON.parse(design) : design) : {},
-      layout: layout ? (typeof layout === 'string' ? JSON.parse(layout) : layout) : {},
-      customFields: customFields ? (typeof customFields === 'string' ? JSON.parse(customFields) : customFields) : []
-    });
-
-    // Handle background image upload
-    if (req.files && req.files.backgroundImage) {
-      try {
-        const uploadResult = await cloudStorage.uploadFile(req.files.backgroundImage[0]);
-        template.design.backgroundImage = {
-          url: uploadResult.url,
-          filename: req.files.backgroundImage[0].originalname
-        };
-      } catch (uploadError) {
-        console.error('Background image upload error:', uploadError);
-        // Continue without background image
-      }
-    }
-
-    // Handle logo upload
-    if (req.files && req.files.logo) {
-      try {
-        const uploadResult = await cloudStorage.uploadFile(req.files.logo[0]);
-        template.design.logo = {
-          url: uploadResult.url,
-          filename: req.files.logo[0].originalname
-        };
-      } catch (uploadError) {
-        console.error('Logo upload error:', uploadError);
-        // Continue without logo
-      }
-    }
-
-    await template.save();
-
-    const populatedTemplate = await CertificateTemplate.findById(template._id)
-      .populate('createdBy', 'firstName lastName username')
-      .populate('event', 'name startDateTime');
-
-    console.log('Template created:', { id: template._id, name: template.name });
-
-    res.status(201).json({
-      success: true,
-      data: populatedTemplate,
-      template: populatedTemplate // Include both for compatibility
-    });
-  } catch (error) {
-    console.error('Create certificate template error:', error);
-    res.status(500).json({ error: 'Server error when creating certificate template' });
-  }
-};
 
 // Include all other existing methods with minimal changes...
 // (keeping the rest of the controller methods unchanged but adding better error handling)
