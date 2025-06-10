@@ -40,7 +40,15 @@ router.get('/templates',
   authenticateToken,
   certificateController.getTemplates
 );
-
+router.post('/manual',
+  authenticateToken,
+  [
+    body('recipientName').notEmpty().withMessage('Recipient name is required'),
+    body('eventName').notEmpty().withMessage('Event name is required'),
+    body('issuerName').notEmpty().withMessage('Issuer name is required')
+  ],
+  certificateController.createManualCertificate
+);
 router.get('/templates/:templateId',
   authenticateToken,
   certificateController.getTemplate
