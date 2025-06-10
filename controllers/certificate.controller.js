@@ -429,262 +429,306 @@ exports.getEventCertificates = async (req, res) => {
  * @route POST /api/certificates/issue
  * @access Private
  */
-// Updated issueCertificates function in certificate.controller.js
-// models/Certificate.js - COMPLETE FIXED VERSION
-const mongoose = require('mongoose');
-const Schema = mongoose.Schema;
-
-// Certificate Template Schema
-const CertificateTemplateSchema = new Schema({
-  name: {
-    type: String,
-    required: true,
-    trim: true
-  },
-  description: String,
-  createdBy: {
-    type: Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  },
-  event: {
-    type: Schema.Types.ObjectId,
-    ref: 'Event',
-    default: null // null means it's a global template
-  },
-  isDefault: {
-    type: Boolean,
-    default: false
-  },
-  isActive: {
-    type: Boolean,
-    default: true
-  },
-  design: {
-    backgroundImage: {
-      url: String,
-      filename: String
-    },
-    logo: {
-      url: String,
-      filename: String
-    },
-    colors: {
-      primary: { type: String, default: '#1f2937' },
-      secondary: { type: String, default: '#374151' },
-      accent: { type: String, default: '#667eea' }
-    },
-    fonts: {
-      heading: { type: String, default: 'Arial' },
-      body: { type: String, default: 'Arial' }
-    },
-    layout: { type: String, default: 'standard' }
-  },
-  layout: {
-    textElements: [{
-      id: String,
-      type: { type: String, default: 'text' },
-      content: String,
-      x: { type: Number, default: 50 },
-      y: { type: Number, default: 50 },
-      fontSize: { type: Number, default: 16 },
-      fontWeight: { type: String, default: 'normal' },
-      color: { type: String, default: '#000000' },
-      textAlign: { type: String, default: 'center' }
-    }],
-    qrCode: {
-      x: { type: Number, default: 85 },
-      y: { type: Number, default: 15 },
-      size: { type: Number, default: 100 },
-      color: { type: String, default: '#000000' }
-    }
-  },
-  customFields: [{
-    key: String,
-    label: String,
-    type: { type: String, default: 'text' },
-    required: { type: Boolean, default: false },
-    defaultValue: String
-  }],
-  createdAt: {
-    type: Date,
-    default: Date.now
-  },
-  updatedAt: Date
-});
-
-// Certificate Schema
-const CertificateSchema = new Schema({
-  certificateId: {
-    type: String,
-    required: true,
-    unique: true
-  },
-  recipient: {
-    type: Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  },
-  event: {
-    type: Schema.Types.ObjectId,
-    ref: 'Event',
-    required: true
-  },
-  template: {
-    type: Schema.Types.ObjectId,
-    ref: 'CertificateTemplate',
-    required: true
-  },
-  issuedBy: {
-    type: Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  },
-  status: {
-    type: String,
-    enum: ['draft', 'issued', 'revoked'],
-    default: 'issued' // Default to issued for auto-generation
-  },
-  issuedAt: {
-    type: Date,
-    default: Date.now
-  },
-  revokedAt: Date,
-  revokeReason: String,
-  certificateData: {
-    recipientName: String,
-    eventName: String,
-    completionDate: Date,
-    issuerName: String,
-    eventId: String,
-    customFields: [{
-      key: String,
-      value: String
-    }]
-  },
-  // Store certificate image (Base64 or URL)
-  certificateImage: {
-    type: String,
-    default: null
-  },
-  verificationUrl: String,
-  qrCode: String, // Base64 encoded QR code
-  pdfUrl: String,
-  downloadCount: {
-    type: Number,
-    default: 0
-  },
-  lastDownloaded: Date,
-  metadata: {
-    ipAddress: String,
-    userAgent: String,
-    generatedAt: {
-      type: Date,
-      default: Date.now
-    }
-  },
-  createdAt: {
-    type: Date,
-    default: Date.now
-  },
-  updatedAt: {
-    type: Date,
-    default: Date.now
-  }
-});
-
-// Enhanced pre-save middleware for certificate ID generation
-CertificateSchema.pre('save', async function(next) {
+exports.issueCertificates = async (req, res) => {
   try {
-    // Only generate certificateId if it doesn't exist
-    if (!this.certificateId) {
-      console.log('🔄 Generating certificateId for new certificate...');
-      
-      let isUnique = false;
-      let attempts = 0;
-      const maxAttempts = 10;
-      
-      while (!isUnique && attempts < maxAttempts) {
-        // Generate a unique certificate ID with better format
-        const timestamp = Date.now();
-        const randomPart = Math.random().toString(36).substring(2, 8).toUpperCase();
-        const candidateId = `CERT-${timestamp}-${randomPart}`;
-        
-        console.log(`📝 Attempt ${attempts + 1}: Generated candidateId: ${candidateId}`);
-        
-        // Check if this ID already exists
-        const existingCert = await this.constructor.findOne({ 
-          certificateId: candidateId 
-        });
-        
-        if (!existingCert) {
-          this.certificateId = candidateId;
-          isUnique = true;
-          console.log(`✅ Unique certificateId assigned: ${candidateId}`);
-        } else {
-          console.log(`❌ CertificateId collision: ${candidateId} already exists`);
-          attempts++;
-        }
-      }
-      
-      if (!isUnique) {
-        const error = new Error('Failed to generate unique certificate ID after maximum attempts');
-        console.error('❌ Certificate ID generation failed:', error.message);
-        return next(error);
-      }
+    console.log('🎓 === CERTIFICATE ISSUANCE START ===');
+    console.log('📥 Request body received:', JSON.stringify(req.body, null, 2));
+    
+    const {
+      eventId,
+      templateId,
+      attendeeIds,
+      customMessage,
+      sendEmail = true,
+      certificateImage // Certificate image from frontend
+    } = req.body;
+
+    // ✅ STEP 1: Validate required fields
+    console.log('🔍 Step 1: Validating required fields...');
+    if (!eventId || !templateId) {
+      console.log('❌ Missing required fields:', { eventId: !!eventId, templateId: !!templateId });
+      return res.status(400).json({ error: 'Event ID and Template ID are required' });
     }
-    
-    // Set verification URL if not already set
-    if (!this.verificationUrl && this.certificateId) {
-      // IMPORTANT: Use the correct frontend URL format that matches your React routes
-      this.verificationUrl = `https://meetkats.com/certificates/${this.certificateId}`;
-      console.log(`🔗 Verification URL set: ${this.verificationUrl}`);
+
+    // Validate ObjectId formats
+    if (!mongoose.Types.ObjectId.isValid(eventId)) {
+      console.log('❌ Invalid eventId format:', eventId);
+      return res.status(400).json({ error: 'Invalid event ID format' });
     }
-    
-    // Update the timestamp
-    this.updatedAt = Date.now();
-    
-    console.log('✅ Certificate pre-save completed successfully:', {
-      certificateId: this.certificateId,
-      recipient: this.recipient,
-      event: this.event,
-      status: this.status,
-      verificationUrl: this.verificationUrl,
-      hasImage: !!this.certificateImage
+    if (!mongoose.Types.ObjectId.isValid(templateId)) {
+      console.log('❌ Invalid templateId format:', templateId);
+      return res.status(400).json({ error: 'Invalid template ID format' });
+    }
+
+    console.log('✅ Required fields validated successfully');
+
+    // ✅ STEP 2: Get and validate event
+    console.log('🔍 Step 2: Fetching and validating event...');
+    const event = await Event.findById(eventId)
+      .populate('attendees.user', 'firstName lastName email')
+      .populate('createdBy', 'firstName lastName');
+
+    if (!event) {
+      console.log('❌ Event not found:', eventId);
+      return res.status(404).json({ error: 'Event not found' });
+    }
+
+    console.log('✅ Event found:', { 
+      id: event._id, 
+      name: event.name,
+      createdBy: event.createdBy._id,
+      attendeesCount: event.attendees ? event.attendees.length : 0
     });
+
+    // ✅ STEP 3: Check permissions
+    console.log('🔍 Step 3: Checking permissions...');
+    const currentUserId = req.user.id.toString();
+    const isCreator = event.createdBy._id.toString() === currentUserId;
     
-    next();
+    const isHost = event.attendees && event.attendees.some(a => {
+      const userId = a.user._id ? a.user._id.toString() : a.user.toString();
+      const isUserMatch = userId === currentUserId;
+      const isHostRole = a.role === 'host';
+      
+      console.log('👤 Checking attendee permission:', {
+        attendeeUserId: userId,
+        currentUserId: currentUserId,
+        role: a.role,
+        isUserMatch,
+        isHostRole
+      });
+      
+      return isUserMatch && isHostRole;
+    });
+
+    console.log('🔐 Permission check result:', {
+      isCreator,
+      isHost,
+      hasPermission: isCreator || isHost
+    });
+
+    if (!isCreator && !isHost) {
+      console.log('❌ Permission denied for user:', currentUserId);
+      return res.status(403).json({ 
+        error: 'Permission denied. Only event creators or hosts can issue certificates.'
+      });
+    }
+
+    console.log('✅ Permission check passed');
+
+    // ✅ STEP 4: Validate template
+    console.log('🔍 Step 4: Validating template...');
+    const template = await CertificateTemplate.findById(templateId);
+    if (!template) {
+      console.log('❌ Template not found:', templateId);
+      return res.status(404).json({ error: 'Certificate template not found' });
+    }
+
+    console.log('✅ Template found:', { id: template._id, name: template.name });
+
+    // ✅ STEP 5: Get attendees to issue certificates to
+    console.log('🔍 Step 5: Identifying target attendees...');
+    let targetAttendees = event.attendees ? event.attendees.filter(a => a.status === 'going') : [];
+
+    if (attendeeIds && Array.isArray(attendeeIds) && attendeeIds.length > 0) {
+      const validAttendeeIds = attendeeIds.filter(id => mongoose.Types.ObjectId.isValid(id));
+      if (validAttendeeIds.length !== attendeeIds.length) {
+        console.log('❌ Some attendee IDs are invalid:', { provided: attendeeIds, valid: validAttendeeIds });
+        return res.status(400).json({ error: 'Some attendee IDs are invalid' });
+      }
+      
+      targetAttendees = targetAttendees.filter(a => {
+        const userId = a.user._id ? a.user._id.toString() : a.user.toString();
+        return validAttendeeIds.includes(userId);
+      });
+    }
+
+    console.log(`📊 Target attendees identified: ${targetAttendees.length}`);
+
+    if (targetAttendees.length === 0) {
+      console.log('❌ No eligible attendees found');
+      return res.status(400).json({ 
+        error: 'No eligible attendees found. Make sure attendees have "going" status.'
+      });
+    }
+
+    // ✅ STEP 6: Get issuer information
+    console.log('🔍 Step 6: Getting issuer information...');
+    const issuer = await User.findById(req.user.id);
+    if (!issuer) {
+      console.log('❌ Issuer not found:', req.user.id);
+      return res.status(404).json({ error: 'Issuer user not found' });
+    }
+
+    console.log('✅ Issuer found:', { id: issuer._id, name: `${issuer.firstName} ${issuer.lastName}` });
+
+    // ✅ STEP 7: Issue certificates to each attendee
+    console.log('🔍 Step 7: Starting certificate issuance process...');
+    const issuedCertificates = [];
+    const errors = [];
+
+    for (const [index, attendee] of targetAttendees.entries()) {
+      try {
+        console.log(`🎯 Processing attendee ${index + 1}/${targetAttendees.length}...`);
+        
+        const attendeeUserId = attendee.user._id ? attendee.user._id : attendee.user;
+        const attendeeName = `${attendee.user.firstName} ${attendee.user.lastName}`;
+        
+        console.log(`👤 Processing: ${attendeeName} (${attendeeUserId})`);
+        
+        // Check if certificate already exists
+        const existingCert = await Certificate.findOne({
+          recipient: attendeeUserId,
+          event: eventId,
+          status: { $ne: 'revoked' }
+        });
+
+        if (existingCert) {
+          console.log(`⚠️ Certificate already exists for ${attendeeName}:`, existingCert.certificateId);
+          errors.push({
+            userId: attendeeUserId,
+            name: attendeeName,
+            error: 'Certificate already issued',
+            existingCertificateId: existingCert.certificateId
+          });
+          continue;
+        }
+
+        // ✅ STEP 7a: Create new certificate
+        console.log(`📜 Creating new certificate for ${attendeeName}...`);
+        
+        const certificate = new Certificate({
+          recipient: attendeeUserId,
+          event: eventId,
+          template: templateId,
+          issuedBy: req.user.id,
+          status: 'issued',
+          issuedAt: new Date(),
+          certificateData: {
+            recipientName: attendeeName,
+            eventName: event.name,
+            completionDate: new Date(),
+            issuerName: `${issuer.firstName} ${issuer.lastName}`,
+            eventId: eventId.toString() // Store as string for easy access
+          },
+          // Store certificate image if provided from frontend
+          certificateImage: certificateImage || null,
+          metadata: {
+            ipAddress: req.ip || req.connection.remoteAddress,
+            userAgent: req.get('User-Agent'),
+            generatedAt: new Date()
+          }
+        });
+
+        // ✅ STEP 7b: Save certificate (this will trigger pre-save middleware)
+        console.log(`💾 Saving certificate for ${attendeeName}...`);
+        await certificate.save();
+        
+        console.log(`✅ Certificate saved successfully:`, {
+          id: certificate.certificateId,
+          mongoId: certificate._id,
+          recipient: certificate.certificateData.recipientName,
+          verificationUrl: certificate.verificationUrl
+        });
+
+        // ✅ STEP 7c: Generate QR code
+        console.log(`🔲 Generating QR code for certificate ${certificate.certificateId}...`);
+        try {
+          const qrCodeData = await QRCode.toDataURL(certificate.verificationUrl, {
+            errorCorrectionLevel: 'M',
+            margin: 2,
+            scale: 8,
+            width: 256
+          });
+          
+          certificate.qrCode = qrCodeData;
+          await certificate.save();
+          
+          console.log(`✅ QR code generated and saved for ${certificate.certificateId}`);
+        } catch (qrError) {
+          console.error(`❌ QR Code generation error for ${certificate.certificateId}:`, qrError);
+          // Continue without QR code - not critical
+        }
+
+        issuedCertificates.push(certificate);
+        console.log(`🎉 Certificate ${certificate.certificateId} issued successfully to ${attendeeName}`);
+
+        // TODO: Send email if requested (implement email service)
+        if (sendEmail) {
+          console.log(`📧 Email sending requested for ${attendeeName} (not implemented yet)`);
+        }
+
+      } catch (error) {
+        console.error(`❌ Certificate issuance error for attendee ${attendee.user._id || attendee.user}:`, error);
+        errors.push({
+          userId: attendee.user._id || attendee.user,
+          name: `${attendee.user.firstName} ${attendee.user.lastName}`,
+          error: error.message
+        });
+      }
+    }
+
+    // ✅ STEP 8: Prepare and send response
+    console.log('🔍 Step 8: Preparing response...');
+    
+    const responseData = {
+      success: true,
+      issued: issuedCertificates.length,
+      errors: errors.length,
+      data: {
+        issued: issuedCertificates.length,
+        errors: errors.length,
+        eventId: eventId,
+        eventName: event.name
+      },
+      certificates: issuedCertificates.map(cert => ({
+        id: cert._id,
+        certificateId: cert.certificateId,
+        recipient: cert.certificateData.recipientName,
+        issuedAt: cert.issuedAt,
+        verificationUrl: cert.verificationUrl,
+        eventId: cert.event,
+        qrCode: cert.qrCode,
+        hasImage: !!cert.certificateImage
+      })),
+      errorDetails: errors
+    };
+
+    console.log('📊 Final results:', {
+      totalProcessed: targetAttendees.length,
+      successfullyIssued: issuedCertificates.length,
+      errors: errors.length,
+      certificateIds: issuedCertificates.map(c => c.certificateId)
+    });
+
+    console.log('🎓 === CERTIFICATE ISSUANCE COMPLETED ===');
+    
+    res.json(responseData);
+
   } catch (error) {
-    console.error('❌ Certificate pre-save error:', error);
-    next(error);
+    console.error('🚨 === CERTIFICATE ISSUANCE ERROR ===');
+    console.error('Error type:', error.constructor.name);
+    console.error('Error message:', error.message);
+    console.error('Error stack:', error.stack);
+    
+    if (error.response) {
+      console.error('HTTP Response Error Details:', {
+        status: error.response.status,
+        statusText: error.response.statusText,
+        data: error.response.data
+      });
+    }
+    
+    console.error('🚨 === CERTIFICATE ISSUANCE ERROR END ===');
+    
+    res.status(500).json({ 
+      success: false,
+      error: 'Server error when issuing certificates',
+      details: error.message,
+      timestamp: new Date().toISOString()
+    });
   }
-});
-
-// Pre-save middleware for templates
-CertificateTemplateSchema.pre('save', function(next) {
-  this.updatedAt = Date.now();
-  next();
-});
-
-// Create models
-const Certificate = mongoose.model('Certificate', CertificateSchema);
-const CertificateTemplate = mongoose.model('CertificateTemplate', CertificateTemplateSchema);
-
-module.exports = {
-  Certificate,
-  CertificateTemplate
 };
-
-/**
- * Create a new certificate template - FIXED
- * @route POST /api/certificates/templates
- * @access Private
- */
-
-
-// Include all other existing methods with minimal changes...
-// (keeping the rest of the controller methods unchanged but adding better error handling)
-
 /**
  * Get a specific certificate template
  * @route GET /api/certificates/templates/:templateId
