@@ -7,7 +7,107 @@ const certificateService = require('../services/certificateService');
 const { validationResult } = require('express-validator');
 const QRCode = require('qrcode');
 const mongoose = require('mongoose');
+exports.createManualCertificate = async (req, res) => {
+  try {
+    console.log('📋 === MANUAL CERTIFICATE CREATION START ===');
+    console.log('📥 Request body:', JSON.stringify(req.body, null, 2));
+    
+    const {
+      recipientName,
+      eventName,
+      completionDate,
+      issuerName,
+      certificateId,
+      eventId,
+      certificateImage,
+      templateId = 'manual-template'
+    } = req.body;
 
+    // Validate required fields
+    if (!recipientName || !eventName || !issuerName) {
+      return res.status(400).json({ 
+        error: 'Recipient name, event name, and issuer name are required' 
+      });
+    }
+
+    // Generate certificate ID if not provided
+    const finalCertificateId = certificateId || `CERT-${Date.now()}-${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
+
+    // Create the certificate
+    const certificate = new Certificate({
+      // Use the current user as the recipient for manual certificates, or create a placeholder
+      recipient: req.user.id, // You might want to handle this differently
+      event: eventId || new mongoose.Types.ObjectId(), // Create a placeholder if no event
+      template: new mongoose.Types.ObjectId(), // Create a placeholder template
+      issuedBy: req.user.id,
+      status: 'issued',
+      certificateId: finalCertificateId,
+      issuedAt: new Date(),
+      certificateData: {
+        recipientName,
+        eventName,
+        completionDate: completionDate ? new Date(completionDate) : new Date(),
+        issuerName,
+        eventId: eventId || 'manual',
+        customFields: []
+      },
+      certificateImage: certificateImage || null,
+      metadata: {
+        ipAddress: req.ip || req.connection.remoteAddress,
+        userAgent: req.get('User-Agent'),
+        generatedAt: new Date(),
+        isManual: true
+      }
+    });
+
+    // Save the certificate
+    await certificate.save();
+
+    console.log('✅ Manual certificate created:', {
+      id: certificate.certificateId,
+      recipient: certificate.certificateData.recipientName,
+      verificationUrl: certificate.verificationUrl
+    });
+
+    // Generate QR code
+    try {
+      const qrCodeData = await QRCode.toDataURL(certificate.verificationUrl, {
+        errorCorrectionLevel: 'M',
+        margin: 2,
+        scale: 8,
+        width: 256
+      });
+      
+      certificate.qrCode = qrCodeData;
+      await certificate.save();
+      
+      console.log('✅ QR code generated for manual certificate');
+    } catch (qrError) {
+      console.error('❌ QR Code generation error:', qrError);
+    }
+
+    res.json({
+      success: true,
+      certificate: {
+        id: certificate._id,
+        certificateId: certificate.certificateId,
+        recipient: certificate.certificateData.recipientName,
+        issuedAt: certificate.issuedAt,
+        verificationUrl: certificate.verificationUrl,
+        qrCode: certificate.qrCode,
+        hasImage: !!certificate.certificateImage
+      },
+      message: 'Manual certificate created successfully'
+    });
+
+  } catch (error) {
+    console.error('❌ Manual certificate creation error:', error);
+    res.status(500).json({ 
+      error: 'Server error when creating manual certificate',
+      details: error.message 
+    });
+  }
+};
 exports.getTemplates = async (req, res) => {
   try {
     console.log('getTemplates called with query:', req.query);
