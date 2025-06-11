@@ -171,21 +171,85 @@ app.use(sqlSanitizer);
 
 // Set up CORS
 console.log('Setting up CORS...');
+// Update your CORS configuration in index.js (around line 106)
 app.use(cors({
   origin: [
     'https://meetkats.com',
-    'https://meetkats.com/', // Include both versions to be safe
+    'https://www.meetkats.com',
     'http://localhost:3000',
     'http://localhost:5173',
-    'http://localhost:8081' ,
-    'http://192.168.61.248:3000', // Replace with your computer's IP address
-    'capacitor://localhost', // For capacitor apps
-    'ionic://localhost', // For ionic framework
-    '*' // During development, allow all origins (remove in production)
+    'http://localhost:8081',
+    'http://192.168.61.248:3000',
+    'capacitor://localhost',
+    'ionic://localhost'
+    // Remove '*' in production for security
   ],
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: [
+    'Content-Type', 
+    'Authorization', 
+    'cache-control',     // ✅ Add this - your frontend is sending this
+    'x-request-id',      // ✅ Add this - you're using request IDs
+    'pragma',            // ✅ Add this - often sent with cache-control
+    'expires',           // ✅ Add this - cache-related header
+    'accept',            // ✅ Add this - your frontend sends this
+    'origin',            // ✅ Add this - required for CORS
+    'x-requested-with'   // ✅ Add this - common for AJAX requests
+  ],
+  credentials: true,     // ✅ Enable if using cookies/sessions
+  optionsSuccessStatus: 200, // ✅ For legacy browser support
+  preflightContinue: false,  // ✅ Handle preflight locally
+  maxAge: 86400 // ✅ Cache preflight for 24 hours
 }));
+
+// ✅ Also add explicit OPTIONS handler BEFORE your routes
+app.options('*', cors({
+  origin: [
+    'https://meetkats.com',
+    'https://www.meetkats.com',
+    'http://localhost:3000',
+    'http://localhost:5173',
+    'http://localhost:8081'
+  ],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: [
+    'Content-Type', 
+    'Authorization', 
+    'cache-control',
+    'x-request-id',
+    'pragma',
+    'expires',
+    'accept',
+    'origin',
+    'x-requested-with'
+  ],
+  credentials: true
+}));
+
+// ✅ Enhanced health endpoint that explicitly handles CORS
+app.get('/health', (req, res) => {
+  // Set CORS headers explicitly for this critical endpoint
+  res.header('Access-Control-Allow-Origin', req.headers.origin || 'https://meetkats.com');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, cache-control, x-request-id');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  
+  res.status(200).json({
+    status: 'OK',
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development',
+    version: process.env.APP_VERSION || '1.0.0',
+    cors: 'enabled'
+  });
+});
+
+app.options('/health', (req, res) => {
+  res.header('Access-Control-Allow-Origin', req.headers.origin || 'https://meetkats.com');
+  res.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, cache-control, x-request-id');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.sendStatus(200);
+});
 
 // Session setup
 console.log('Setting up session...');
