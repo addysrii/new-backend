@@ -270,9 +270,41 @@ app.use(passport.initialize());
 app.use(passport.session());
 
 // Body parsing middleware
-console.log('Setting up body parsers...');
-app.use(bodyParser.json());
-app.use(express.json());
+console.log('Setting up enhanced body parsers...');
+
+// Enhanced JSON parser with larger limits for certificate images
+app.use(express.json({ 
+  limit: '50mb',           // Increase from default 1mb to 50mb
+  extended: true,
+  parameterLimit: 100000   // Increase parameter limit
+}));
+
+// Enhanced URL-encoded parser
+app.use(express.urlencoded({ 
+  limit: '50mb',           // Increase from default 1mb to 50mb
+  extended: true,
+  parameterLimit: 100000   // Increase parameter limit
+}));
+
+// Keep your existing bodyParser for compatibility
+app.use(bodyParser.json({ 
+  limit: '50mb',           // Increase limit here too
+  extended: true 
+}));
+
+// Enhanced text parser for large payloads
+app.use(express.text({ 
+  limit: '50mb',
+  type: 'text/*' 
+}));
+
+// Enhanced raw parser for binary data
+app.use(express.raw({ 
+  limit: '50mb',
+  type: 'application/octet-stream' 
+}));
+
+console.log('✅ Enhanced body parsers configured with 50MB limits');
 
 // Add metrics middleware
 console.log('Setting up metrics middleware...');
