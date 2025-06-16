@@ -1,5 +1,4 @@
-// File: routes/certificate.routes.js
-
+// Updated routes/certificate.routes.js - Simplified for direct upload
 const express = require('express');
 const router = express.Router();
 const certificateController = require('../controllers/certificate.controller');
@@ -11,99 +10,206 @@ const multer = require('multer');
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 5 * 1024 * 1024 // 5MB limit
+    fileSize: 10 * 1024 * 1024 // 10MB limit
   },
   fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('image/')) {
+    const allowedTypes = ['image/png', 'image/jpeg', 'image/jpg', 'application/pdf'];
+    if (allowedTypes.includes(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error('Only image files are allowed'));
+      cb(new Error('Only PNG, JPG, JPEG, and PDF files are allowed'));
     }
   }
 });
 
-// Certificate Template Routes
-router.post('/templates',
+// ==========================================
+// CERTIFICATE UPLOAD ROUTES
+// ==========================================
+
+/**
+ * Upload a single certificate
+ * @route POST /api/certificates/upload
+ * @access Private
+ */
+router.post('/upload',
   authenticateToken,
-  upload.fields([
-    { name: 'backgroundImage', maxCount: 1 },
-    { name: 'logo', maxCount: 1 }
-  ]),
+  upload.single('certificateFile'),
   [
-    body('name').notEmpty().withMessage('Template name is required'),
-    body('name').isLength({ max: 100 }).withMessage('Template name must be less than 100 characters')
+    body('certificateId')
+      .notEmpty()
+      .withMessage('Certificate ID is required')
+      .isLength({ min: 5, max: 50 })
+      .withMessage('Certificate ID must be between 5 and 50 characters'),
+    body('recipientName')
+      .notEmpty()
+      .withMessage('Recipient name is required')
+      .isLength({ max: 100 })
+      .withMessage('Recipient name must be less than 100 characters'),
+    body('eventName')
+      .notEmpty()
+      .withMessage('Event/Course name is required')
+      .isLength({ max: 150 })
+      .withMessage('Event name must be less than 150 characters'),
+    body('issuerName')
+      .notEmpty()
+      .withMessage('Issuer name is required')
+      .isLength({ max: 100 })
+      .withMessage('Issuer name must be less than 100 characters'),
+    body('description')
+      .optional()
+      .isLength({ max: 500 })
+      .withMessage('Description must be less than 500 characters')
   ],
-  certificateController.createTemplate
+  certificateController.uploadCertificate
 );
 
-router.get('/templates',
+/**
+ * Bulk upload certificates
+ * @route POST /api/certificates/bulk-upload
+ * @access Private
+ */
+router.post('/bulk-upload',
   authenticateToken,
-  certificateController.getTemplates
+  upload.array('certificateFiles', 20), // Max 20 files
+  certificateController.bulkUploadCertificates
 );
-router.post('/manual',
+
+// ==========================================
+// CERTIFICATE MANAGEMENT ROUTES
+// ==========================================
+
+/**
+ * Get user's uploaded certificates
+ * @route GET /api/certificates/my-uploads
+ * @access Private
+ */
+router.get('/my-uploads',
+  authenticateToken,
+  certificateController.getMyUploadedCertificates
+);
+
+/**
+ * Search certificates
+ * @route GET /api/certificates/search
+ * @access Private
+ */
+router.get('/search',
+  authenticateToken,
+  certificateController.searchCertificates
+);
+
+/**
+ * Get certificate statistics
+ * @route GET /api/certificates/stats
+ * @access Private
+ */
+router.get('/stats',
+  authenticateToken,
+  certificateController.getCertificateStats
+);
+
+/**
+ * Update certificate details
+ * @route PUT /api/certificates/:certificateId
+ * @access Private
+ */
+router.put('/:certificateId',
   authenticateToken,
   [
-    body('recipientName').notEmpty().withMessage('Recipient name is required'),
-    body('eventName').notEmpty().withMessage('Event name is required'),
-    body('issuerName').notEmpty().withMessage('Issuer name is required')
+    body('recipientName')
+      .optional()
+      .isLength({ max: 100 })
+      .withMessage('Recipient name must be less than 100 characters'),
+    body('eventName')
+      .optional()
+      .isLength({ max: 150 })
+      .withMessage('Event name must be less than 150 characters'),
+    body('issuerName')
+      .optional()
+      .isLength({ max: 100 })
+      .withMessage('Issuer name must be less than 100 characters'),
+    body('description')
+      .optional()
+      .isLength({ max: 500 })
+      .withMessage('Description must be less than 500 characters')
   ],
-  certificateController.createManualCertificate
-);
-router.get('/templates/:templateId',
-  authenticateToken,
-  certificateController.getTemplate
+  certificateController.updateUploadedCertificate
 );
 
-router.put('/templates/:templateId',
+/**
+ * Delete certificate
+ * @route DELETE /api/certificates/:certificateId
+ * @access Private
+ */
+router.delete('/:certificateId',
   authenticateToken,
-  upload.fields([
-    { name: 'backgroundImage', maxCount: 1 },
-    { name: 'logo', maxCount: 1 }
-  ]),
-  certificateController.updateTemplate
+  certificateController.deleteUploadedCertificate
 );
 
-router.delete('/templates/:templateId',
-  authenticateToken,
-  certificateController.deleteTemplate
-);
+// ==========================================
+// PUBLIC ROUTES
+// ==========================================
 
-// Certificate Management Routes
-router.post('/issue',
-  authenticateToken,
-  [
-    body('eventId').notEmpty().withMessage('Event ID is required'),
-    body('templateId').notEmpty().withMessage('Template ID is required')
-  ],
-  certificateController.issueCertificates
-);
-
-router.get('/event/:eventId',
-  authenticateToken,
-  certificateController.getEventCertificates
-);
-
-router.get('/my',
-  authenticateToken,
-  certificateController.getMyCertificates
-);
-
-// Public Routes
+/**
+ * Verify certificate (Public)
+ * @route GET /api/certificates/verify/:certificateId
+ * @access Public
+ */
 router.get('/verify/:certificateId',
   certificateController.verifyCertificate
 );
 
+/**
+ * Get certificate by ID (Public)
+ * @route GET /api/certificates/:certificateId
+ * @access Public
+ */
+router.get('/:certificateId',
+  certificateController.getCertificateById
+);
+
+/**
+ * Download certificate (Public)
+ * @route GET /api/certificates/:certificateId/download
+ * @access Public
+ */
 router.get('/:certificateId/download',
   certificateController.downloadCertificate
 );
 
-// Certificate Management
-router.put('/:certificateId/revoke',
-  authenticateToken,
-  [
-    body('reason').optional().isLength({ max: 500 }).withMessage('Reason must be less than 500 characters')
-  ],
-  certificateController.revokeCertificate
-);
+// ==========================================
+// TEST ROUTES
+// ==========================================
+
+/**
+ * Test endpoint
+ * @route GET /api/certificates/test
+ * @access Public
+ */
+router.get('/test', (req, res) => {
+  console.log('🧪 Certificate test endpoint accessed');
+  
+  res.json({
+    success: true,
+    message: 'Certificate upload system is working!',
+    timestamp: new Date().toISOString(),
+    availableEndpoints: [
+      'POST /api/certificates/upload (PRIVATE) - Upload single certificate',
+      'POST /api/certificates/bulk-upload (PRIVATE) - Upload multiple certificates',
+      'GET /api/certificates/my-uploads (PRIVATE) - Get user\'s certificates',
+      'GET /api/certificates/search (PRIVATE) - Search certificates',
+      'GET /api/certificates/stats (PRIVATE) - Get statistics',
+      'GET /api/certificates/verify/:certificateId (PUBLIC) - Verify certificate',
+      'GET /api/certificates/:certificateId (PUBLIC) - Get certificate',
+      'GET /api/certificates/:certificateId/download (PUBLIC) - Download certificate',
+      'PUT /api/certificates/:certificateId (PRIVATE) - Update certificate',
+      'DELETE /api/certificates/:certificateId (PRIVATE) - Delete certificate'
+    ],
+    testUrls: {
+      verifyTest: `${req.protocol}://${req.get('host')}/api/certificates/verify/TEST-CERT-123`,
+      frontendTest: `${req.protocol}://${req.get('host')}/certificates/TEST-CERT-123`
+    }
+  });
+});
 
 module.exports = router;
