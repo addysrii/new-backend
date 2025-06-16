@@ -169,7 +169,34 @@ const chatUpload = createUploadMiddleware(
   1,
   mimeTypeValidators.documents
 );
+const certificateStorage = createCloudinaryStorage(
+  'certificates',
+  ['jpg', 'jpeg', 'png', 'pdf'],
+  [
+    { quality: 'auto:good' },
+    { width: 2000, crop: 'limit' }, // Limit width for certificates
+    { flags: 'attachment' } // This helps with download behavior
+  ]
+);
 
+// Certificate upload middleware
+const certificateUpload = createUploadMiddleware(
+  certificateStorage,
+  10 * 1024 * 1024, // 10MB limit for certificates
+  1, // Single file
+  {
+    validate: (file) => {
+      const allowedMimeTypes = [
+        'image/jpeg', 
+        'image/png', 
+        'image/jpg', 
+        'application/pdf'
+      ];
+      return allowedMimeTypes.includes(file.mimetype);
+    },
+    description: 'PNG, JPG, JPEG, and PDF files'
+  }
+);
 // Handle multer errors gracefully
 const handleMulterError = (err, req, res, next) => {
   if (err instanceof multer.MulterError) {
@@ -191,7 +218,6 @@ const handleMulterError = (err, req, res, next) => {
   
   next();
 };
-
 module.exports = {
   cloudinary,
   upload,
@@ -202,5 +228,6 @@ module.exports = {
   evidenceUpload,
   eventUpload,
   chatUpload,
+  certificateUpload, // Add this line
   handleMulterError
 };
