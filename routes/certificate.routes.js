@@ -1,8 +1,8 @@
-// Updated routes/certificate.routes.js - Fixed import issue
+// Updated routes/certificate.routes.js - Fixed for Cloudinary
 const express = require('express');
 const router = express.Router();
 
-// ✅ FIX: Use destructuring to import the functions
+// Import certificate controller functions
 const {
   uploadCertificate,
   bulkUploadCertificates,
@@ -18,23 +18,9 @@ const {
 
 const { authenticateToken } = require('../middleware/auth.middleware');
 const { body } = require('express-validator');
-const multer = require('multer');
 
-// Configure multer for file uploads
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: 10 * 1024 * 1024 // 10MB limit
-  },
-  fileFilter: (req, file, cb) => {
-    const allowedTypes = ['image/png', 'image/jpeg', 'image/jpg', 'application/pdf'];
-    if (allowedTypes.includes(file.mimetype)) {
-      cb(null, true);
-    } else {
-      cb(new Error('Only PNG, JPG, JPEG, and PDF files are allowed'));
-    }
-  }
-});
+// ✅ Import the certificate upload middleware from Cloudinary config
+const { certificateUpload, handleMulterError } = require('../configure/cloudinary');
 
 // ==========================================
 // CERTIFICATE UPLOAD ROUTES
@@ -47,7 +33,7 @@ const upload = multer({
  */
 router.post('/upload',
   authenticateToken,
-  upload.single('certificateFile'),
+  certificateUpload.single('certificateFile'), // ✅ Use Cloudinary upload
   [
     body('certificateId')
       .notEmpty()
@@ -74,7 +60,8 @@ router.post('/upload',
       .isLength({ max: 500 })
       .withMessage('Description must be less than 500 characters')
   ],
-  uploadCertificate // ✅ Now using the destructured function directly
+  uploadCertificate,
+  handleMulterError // ✅ Add error handling
 );
 
 /**
@@ -84,8 +71,9 @@ router.post('/upload',
  */
 router.post('/bulk-upload',
   authenticateToken,
-  upload.array('certificateFiles', 20), // Max 20 files
-  bulkUploadCertificates // ✅ Direct function reference
+  certificateUpload.array('certificateFiles', 20), // ✅ Use Cloudinary upload
+  bulkUploadCertificates,
+  handleMulterError // ✅ Add error handling
 );
 
 // ==========================================
@@ -99,7 +87,7 @@ router.post('/bulk-upload',
  */
 router.get('/my-uploads',
   authenticateToken,
-  getMyUploadedCertificates // ✅ Direct function reference
+  getMyUploadedCertificates
 );
 
 /**
@@ -109,7 +97,7 @@ router.get('/my-uploads',
  */
 router.get('/search',
   authenticateToken,
-  searchCertificates // ✅ Direct function reference
+  searchCertificates
 );
 
 /**
@@ -119,7 +107,7 @@ router.get('/search',
  */
 router.get('/stats',
   authenticateToken,
-  getCertificateStats // ✅ Direct function reference
+  getCertificateStats
 );
 
 /**
@@ -147,7 +135,7 @@ router.put('/:certificateId',
       .isLength({ max: 500 })
       .withMessage('Description must be less than 500 characters')
   ],
-  updateUploadedCertificate // ✅ Direct function reference
+  updateUploadedCertificate
 );
 
 /**
@@ -157,7 +145,7 @@ router.put('/:certificateId',
  */
 router.delete('/:certificateId',
   authenticateToken,
-  deleteUploadedCertificate // ✅ Direct function reference
+  deleteUploadedCertificate
 );
 
 // ==========================================
@@ -170,7 +158,7 @@ router.delete('/:certificateId',
  * @access Public
  */
 router.get('/verify/:certificateId',
-  verifyCertificate // ✅ Direct function reference
+  verifyCertificate
 );
 
 /**
@@ -179,7 +167,7 @@ router.get('/verify/:certificateId',
  * @access Public
  */
 router.get('/:certificateId',
-  getCertificateById // ✅ Direct function reference
+  getCertificateById
 );
 
 /**
@@ -188,7 +176,7 @@ router.get('/:certificateId',
  * @access Public
  */
 router.get('/:certificateId/download',
-  downloadCertificate // ✅ Direct function reference
+  downloadCertificate
 );
 
 // ==========================================
