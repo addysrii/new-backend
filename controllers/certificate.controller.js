@@ -781,16 +781,3 @@ exports.bulkUploadCertificates = async (req, res) => {
     });
   }
 };
-
-module.exports = {
-  uploadCertificate,
-  verifyCertificate,
-  getCertificateById,
-  getMyUploadedCertificates,
-  deleteUploadedCertificate,
-  updateUploadedCertificate,
-  downloadCertificate,
-  searchCertificates,
-  getCertificateStats,
-  bulkUploadCertificates
-};
