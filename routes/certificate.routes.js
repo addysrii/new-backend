@@ -1,7 +1,21 @@
-// Updated routes/certificate.routes.js - Simplified for direct upload
+// Updated routes/certificate.routes.js - Fixed import issue
 const express = require('express');
 const router = express.Router();
-const certificateController = require('../controllers/certificate.controller');
+
+// ✅ FIX: Use destructuring to import the functions
+const {
+  uploadCertificate,
+  bulkUploadCertificates,
+  getMyUploadedCertificates,
+  searchCertificates,
+  getCertificateStats,
+  updateUploadedCertificate,
+  deleteUploadedCertificate,
+  verifyCertificate,
+  getCertificateById,
+  downloadCertificate
+} = require('../controllers/certificate.controller');
+
 const { authenticateToken } = require('../middleware/auth.middleware');
 const { body } = require('express-validator');
 const multer = require('multer');
@@ -60,7 +74,7 @@ router.post('/upload',
       .isLength({ max: 500 })
       .withMessage('Description must be less than 500 characters')
   ],
-  certificateController.uploadCertificate
+  uploadCertificate // ✅ Now using the destructured function directly
 );
 
 /**
@@ -71,7 +85,7 @@ router.post('/upload',
 router.post('/bulk-upload',
   authenticateToken,
   upload.array('certificateFiles', 20), // Max 20 files
-  certificateController.bulkUploadCertificates
+  bulkUploadCertificates // ✅ Direct function reference
 );
 
 // ==========================================
@@ -85,7 +99,7 @@ router.post('/bulk-upload',
  */
 router.get('/my-uploads',
   authenticateToken,
-  certificateController.getMyUploadedCertificates
+  getMyUploadedCertificates // ✅ Direct function reference
 );
 
 /**
@@ -95,7 +109,7 @@ router.get('/my-uploads',
  */
 router.get('/search',
   authenticateToken,
-  certificateController.searchCertificates
+  searchCertificates // ✅ Direct function reference
 );
 
 /**
@@ -105,7 +119,7 @@ router.get('/search',
  */
 router.get('/stats',
   authenticateToken,
-  certificateController.getCertificateStats
+  getCertificateStats // ✅ Direct function reference
 );
 
 /**
@@ -133,7 +147,7 @@ router.put('/:certificateId',
       .isLength({ max: 500 })
       .withMessage('Description must be less than 500 characters')
   ],
-  certificateController.updateUploadedCertificate
+  updateUploadedCertificate // ✅ Direct function reference
 );
 
 /**
@@ -143,7 +157,7 @@ router.put('/:certificateId',
  */
 router.delete('/:certificateId',
   authenticateToken,
-  certificateController.deleteUploadedCertificate
+  deleteUploadedCertificate // ✅ Direct function reference
 );
 
 // ==========================================
@@ -156,7 +170,7 @@ router.delete('/:certificateId',
  * @access Public
  */
 router.get('/verify/:certificateId',
-  certificateController.verifyCertificate
+  verifyCertificate // ✅ Direct function reference
 );
 
 /**
@@ -165,7 +179,7 @@ router.get('/verify/:certificateId',
  * @access Public
  */
 router.get('/:certificateId',
-  certificateController.getCertificateById
+  getCertificateById // ✅ Direct function reference
 );
 
 /**
@@ -174,7 +188,7 @@ router.get('/:certificateId',
  * @access Public
  */
 router.get('/:certificateId/download',
-  certificateController.downloadCertificate
+  downloadCertificate // ✅ Direct function reference
 );
 
 // ==========================================
