@@ -179,7 +179,8 @@ app.use(cors({
     'http://localhost:3000',
     'http://localhost:5173',
     'http://localhost:8081',
-    'http://192.168.61.248:3000',
+   ' https://meetkats-new.vercel.app',
+  'http://192.168.61.248:3000',
     'capacitor://localhost',
     'ionic://localhost'
     // Remove '*' in production for security
