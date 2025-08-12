@@ -23,12 +23,12 @@ exports.getMyEvents = async (req, res) => {
     // Get events where the user is attending or hosting
     const myEvents = await Event.find({
       $or: [
-        { 'attendees.user': req.user.id },
+        // { 'attendees.user': req.user.id },
         { createdBy: req.user.id }
       ]
     })
     .populate('createdBy', 'firstName lastName username profileImage')
-    .populate('attendees.user', 'firstName lastName username profileImage')
+    // .populate('attendees.user', 'firstName lastName username profileImage')
     .sort({ startDateTime: 1 });
     
     res.json(myEvents);
