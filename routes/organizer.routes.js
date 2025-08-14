@@ -1,10 +1,10 @@
 const express = require('express');
 const router = express.Router();
-const organizerController = require('../controllers/organizerController');
-const upload = require('../middlewares/multer'); // Assuming you use multer middleware
+const organizerController = require('../controllers/organizerController.js');
+// const upload = require('../middlewares/'); 
 
 // Create new organizer
-router.post('/', organizerController.createOrganizer);
+router.post('/', organizerController.registerOrganizer);
 
 // Get all organizers
 router.get('/', organizerController.getAllOrganizers);
@@ -25,10 +25,10 @@ router.post('/login', organizerController.loginOrganizer);
 router.get('/search/query', organizerController.searchOrganizers);
 
 // Upload profile picture
-router.post(
-  '/upload/:id',
-  upload.single('profileImage'), // image field name should match frontend
-  organizerController.uploadProfilePicture
-);
+// router.post(
+//   '/upload/:id',
+//   upload.single('profileImage'), // image field name should match frontend
+//   organizerController.uploadProfilePicture
+// );
 
 module.exports = router;
