@@ -10,15 +10,15 @@ const cors = require('cors');
 const helmet = require('helmet');
 const expressRateLimit = require('express-rate-limit');
 const dotenv = require('dotenv');
+const { check } = require('express-validator');
 const setupSocketIO = require('./lib/socket');
 const jwt = require('jsonwebtoken');
-require('dotenv').config(); 
 console.log('Starting application initialization...');
-
 // Keep your current import
- const validationMiddleware = require('./middleware/validation.middleware');
+const validationMiddleware = require('./middleware/validation.middleware');
 const userRoutes = require('./routes/user.routes');
-// // And then use:
+// And then use:
+
 // Import models
 try {
   console.log('Importing models...');
@@ -38,36 +38,6 @@ const PORT = process.env.PORT || 3000;
 const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 console.log(`Server will run on port ${PORT}, BASE_URL: ${BASE_URL}`);
 
-// Set up CORS
-console.log('Setting up CORS...');
-const allowedOrigins = [
-  'https://meetkats.com',
-  'http://localhost:3000',
-  'http://localhost:5173',
-  'http://localhost:8081',
-  'https://meetkats-new.vercel.app',
-  'http://192.168.61.248:3000',
-  'capacitor://localhost',
-  'ionic://localhost'
-];
-
-app.use(
-  cors({
-    origin: function (origin, callback) {
-      // Allow requests with no origin (like mobile apps, curl, Postman)
-      if (!origin) return callback(null, true);
-      if (allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      } else {
-        return callback(new Error('Not allowed by CORS'));
-      }
-    },
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Cache-Control'],
-    credentials: true // <-- include this if you're using cookies or auth headers
-  })
-);
-app.options('*', cors());
 // Set up security with Helmet
 console.log('Setting up security middleware...');
 app.use(helmet());
@@ -108,7 +78,7 @@ let apiLimiter, authLimiter, postLimiters;
 try {
   apiLimiter = expressRateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 1000, // limit each IP to 100 requests per windowMs
+    max: 100, // limit each IP to 100 requests per windowMs
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: 'Too many requests, please try again later.' }
@@ -116,7 +86,7 @@ try {
 
   authLimiter = expressRateLimit({
     windowMs: 60 * 60 * 1000, // 1 hour
-    max: 30, // limit each IP to 10 login/signup attempts per hour
+    max: 10, // limit each IP to 10 login/signup attempts per hour
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: 'Too many authentication attempts, please try again later.' }
@@ -199,10 +169,88 @@ const sqlSanitizer = (req, res, next) => {
 
 app.use(sqlSanitizer);
 
+// Set up CORS
+console.log('Setting up CORS...');
+// Update your CORS configuration in index.js (around line 106)
+app.use(cors({
+  origin: [
+    'https://meetkats.com',
+    'https://www.meetkats.com',
+    'http://localhost:3000',
+    'http://localhost:5173',
+    'http://localhost:8081',
+   ' https://meetkats-new.vercel.app',
+  'http://192.168.61.248:3000',
+    'capacitor://localhost',
+    'ionic://localhost'
+    // Remove '*' in production for security
+  ],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: [
+    'Content-Type', 
+    'Authorization', 
+    'cache-control',     // ✅ Add this - your frontend is sending this
+    'x-request-id',      // ✅ Add this - you're using request IDs
+    'pragma',            // ✅ Add this - often sent with cache-control
+    'expires',           // ✅ Add this - cache-related header
+    'accept',            // ✅ Add this - your frontend sends this
+    'origin',            // ✅ Add this - required for CORS
+    'x-requested-with'   // ✅ Add this - common for AJAX requests
+  ],
+  credentials: true,     // ✅ Enable if using cookies/sessions
+  optionsSuccessStatus: 200, // ✅ For legacy browser support
+  preflightContinue: false,  // ✅ Handle preflight locally
+  maxAge: 86400 // ✅ Cache preflight for 24 hours
+}));
 
+// ✅ Also add explicit OPTIONS handler BEFORE your routes
+app.options('*', cors({
+  origin: [
+    'https://meetkats.com',
+    'https://www.meetkats.com',
+    'http://localhost:3000',
+    'http://localhost:5173',
+    'http://localhost:8081'
+  ],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: [
+    'Content-Type', 
+    'Authorization', 
+    'cache-control',
+    'x-request-id',
+    'pragma',
+    'expires',
+    'accept',
+    'origin',
+    'x-requested-with'
+  ],
+  credentials: true
+}));
 
+// ✅ Enhanced health endpoint that explicitly handles CORS
+app.get('/health', (req, res) => {
+  // Set CORS headers explicitly for this critical endpoint
+  res.header('Access-Control-Allow-Origin', req.headers.origin || 'https://meetkats.com');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, cache-control, x-request-id');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  
+  res.status(200).json({
+    status: 'OK',
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development',
+    version: process.env.APP_VERSION || '1.0.0',
+    cors: 'enabled'
+  });
+});
 
-
+app.options('/health', (req, res) => {
+  res.header('Access-Control-Allow-Origin', req.headers.origin || 'https://meetkats.com');
+  res.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, cache-control, x-request-id');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.sendStatus(200);
+});
 
 // Session setup
 console.log('Setting up session...');
@@ -223,9 +271,41 @@ app.use(passport.initialize());
 app.use(passport.session());
 
 // Body parsing middleware
-console.log('Setting up body parsers...');
-app.use(bodyParser.json());
-app.use(express.json());
+console.log('Setting up enhanced body parsers...');
+
+// Enhanced JSON parser with larger limits for certificate images
+app.use(express.json({ 
+  limit: '50mb',           // Increase from default 1mb to 50mb
+  extended: true,
+  parameterLimit: 100000   // Increase parameter limit
+}));
+
+// Enhanced URL-encoded parser
+app.use(express.urlencoded({ 
+  limit: '50mb',           // Increase from default 1mb to 50mb
+  extended: true,
+  parameterLimit: 100000   // Increase parameter limit
+}));
+
+// Keep your existing bodyParser for compatibility
+app.use(bodyParser.json({ 
+  limit: '50mb',           // Increase limit here too
+  extended: true 
+}));
+
+// Enhanced text parser for large payloads
+app.use(express.text({ 
+  limit: '50mb',
+  type: 'text/*' 
+}));
+
+// Enhanced raw parser for binary data
+app.use(express.raw({ 
+  limit: '50mb',
+  type: 'application/octet-stream' 
+}));
+
+console.log('✅ Enhanced body parsers configured with 50MB limits');
 
 // Add metrics middleware
 console.log('Setting up metrics middleware...');
@@ -450,6 +530,7 @@ try {
 try {
   console.log('Importing analytics controller...');
   analyticsController = require('./controllers/analytics.controller');
+  
   console.log('Analytics controller imported successfully');
 } catch (error) {
   console.error('Failed to import analytics controller:', error);
@@ -479,7 +560,19 @@ try {
 }
 app.use('/api/organizer',require('./routes/organizer.routes'))
 app.use('/api/bookings', require('./routes/bookings.routes'));
-app.use('/api/payments', require('./routes/payments.routes'))
+app.use('/api/payments', require('./routes/payments.routes'));
+try {
+  console.log('Importing cse routes ');
+ 
+  app.use('/api/customevent', require('./routes/customEvent.routes'))
+  console.log('cse imported successfully');
+} catch (error) {
+  console.error('Failed to import comments routes:', error);
+}
+
+
+// const eventFieldTemplateRoutes = require('./routes/eventFieldTemplate.routes');
+// app.use('/api/event-field-templates', eventFieldTemplateRoutes);
 // ==========================================
 // AUTH ROUTES
 // ==========================================
@@ -789,7 +882,7 @@ app.put('/api/chats/:chatId/media-controls', authenticateToken, chatController.s
 app.get('/api/chats/:chatId/audit-log', authenticateToken, chatController.getChatAuditLog);
 app.post('/api/chats/:chatId/self-destruct', authenticateToken, chatController.createSelfDestructMessage);
 app.post('/api/chats/:chatId/report', authenticateToken, chatController.reportSecurityIssue);
-app.post('/api/chats/:chatId/security-scan', authenticateToken, chatController.runSecurityScan);
+    app.post('/api/chats/:chatId/security-scan', authenticateToken, chatController.runSecurityScan);
 app.post('/api/chats/:chatId/uploads', authenticateToken, upload.single('file'), chatController.secureFileUpload);
 app.post('/api/chats/:chatId/keys/exchange', authenticateToken, chatController.exchangeEncryptionKeys);
 app.post('/api/chats/:chatId/auto-expiration', authenticateToken, chatController.setAutoExpiration);
@@ -804,7 +897,7 @@ app.delete('/api/chats/:chatId/messages/:messageId', authenticateToken, chatCont
   console.log('Skipping chat routes setup - controller not available');
 }
 
-// ==========================================// ==========================================
+// ==========================================
 // NETWORK ROUTES
 // ==========================================
 console.log('Setting up network routes...');
@@ -915,9 +1008,146 @@ if (locationController) {
   console.log('Skipping location routes setup - controller not available');
 }
 
-// EVENT ROUTES
 // ==========================================
-// EVENT ROUTES
+// CERTIFICATE ROUTES (IMPORTANT: Must be before event routes)
+// ==========================================
+// Add this section to your index.js file - REPLACE the existing certificate routes section
+
+// ==========================================
+// CERTIFICATE ROUTES (IMPORTANT: Must be before event routes)
+// ==========================================
+console.log('Setting up certificate routes...');
+try {
+  const certificateController = require('./controllers/certificate.controller');
+  const { Certificate } = require('./models/Certificate'); // Import Certificate model
+  
+  console.log('✅ Certificate controller loaded');
+  
+  // ✅ CERTIFICATE API ROUTES (with authentication)
+  app.use('/api/certificates', require('./routes/certificate.routes'));
+  
+  // ✅ PUBLIC CERTIFICATE VERIFICATION PAGE (Frontend route)
+  app.get('/certificates/:certificateId', async (req, res) => {
+    try {
+      const { certificateId } = req.params;
+      
+      console.log('🔍 Certificate verification page requested for:', certificateId);
+      
+      // Verify the certificate exists and is valid
+      const certificate = await Certificate.findOne({ 
+        certificateId,
+        status: 'issued'
+      })
+        .populate('recipient', 'firstName lastName')
+        .populate('event', 'name startDateTime location')
+        .populate('template', 'name')
+        .populate('issuedBy', 'firstName lastName');
+
+      if (!certificate) {
+        console.log('❌ Certificate not found:', certificateId);
+        // Redirect to your React app with error parameter
+        return res.redirect(`${process.env.FRONTEND_URL || 'https://meetkats.com'}/certificates/${certificateId}?error=not_found`);
+      }
+
+      console.log('✅ Certificate found, redirecting to React app');
+      // Redirect to your React app to handle the display
+      return res.redirect(`${process.env.FRONTEND_URL || 'https://meetkats.com'}/certificates/${certificateId}`);
+      
+    } catch (error) {
+      console.error('❌ Certificate verification page error:', error);
+      return res.redirect(`${process.env.FRONTEND_URL || 'https://meetkats.com'}/certificates/${req.params.certificateId}?error=server_error`);
+    }
+  });
+
+  // ✅ API VERIFICATION ENDPOINT (for frontend to fetch data)
+  app.get('/api/certificates/verify/:certificateId', async (req, res) => {
+    try {
+      const { certificateId } = req.params;
+
+      console.log('🔍 API: Verifying certificate:', certificateId);
+
+      const certificate = await Certificate.findOne({ 
+        certificateId,
+        status: 'issued'
+      })
+        .populate('recipient', 'firstName lastName')
+        .populate('event', 'name startDateTime location')
+        .populate('template', 'name')
+        .populate('issuedBy', 'firstName lastName');
+
+      if (!certificate) {
+        console.log('❌ Certificate not found:', certificateId);
+        return res.status(404).json({ 
+          valid: false, 
+          message: 'Certificate not found or invalid' 
+        });
+      }
+
+      console.log('✅ Certificate found and verified:', {
+        id: certificate.certificateId,
+        recipient: certificate.certificateData.recipientName,
+        event: certificate.certificateData.eventName
+      });
+
+      res.json({
+        valid: true,
+        certificate: {
+          id: certificate.certificateId,
+          recipient: certificate.certificateData.recipientName,
+          event: certificate.certificateData.eventName,
+          issuedAt: certificate.issuedAt,
+          issuedBy: certificate.certificateData.issuerName,
+          verificationUrl: certificate.verificationUrl,
+          template: certificate.template ? certificate.template.name : 'Unknown',
+          eventId: certificate.certificateData.eventId,
+          certificateImage: certificate.certificateImage
+        }
+      });
+    } catch (error) {
+      console.error('❌ Verify certificate error:', error);
+      res.status(500).json({ 
+        valid: false,
+        error: 'Server error when verifying certificate' 
+      });
+    }
+  });
+
+  // ✅ TEST ENDPOINT
+  app.get('/api/certificates/test', (req, res) => {
+    console.log('🧪 Certificate test endpoint accessed');
+    
+    res.json({
+      success: true,
+      message: 'Certificate routes are working!',
+      timestamp: new Date().toISOString(),
+      availableEndpoints: [
+        'GET /api/certificates/verify/:certificateId (PUBLIC)',
+        'GET /api/certificates/templates (PRIVATE)',
+        'POST /api/certificates/issue (PRIVATE)',
+        'GET /api/certificates/my (PRIVATE)',
+        'GET /api/certificates/:certificateId/download (PUBLIC)',
+        'GET /certificates/:certificateId (PUBLIC - Frontend Route)'
+      ],
+      testVerificationUrl: `${req.protocol}://${req.get('host')}/api/certificates/verify/TEST-CERT-123`,
+      testFrontendUrl: `${req.protocol}://${req.get('host')}/certificates/TEST-CERT-123`
+    });
+  });
+  
+  console.log('✅ Certificate routes set up successfully');
+  
+} catch (error) {
+  console.error('❌ Error setting up certificate routes:', error);
+  
+  // Create fallback routes
+  app.get('/api/certificates/test', (req, res) => {
+    console.log('🔄 Fallback certificate test endpoint');
+    res.status(500).json({
+      success: false,
+      error: 'Certificate controller not properly loaded',
+      message: 'Check server logs for certificate setup errors'
+    });
+  });
+}
 // ==========================================
 console.log('Setting up event routes...');
 if (eventController) {
@@ -930,7 +1160,13 @@ if (eventController) {
     
     // Second: Define general routes
     app.get('/api/events', authenticateToken, eventController.getEvents);
-    app.post('/api/events', authenticateToken, eventUpload.single('coverImage'), eventController.createEvent);
+    app.post('/api/events', authenticateToken, eventUpload.single('coverImage'), check('name', 'Event name is required').not().isEmpty(),
+    check('startDateTime', 'Start date and time is required').not().isEmpty(),
+    check('customFields', 'Custom fields must be an array if provided').optional().isArray(),
+    check('customFields.*.key', 'Each custom field must have a key').optional(),
+    check('customFields.*.value', 'Each custom field must have a value').optional(),
+    check('customFields.*.label', 'Each custom field must have a label').optional(),
+             eventController.createEvent);
     
     // Third: Define parameter-based routes
     app.get('/api/events/:eventId', authenticateToken, eventController.getEvent);
@@ -946,7 +1182,7 @@ if (eventController) {
     app.get('/api/events/:eventId/attendees', authenticateToken, eventController.getEventAttendees);
     app.get('/api/events/:eventId/photos', authenticateToken, eventController.getEventPhotos);
     app.get('/api/events/:eventId/comments', authenticateToken, eventController.getEventComments);
-    
+    app.get('/api/events/search', authenticateToken, eventController.searchEvents);
     // Event responses and interactions
     app.post('/api/events/:eventId/respond', authenticateToken, eventController.respondToEvent);
     app.post('/api/events/:eventId/invite', authenticateToken, eventController.inviteToEvent);
@@ -955,7 +1191,10 @@ if (eventController) {
     app.post('/api/events/:eventId/calendar', authenticateToken, eventController.addToCalendar);
     app.post('/api/events/:eventId/comments', authenticateToken, eventController.addEventComment);
     app.post('/api/events/:eventId/photos', authenticateToken, eventUpload.single('photo'), eventController.addEventPhoto);
-    
+
+// Add these routes to your existing event routes section:
+app.put('/api/events/:eventId/certificates/enable', authenticateToken, eventController.enableEventCertificates);
+app.put('/api/events/:eventId/certificates/disable', authenticateToken, eventController.disableEventCertificates);
     // Finally: Define nested routes with parameters
     app.put('/api/events/:eventId/attendees/:userId/role', authenticateToken, eventController.updateAttendeeRole);
     app.put('/api/events/:eventId/attendees/:userId/approve', authenticateToken, eventController.approveAttendee);
