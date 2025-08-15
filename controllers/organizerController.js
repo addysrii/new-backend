@@ -150,3 +150,166 @@ exports.getOrganizerById = async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 };
+exports.updateOrganizer = async (req, res) => {
+  const { organizerId } = req.params;
+
+  if (!mongoose.Types.ObjectId.isValid(organizerId)) {
+    return res.status(400).json({ message: "Invalid organizer ID" });
+  }
+
+  try {
+    const updates = req.body;
+    updates.updatedAt = new Date();
+
+    // If linkedUserAccount is being updated, convert to ObjectId
+    if (updates.linkedUserAccount) {
+      if (!mongoose.Types.ObjectId.isValid(updates.linkedUserAccount)) {
+        return res
+          .status(400)
+          .json({ message: "Invalid linkedUserAccount ID" });
+      }
+      updates.linkedUserAccount = new mongoose.Types.ObjectId(
+        updates.linkedUserAccount
+      );
+    }
+
+    const organizer = await Organizer.findByIdAndUpdate(
+      organizerId,
+      { $set: updates },
+      { new: true, runValidators: true }
+    );
+
+    if (!organizer) {
+      return res.status(404).json({ message: "Organizer not found" });
+    }
+
+    res.status(200).json({ message: "Organizer updated", organizer });
+  } catch (err) {
+    console.error("Error updating organizer:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+exports.deleteOrganizer = async (req, res) => {
+  const { organizerId } = req.params;
+
+  if (!mongoose.Types.ObjectId.isValid(organizerId)) {
+    return res.status(400).json({ message: "Invalid organizer ID" });
+  }
+
+  try {
+    const organizer = await Organizer.findByIdAndUpdate(
+      organizerId,
+      { $set: { banned: true, banTimestamp: new Date(), banReason: "Deleted" } },
+      { new: true }
+    );
+
+    if (!organizer) {
+      return res.status(404).json({ message: "Organizer not found" });
+    }
+
+    res.status(200).json({ message: "Organizer deleted (soft)", organizer });
+  } catch (err) {
+    console.error("Error deleting organizer:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+exports.banOrganizer = async (req, res) => {
+  await toggleBan(req, res, true);
+};
+exports.unbanOrganizer = async (req, res) => {
+  await toggleBan(req, res, false);
+};
+
+async function toggleBan(req, res, shouldBan) {
+  const { organizerId } = req.params;
+  const { reason } = req.body;
+
+  if (!mongoose.Types.ObjectId.isValid(organizerId)) {
+    return res.status(400).json({ message: "Invalid organizer ID" });
+  }
+
+  try {
+    const organizer = await Organizer.findByIdAndUpdate(
+      organizerId,
+      {
+        $set: {
+          banned: shouldBan,
+          banReason: shouldBan ? reason : null,
+          banTimestamp: shouldBan ? new Date() : null,
+        },
+      },
+      { new: true }
+    );
+
+    if (!organizer) {
+      return res.status(404).json({ message: "Organizer not found" });
+    }
+
+    res.status(200).json({
+      message: shouldBan ? "Organizer banned" : "Organizer unbanned",
+      organizer,
+    });
+  } catch (err) {
+    console.error("Error toggling ban:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+}
+exports.searchOrganizers = async (req, res) => {
+  const { q, status, banned } = req.query;
+  const filter = {};
+
+  if (q) filter.$text = { $search: q };
+  if (status) filter.approved = status === "approved";
+  if (banned !== undefined) filter.banned = banned === "true";
+
+  try {
+    const results = await Organizer.find(filter).limit(50); // limit to 50
+    res.status(200).json(results);
+  } catch (err) {
+    console.error("Error searching organizers:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+exports.getPendingKyc = async (_req, res) => {
+  try {
+    const pending = await Organizer.find({ "kyc.status": "pending" }).sort({
+      createdAt: -1,
+    });
+    res.status(200).json(pending);
+  } catch (err) {
+    console.error("Error fetching pending KYC organizers:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+exports.loginOrganizer = async (req, res) => {
+  const { email, password } = req.body;
+
+  try {
+    const organizer = await Organizer.findOne({ email });
+    if (!organizer) {
+      return res.status(400).json({ message: 'Invalid email or password' });
+    }
+
+    const isMatch = await bcrypt.compare(password, organizer.password);
+    if (!isMatch) {
+      return res.status(400).json({ message: 'Invalid email or password' });
+    }
+
+    const token = jwt.sign({ id: organizer._id }, process.env.JWT_SECRET, { expiresIn: '1d' });
+    res.status(200).json({ token, organizer });
+  } catch (error) {
+    res.status(500).json({ message: 'Login failed', error });
+  }
+};
+exports.searchOrganizers = async (req, res) => {
+  const { query } = req.query;
+  try {
+    const results = await Organizer.find({
+      name: { $regex: query, $options: 'i' },
+    });
+    res.status(200).json(results);
+  } catch (error) {
+    res.status(500).json({ message: 'Search failed', error });
+  }
+};
+
