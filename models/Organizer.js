@@ -143,6 +143,7 @@ const organizerSchema = new Schema({
 
 // Indexing for quick searches
 organizerSchema.index({ organizerName: "text", email: 1, phone: 1 });
-organizerSchema.index({ "kyc.panNumber": 1 }, { unique: true });
+organizerSchema.index({ "kyc.panNumber": 1 }, { unique: true, sparse: true });
 
 module.exports = mongoose.model('Organizer', organizerSchema); // ✅ Correct way
+
