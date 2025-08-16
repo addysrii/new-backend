@@ -3,13 +3,12 @@ const { Schema } = mongoose;
 
 // Organizer KYC Verification Schema
 const kycSchema = new Schema({
-  panNumber: {
-    type: String,
-    unique: true,
-    sparse: true, // Allows multiple null values while enforcing uniqueness for non-null
-    uppercase: true,
-    trim: true
-  },
+   panNumber: {
+      type: String,
+      uppercase: true,
+      trim: true,
+      default: undefined // This ensures null isn't stored
+    },
   gstNumber: {
     type: String,
     trim: true
@@ -175,3 +174,4 @@ organizerSchema.index({
 });
 
 module.exports = mongoose.model('Organizer', organizerSchema);
+
