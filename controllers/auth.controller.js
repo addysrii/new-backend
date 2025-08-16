@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const {User} = require('../models/User');
+const {Organizer} = require('../models/Organizer');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
@@ -814,6 +815,57 @@ exports.login = async (req, res) => {
     res.status(500).json({ error: 'Server error during login' });
   }
 };
+exports.registerOrganizer = async (req, res) => {
+  try {
+    const {
+      organizerName,
+      organizationType,
+      registrationNumber,
+      contactPerson,
+      phone,
+      email,
+      address,
+      website,
+      socialLinks,
+      linkedUserAccount,
+    } = req.body;
+
+    // Check if already registered with this email or phone
+    const existing = await Organizer.findOne({ $or: [{ email }, { phone }] });
+    if (existing) {
+      return res.status(409).json({ message: "Organizer already exists with this email or phone" });
+    }
+
+    // ✅ Safely convert linkedUserAccount to ObjectId
+    let linkedUserId = null;
+    if (linkedUserAccount) {
+      if (!mongoose.Types.ObjectId.isValid(linkedUserAccount)) {
+        return res.status(400).json({ message: "Invalid linkedUserAccount ID" });
+      }
+      linkedUserId = new mongoose.Types.ObjectId(linkedUserAccount);
+    }
+
+    const newOrganizer = new Organizer({
+      organizerName,
+      organizationType,
+      registrationNumber,
+      contactPerson,
+      phone,
+      email,
+      address,
+      website,
+      socialLinks,
+      linkedUserAccount: linkedUserId,
+    });
+
+    await newOrganizer.save();
+    res.status(201).json({ message: "Organizer registered successfully", organizer: newOrganizer });
+  } catch (error) {
+    console.error("Error registering organizer:", error);
+    res.status(500).json({ message: "Server error", error });
+  }
+};
+
 /**
  * Logout
  * @route POST /auth/logout
