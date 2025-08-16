@@ -4,12 +4,12 @@ const { Schema } = mongoose;
 
 // Organizer KYC Verification Schema
 const kycSchema = new Schema({
-  panNumber: {
-    type: String,
-    required: true,
-    unique: true,
-    uppercase: true,
-  },
+panNumber: {
+      type: String,
+      unique: true,
+      sparse: true, // This allows multiple null values
+      uppercase: true
+    },
   gstNumber: {
     type: String,
   },
@@ -144,4 +144,5 @@ const organizerSchema = new Schema({
 // Indexing for quick searches
 organizerSchema.index({ organizerName: "text", email: 1, phone: 1 });
 organizerSchema.index({ "kyc.panNumber": 1 }, { unique: true });
+
 module.exports = mongoose.model('Organizer', organizerSchema); // ✅ Correct way
