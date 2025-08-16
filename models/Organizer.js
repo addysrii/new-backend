@@ -5,15 +5,19 @@ const { Schema } = mongoose;
 const kycSchema = new Schema({
   panNumber: {
     type: String,
-    unique: true, // Still keep unique here for schema-level validation
-    uppercase: true
+    unique: true,
+    sparse: true, // Allows multiple null values while enforcing uniqueness for non-null
+    uppercase: true,
+    trim: true
   },
   gstNumber: {
     type: String,
+    trim: true
   },
   aadhaarNumber: {
     type: String,
     required: true,
+    trim: true
   },
   aadhaarDocumentUrl: String,
   panDocumentUrl: String,
@@ -36,15 +40,18 @@ const contactPersonSchema = new Schema({
   name: {
     type: String,
     required: true,
+    trim: true
   },
   phone: {
     type: String,
     required: true,
+    trim: true
   },
   email: {
     type: String,
     required: true,
     lowercase: true,
+    trim: true
   },
   designation: String,
 });
@@ -54,13 +61,17 @@ const organizerSchema = new Schema({
   organizerName: {
     type: String,
     required: true,
+    trim: true
   },
   organizationType: {
     type: String,
     enum: ["individual", "company", "ngo", "college", "other"],
     required: true,
   },
-  registrationNumber: String,
+  registrationNumber: {
+    type: String,
+    trim: true
+  },
   address: {
     line1: String,
     line2: String,
@@ -76,13 +87,18 @@ const organizerSchema = new Schema({
   phone: {
     type: String,
     required: true,
+    trim: true
   },
   email: {
     type: String,
     required: true,
     lowercase: true,
+    trim: true
   },
-  website: String,
+  website: {
+    type: String,
+    trim: true
+  },
   socialLinks: {
     facebook: String,
     instagram: String,
@@ -117,9 +133,8 @@ const organizerSchema = new Schema({
   banReason: String,
   banTimestamp: Date,
   linkedUserAccount: {
-    type: mongoose.Schema.Types.ObjectId,
+    type: Schema.Types.ObjectId,
     ref: 'User',
-    required: false
   },
   createdAt: {
     type: Date,
@@ -129,6 +144,8 @@ const organizerSchema = new Schema({
     type: Date,
     default: Date.now,
   },
+}, {
+  timestamps: true // This will automatically manage createdAt and updatedAt
 });
 
 // Indexing for quick searches
@@ -136,7 +153,7 @@ organizerSchema.index({ organizerName: "text", email: 1, phone: 1 });
 
 // Partial index for PAN number - only enforce uniqueness when PAN exists
 organizerSchema.index(
-  { "kyc.panNumber": 1 }, 
+  { "kyc.panNumber": 1 },
   { 
     unique: true,
     partialFilterExpression: { "kyc.panNumber": { $exists: true, $ne: null } }
@@ -147,6 +164,14 @@ organizerSchema.index(
 organizerSchema.pre('save', function(next) {
   this.updatedAt = new Date();
   next();
+});
+
+// Add text index for search functionality
+organizerSchema.index({
+  organizerName: "text",
+  "contactPerson.name": "text",
+  "address.city": "text",
+  "address.state": "text"
 });
 
 module.exports = mongoose.model('Organizer', organizerSchema);
