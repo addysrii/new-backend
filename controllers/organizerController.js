@@ -6,102 +6,70 @@ const mongoose = require("mongoose");
 
 exports.registerOrganizer = async (req, res) => {
   try {
-    const {
-      organizerName,
-      organizationType,
-      registrationNumber,
-      contactPerson,
-      phone,
-      email,
-      address,
-      website,
-      socialLinks,
-      linkedUserAccount,
-    } = req.body;
-
-    // Check if already registered with this email or phone
-    const existing = await Organizer.findOne({ $or: [{ email }, { phone }] });
-    if (existing) {
-      return res.status(409).json({ message: "Organizer already exists with this email or phone" });
-    }
-
-    // ✅ Safely convert linkedUserAccount to ObjectId
-    let linkedUserId = null;
-    if (linkedUserAccount) {
-      if (!mongoose.Types.ObjectId.isValid(linkedUserAccount)) {
-        return res.status(400).json({ message: "Invalid linkedUserAccount ID" });
-      }
-      linkedUserId = new mongoose.Types.ObjectId(linkedUserAccount);
-    }
-
-    const newOrganizer = new Organizer({
-      organizerName,
-      organizationType,
-      registrationNumber,
-      contactPerson,
-      phone,
-      email,
-      address,
-      website,
-      socialLinks,
-      linkedUserAccount: linkedUserId,
+    const { kyc, ...organizerData } = req.body; // Remove KYC from initial registration
+    
+    // Check for existing organizer
+    const existing = await Organizer.findOne({ 
+      $or: [{ email: organizerData.email }, { phone: organizerData.phone }] 
     });
+    
+    if (existing) {
+      return res.status(409).json({ message: "Organizer already exists" });
+    }
 
+    const newOrganizer = new Organizer(organizerData);
     await newOrganizer.save();
-    res.status(201).json({ message: "Organizer registered successfully", organizer: newOrganizer });
+    
+    res.status(201).json({ 
+      message: "Organizer registered successfully",
+      organizer: newOrganizer 
+    });
   } catch (error) {
-    console.error("Error registering organizer:", error);
-    res.status(500).json({ message: "Server error", error });
+    console.error("Registration error:", error);
+    res.status(500).json({ message: "Registration failed", error: error.message });
   }
 };
 
-
-// Upload KYC Details
 exports.submitKyc = async (req, res) => {
   try {
-    const { organizerId } = req.params;
-    const {
-      panNumber,
-      aadhaarNumber,
-      gstNumber,
-      panDocumentUrl,
-      aadhaarDocumentUrl,
-      gstCertificateUrl,
-    } = req.body;
+    const { panNumber, aadhaarNumber } = req.body;
+    
+    // Validate PAN format
+    if (panNumber && !/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(panNumber)) {
+      return res.status(400).json({ message: "Invalid PAN format" });
+    }
 
-    // Convert PAN to uppercase and remove spaces if exists
-    const processedPan = panNumber ? panNumber.toUpperCase().replace(/\s+/g, '') : null;
-
-    const organizer = await Organizer.findById(organizerId);
+    const organizer = await Organizer.findById(req.params.id);
     if (!organizer) {
       return res.status(404).json({ message: "Organizer not found" });
     }
 
-    organizer.kyc = {
-      panNumber: processedPan, // Use processed PAN
-      aadhaarNumber,
-      gstNumber,
-      panDocumentUrl,
-      aadhaarDocumentUrl,
-      gstCertificateUrl,
-      verified: false,
-      status: "pending",
-    };
+    // Only update if PAN is provided
+    if (panNumber) {
+      organizer.kyc = {
+        ...organizer.kyc,
+        panNumber: panNumber.toUpperCase(),
+        aadhaarNumber,
+        status: "pending"
+      };
+    } else {
+      organizer.kyc = {
+        ...organizer.kyc,
+        aadhaarNumber,
+        status: "pending"
+      };
+    }
 
     await organizer.save();
-    res.status(200).json({ message: "KYC submitted successfully", kyc: organizer.kyc });
+    res.status(200).json({ message: "KYC submitted successfully" });
   } catch (error) {
-    console.error("Error submitting KYC:", error);
-    
-    // Handle duplicate PAN error specifically
-    if (error.code === 11000 && error.keyPattern && error.keyPattern['kyc.panNumber']) {
+    if (error.code === 11000) {
       return res.status(400).json({ 
-        message: "PAN number already exists in our system",
+        message: "PAN number already exists",
         field: "panNumber"
       });
     }
-    
-    res.status(500).json({ message: "Server error" });
+    res.status(500).json({ message: "KYC submission failed" });
   }
 };
 // Admin approves organizer KYC
@@ -323,5 +291,6 @@ exports.searchOrganizers = async (req, res) => {
     res.status(500).json({ message: 'Search failed', error });
   }
 };
+
 
 
