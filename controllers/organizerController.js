@@ -69,13 +69,16 @@ exports.submitKyc = async (req, res) => {
       gstCertificateUrl,
     } = req.body;
 
+    // Convert PAN to uppercase and remove spaces if exists
+    const processedPan = panNumber ? panNumber.toUpperCase().replace(/\s+/g, '') : null;
+
     const organizer = await Organizer.findById(organizerId);
     if (!organizer) {
       return res.status(404).json({ message: "Organizer not found" });
     }
 
     organizer.kyc = {
-      panNumber,
+      panNumber: processedPan, // Use processed PAN
       aadhaarNumber,
       gstNumber,
       panDocumentUrl,
@@ -89,10 +92,18 @@ exports.submitKyc = async (req, res) => {
     res.status(200).json({ message: "KYC submitted successfully", kyc: organizer.kyc });
   } catch (error) {
     console.error("Error submitting KYC:", error);
+    
+    // Handle duplicate PAN error specifically
+    if (error.code === 11000 && error.keyPattern && error.keyPattern['kyc.panNumber']) {
+      return res.status(400).json({ 
+        message: "PAN number already exists in our system",
+        field: "panNumber"
+      });
+    }
+    
     res.status(500).json({ message: "Server error" });
   }
 };
-
 // Admin approves organizer KYC
 exports.approveOrganizer = async (req, res) => {
   try {
@@ -312,4 +323,5 @@ exports.searchOrganizers = async (req, res) => {
     res.status(500).json({ message: 'Search failed', error });
   }
 };
+
 
