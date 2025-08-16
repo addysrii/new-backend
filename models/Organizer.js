@@ -1,15 +1,13 @@
-
 const mongoose = require("mongoose");
 const { Schema } = mongoose;
 
 // Organizer KYC Verification Schema
 const kycSchema = new Schema({
-panNumber: {
-      type: String,
-      unique: true,
-      sparse: true, // This allows multiple null values
-      uppercase: true
-    },
+  panNumber: {
+    type: String,
+    unique: true, // Still keep unique here for schema-level validation
+    uppercase: true
+  },
   gstNumber: {
     type: String,
   },
@@ -17,7 +15,7 @@ panNumber: {
     type: String,
     required: true,
   },
-  aadhaarDocumentUrl: String, // URL or path to uploaded file
+  aadhaarDocumentUrl: String,
   panDocumentUrl: String,
   gstCertificateUrl: String,
   verified: {
@@ -62,7 +60,7 @@ const organizerSchema = new Schema({
     enum: ["individual", "company", "ngo", "college", "other"],
     required: true,
   },
-  registrationNumber: String, // for NGOs, companies, etc.
+  registrationNumber: String,
   address: {
     line1: String,
     line2: String,
@@ -75,7 +73,6 @@ const organizerSchema = new Schema({
     },
   },
   contactPerson: contactPersonSchema,
-
   phone: {
     type: String,
     required: true,
@@ -92,45 +89,38 @@ const organizerSchema = new Schema({
     twitter: String,
     linkedin: String,
   },
-
   documents: {
     logoUrl: String,
     certificateOfIncorporationUrl: String,
     otherSupportingDocs: [String],
   },
-
   kyc: kycSchema,
-
   approved: {
     type: Boolean,
     default: false,
   },
   approvedBy: {
     type: Schema.Types.ObjectId,
-    ref: "User", // Admin user who approved
+    ref: "User",
   },
   approvedAt: Date,
-
   eventsHosted: [
     {
       type: Schema.Types.ObjectId,
       ref: "Event",
     },
   ],
-
   banned: {
     type: Boolean,
     default: false,
   },
   banReason: String,
   banTimestamp: Date,
-
- linkedUserAccount: {
-  type: mongoose.Schema.Types.ObjectId,
-  ref: 'User',
-  required: false
-},
-
+  linkedUserAccount: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: false
+  },
   createdAt: {
     type: Date,
     default: Date.now,
@@ -143,7 +133,20 @@ const organizerSchema = new Schema({
 
 // Indexing for quick searches
 organizerSchema.index({ organizerName: "text", email: 1, phone: 1 });
-organizerSchema.index({ "kyc.panNumber": 1 }, { unique: true, sparse: true });
 
-module.exports = mongoose.model('Organizer', organizerSchema); // ✅ Correct way
+// Partial index for PAN number - only enforce uniqueness when PAN exists
+organizerSchema.index(
+  { "kyc.panNumber": 1 }, 
+  { 
+    unique: true,
+    partialFilterExpression: { "kyc.panNumber": { $exists: true, $ne: null } }
+  }
+);
 
+// Add pre-save hook to update the updatedAt field
+organizerSchema.pre('save', function(next) {
+  this.updatedAt = new Date();
+  next();
+});
+
+module.exports = mongoose.model('Organizer', organizerSchema);
