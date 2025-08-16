@@ -13,6 +13,7 @@ const notificationSchema = new Schema({
     enum: [
       'booking_confirmed',
       'event_response',
+      'event_cancelled',
       'event_updated',
       'custom_form_submission',
       'post_reaction',
