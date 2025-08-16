@@ -583,6 +583,7 @@ if (authController) {
     app.post('/create-test-user', authController.createTestUser);
     app.post('/debug-login', authController.debugLogin);
     app.post('/auth/signup', authLimiter, authController.signup);
+       app.post('/auth/organizersignup', authLimiter, authController.registerOrganizer);
     app.post('/auth/login', authLimiter, authController.login);
     app.post('/auth/logout', authenticateToken, authController.logout);
     app.post('/auth/refresh-token', authController.refreshToken);
