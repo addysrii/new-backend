@@ -155,7 +155,9 @@ organizerSchema.index(
   { "kyc.panNumber": 1 },
   { 
     unique: true,
-    partialFilterExpression: { "kyc.panNumber": { $exists: true, $ne: null } }
+    partialFilterExpression: { 
+      "kyc.panNumber": { $exists: true, $type: "string" } 
+    }
   }
 );
 
@@ -174,4 +176,5 @@ organizerSchema.index({
 });
 
 module.exports = mongoose.model('Organizer', organizerSchema);
+
 
