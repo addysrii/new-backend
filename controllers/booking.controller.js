@@ -291,7 +291,7 @@ exports.getEventSoldTickets = async (req, res) => {
     }
 
     // Verify user is the event organizer
-    if (event.createdBy.toString() !== req.user.id.toString() && !req.user.isAdmin) {
+    if (event.createdBy.toString() !== req.user.id.toString() ) {
       return res.status(403).json({ 
         error: 'Only the event organizer can view sold tickets' 
       });
