@@ -268,6 +268,169 @@ exports.verifyTicketByCode = async (req, res) => {
   }
 };
 /**
+ * Get all sold tickets for an event (organizer only)
+ * @route GET /api/bookings/events/:eventId/sold-tickets
+ * @access Private (Organizer only)
+ */
+exports.getEventSoldTickets = async (req, res) => {
+  try {
+    const { eventId } = req.params;
+    const { 
+      status = 'active', 
+      page = 1, 
+      limit = 50, 
+      sortBy = 'createdAt', 
+      sortOrder = 'desc',
+      search 
+    } = req.query;
+
+    // Get event
+    const event = await Event.findById(eventId);
+    if (!event) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+
+    // Verify user is the event organizer
+    if (event.createdBy.toString() !== req.user.id.toString() && !req.user.isAdmin) {
+      return res.status(403).json({ 
+        error: 'Only the event organizer can view sold tickets' 
+      });
+    }
+
+    // Build query for sold tickets
+    const query = { 
+      event: eventId,
+      status: { $in: ['active', 'used'] } // Only include active and used tickets
+    };
+
+    // Filter by specific status if provided
+    if (status && status !== 'all') {
+      query.status = status;
+    }
+
+    // Add search functionality
+    if (search) {
+      query.$or = [
+        { ticketNumber: { $regex: search, $options: 'i' } },
+        { 'owner.firstName': { $regex: search, $options: 'i' } },
+        { 'owner.lastName': { $regex: search, $options: 'i' } },
+        { 'owner.email': { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    // Determine sort options
+    const sortOptions = {};
+    const validSortFields = [
+      'createdAt', 'checkedInAt', 'ticketNumber', 'price', 
+      'owner.firstName', 'owner.lastName', 'status'
+    ];
+    
+    if (validSortFields.includes(sortBy)) {
+      sortOptions[sortBy] = sortOrder === 'asc' ? 1 : -1;
+    } else {
+      sortOptions.createdAt = -1;
+    }
+
+    // Calculate pagination
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const skip = (pageNum - 1) * limitNum;
+
+    // Get tickets with populated data
+    const tickets = await Ticket.find(query)
+      .populate('owner', 'firstName lastName email phone profileImage')
+      .populate('ticketType', 'name price currency description')
+      .populate('booking', 'bookingNumber totalAmount createdAt')
+      .populate('checkedInBy', 'firstName lastName')
+      .sort(sortOptions)
+      .skip(skip)
+      .limit(limitNum);
+
+    // Get total count for pagination
+    const totalTickets = await Ticket.countDocuments(query);
+
+    // Calculate statistics
+    const stats = {
+      totalSold: await Ticket.countDocuments({ event: eventId, status: { $in: ['active', 'used'] } }),
+      totalActive: await Ticket.countDocuments({ event: eventId, status: 'active' }),
+      totalUsed: await Ticket.countDocuments({ event: eventId, status: 'used' }),
+      totalCheckedIn: await Ticket.countDocuments({ event: eventId, checkedIn: true }),
+      totalRevenue: await Booking.aggregate([
+        { $match: { event: eventId, status: 'confirmed' } },
+        { $group: { _id: null, total: { $sum: '$totalAmount' } } }
+      ]).then(result => result[0]?.total || 0)
+    };
+
+    // Format tickets with additional information
+    const formattedTickets = tickets.map(ticket => {
+      const ticketObj = ticket.toObject();
+      
+      // Add formatted price
+      ticketObj.priceFormatted = ticket.price === 0 ? 'Free' : 
+        `${ticket.currency || '₹'} ${ticket.price}`;
+
+      // Add check-in information
+      if (ticket.checkedIn) {
+        const checkedInDate = new Date(ticket.checkedInAt);
+        ticketObj.checkedInInfo = {
+          at: checkedInDate,
+          formatted: `${checkedInDate.toLocaleDateString()} ${checkedInDate.toLocaleTimeString()}`,
+          by: ticket.checkedInBy ? 
+            `${ticket.checkedInBy.firstName} ${ticket.checkedInBy.lastName}` : 
+            'Unknown'
+        };
+      }
+
+      // Add owner information
+      ticketObj.ownerInfo = {
+        name: `${ticket.owner.firstName} ${ticket.owner.lastName}`,
+        email: ticket.owner.email,
+        phone: ticket.owner.phone,
+        profileImage: ticket.owner.profileImage
+      };
+
+      // Add booking information
+      if (ticket.booking) {
+        ticketObj.bookingInfo = {
+          number: ticket.booking.bookingNumber,
+          totalAmount: ticket.booking.totalAmount,
+          bookedAt: ticket.booking.createdAt
+        };
+      }
+
+      return ticketObj;
+    });
+
+    // Return response with pagination and statistics
+    res.json({
+      success: true,
+      data: {
+        tickets: formattedTickets,
+        pagination: {
+          total: totalTickets,
+          page: pageNum,
+          limit: limitNum,
+          pages: Math.ceil(totalTickets / limitNum)
+        },
+        statistics: stats,
+        event: {
+          id: event._id,
+          name: event.name,
+          startDateTime: event.startDateTime,
+          location: event.location
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Get event sold tickets error:', error);
+    res.status(500).json({ 
+      error: 'Server error when retrieving sold tickets',
+      details: error.message 
+    });
+  }
+};
+/**
  * Update a ticket type
  * @route PUT /api/bookings/ticket-types/:ticketTypeId
  * @access Private (Creator only)
