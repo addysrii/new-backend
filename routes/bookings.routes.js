@@ -67,7 +67,7 @@ router.post('/tickets/:ticketId/transfer',
   validate(ticketTransferValidationRules()),
   bookingController.transferTicket
 );
-router.get('events/:eventId/sold-tickets', 
+router.get('/events/:eventId/sold-tickets', 
   authenticateToken, 
 
   bookingController.getEventSoldTickets
