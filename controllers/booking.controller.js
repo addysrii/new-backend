@@ -195,7 +195,7 @@ exports.createTicketType = async (req, res) => {
       name,
       description: description || '',
       price,
-      currency: currency || 'USD',
+      currency: currency || 'INR',
       quantity,
       maxPerUser: maxPerUser || 10,
       startSaleDate: startSaleDate || new Date(),
