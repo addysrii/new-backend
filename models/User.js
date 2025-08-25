@@ -290,7 +290,8 @@ const userSchema = new Schema({
   },
   phone: {
     type: String,
-    trim: true
+    trim: true,
+    default : null,
   },
   
   // Profile
