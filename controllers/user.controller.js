@@ -81,7 +81,8 @@ exports.updateProfile = async (req, res) => {
       languages,
       education,
       experience,
-      socialLinks
+      socialLinks,
+      phone
     } = req.body;
     
     // Get current user to access existing data
@@ -101,7 +102,7 @@ exports.updateProfile = async (req, res) => {
     if (website) profileFields.website = website;
     if (birthday) profileFields.birthday = birthday;
     if (gender) profileFields.gender = gender;
-    
+      if (phone) profileFields.phone = phone;
     // Handle skills - Check if Skill model exists, otherwise store as strings
     if (skills) {
       try {
