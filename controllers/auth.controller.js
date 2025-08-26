@@ -15,7 +15,7 @@ const geoip = require('geoip-lite');
 const passport = require('passport');
 const logger = require('../utils/logger');
 const otpService = require('../utils/otpService');
-const SecurityLog = require('../models/Security');
+const {SecurityLog} = require('../models/Security');
 // Environment variables for services
 const JWT_SECRET = process.env.JWT_SECRET || 'your-jwt-secret';
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
