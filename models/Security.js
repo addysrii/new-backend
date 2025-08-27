@@ -15,6 +15,7 @@ const securityLogSchema = new Schema({
       'logout',
       'password_change',
       'password_reset',
+      'password_reset_complete',
       'mfa_setup',
       'mfa_disabled',
       'email_change',
