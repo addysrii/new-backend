@@ -78,7 +78,7 @@ let apiLimiter, authLimiter, postLimiters;
 try {
   apiLimiter = expressRateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100, // limit each IP to 100 requests per windowMs
+    max: 1000, // limit each IP to 100 requests per windowMs
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: 'Too many requests, please try again later.' }
@@ -86,7 +86,7 @@ try {
 
   authLimiter = expressRateLimit({
     windowMs: 60 * 60 * 1000, // 1 hour
-    max: 10, // limit each IP to 10 login/signup attempts per hour
+    max: 1000, // limit each IP to 10 login/signup attempts per hour
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: 'Too many authentication attempts, please try again later.' }
