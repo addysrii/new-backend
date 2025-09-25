@@ -1,6 +1,6 @@
 const mongoose = require("mongoose")
 const  express = require("express")
-
+const Schema = mongoose.Schema;
 const adminSchema = new Schema(
     {
 name:{
