@@ -12,7 +12,7 @@ exports.adminsignup = async (req, res) => {
     const { name, email, password,  } = req.body;
     
     // Log signup attempt details
-    console.log(`Signup attempt for: ${email}`, { firstName, lastName, username });
+  
     
     // Check if user already exists
     let user = await Admin.findOne({ email });
