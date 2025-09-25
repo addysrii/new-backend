@@ -1,5 +1,5 @@
-import mongoose, { Schema } from "mongoose"
-import express from "express"
+const mongoose = require("mongoose")
+const  express = require("express")
 
 const adminSchema = new Schema(
     {
