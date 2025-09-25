@@ -1,7 +1,11 @@
 const express = require("express");
 const  Admin  = require("../models/Admin")
 const { validationResult } = require('express-validator');
-
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
+const JWT_SECRET = process.env.JWT_SECRET || 'your-jwt-secret';
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
+const JWT_REFRESH_EXPIRES_IN = process.env.JWT_REFRESH_EXPIRES_IN || '30d';
 exports.adminsignup = async (req, res) => {
   try {
     const errors = validationResult(req);
