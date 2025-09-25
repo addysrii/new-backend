@@ -412,7 +412,7 @@ console.log('Importing controllers...');
 // Define controllers with try/catch blocks
 let authController, userController, chatController, postController,
     storyController, networkController, locationController, eventController,
-    jobController, companyController, notificationController, portfolioController,
+    jobController, companyController, notificationController, portfolioController,adminController,
     groupController, searchController, analyticsController, securityController;
 
 try {
