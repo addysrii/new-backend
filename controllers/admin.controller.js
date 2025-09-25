@@ -1,6 +1,6 @@
 const express = require("express");
 const  Admin  = require("../models/Admin")
-
+const { validationResult } = require('express-validator');
 
 exports.adminsignup = async (req, res) => {
   try {
