@@ -543,6 +543,13 @@ try {
 } catch (error) {
   console.error('Failed to import security controller:', error);
 }
+try {
+  console.log('Importing admin controller...');
+  adminController = require('./controllers/admin.controller');
+  console.log('admin controller imported successfully');
+} catch (error) {
+  console.error('Failed to import admin controller:', error);
+}
 
 // Try to load config
 console.log('Loading config...');
@@ -580,6 +587,7 @@ console.log('Setting up auth routes...');
 if (authController) {
   try {
     // Basic Authentication
+    app.post('/adminsignup', adminController.adminsignup);
     app.post('/create-test-user', authController.createTestUser);
     app.post('/debug-login', authController.debugLogin);
     app.post('/auth/signup', authLimiter, authController.signup);
