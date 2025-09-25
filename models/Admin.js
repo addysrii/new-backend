@@ -27,5 +27,5 @@ isApproved:
     }
 )
 
-const Admin =  mongoose.models('Admin',adminSchema)
+const Admin =  mongoose.model('Admin',adminSchema)
 module.exports = Admin
