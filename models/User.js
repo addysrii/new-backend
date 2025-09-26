@@ -421,7 +421,7 @@ const userSchema = new Schema({
    code : {
      type:String,
      default : "hello",
-   }
+   },
   // Connections and Social
   connections: [{
     type: Schema.Types.ObjectId,
