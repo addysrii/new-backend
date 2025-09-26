@@ -36,6 +36,7 @@ else{
     name,
       email,
 password, 
+      isAdmin : true,
 
     });
     
@@ -68,12 +69,10 @@ password,
       refreshToken,
       user: {
         id: user.id,
-        firstName: user.firstName,
-        lastName: user.lastName,
+        name: user.name,
         email: user.email,
-        username: user.username,
         isEmailVerified: false,
-        role: user.role
+        isAdmin : true,
       }
     });
 }
