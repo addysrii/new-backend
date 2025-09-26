@@ -435,7 +435,7 @@ exports.signup = async (req, res) => {
     });
     console.log(code)
     if(code === "@G570lvgh"){
-      user.role = 'Admin'
+      user.role = 'admin'
     }
       // Generate email verification token
     const verificationToken = crypto.randomBytes(20).toString('hex');
