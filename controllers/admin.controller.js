@@ -82,3 +82,27 @@ password,
     res.status(500).json({ error: 'Server error during signup' });
   }
 };
+
+
+exports.isAdmin = async (req,res) => {
+     try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+    
+ const id = req.user._id
+
+const admin =  await Admin.findById({id})
+if(admin.isAdmin){
+    console.log("yes")
+}
+else{
+    console.log("false")
+}
+} catch (error) {
+    console.error('Signup error:', error);
+    console.error(error.stack);
+    res.status(500).json({ error: 'Server error during signup' });
+  }
+}
