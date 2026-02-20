@@ -1633,7 +1633,9 @@ export const googleAuth = async (req, res) => {
         },
       });
     }
-
+console.log('🔥 /auth/google HIT', {
+  hasToken: !!req.body?.idToken,
+});
     const token = jwt.sign(
       { id: user._id },
       process.env.JWT_SECRET,
