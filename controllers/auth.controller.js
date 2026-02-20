@@ -1586,7 +1586,7 @@ exports.resendVerification = async (req, res) => {
  * @access Public
  */
 // In controllers/auth.controller.js
-export const googleAuth = async (req, res) => {
+exports.googleAuth = async (req, res) => {
   try {
     const { idToken } = req.body;
 
@@ -1594,9 +1594,13 @@ export const googleAuth = async (req, res) => {
       return res.status(400).json({ error: 'ID token required' });
     }
 
+    console.log('🔥 /auth/google HIT', {
+      hasToken: !!idToken,
+    });
+
     const ticket = await googleClient.verifyIdToken({
       idToken,
-     audience: process.env.GOOGLE_WEB_CLIENT_ID,
+      audience: process.env.GOOGLE_WEB_CLIENT_ID,
     });
 
     const payload = ticket.getPayload();
@@ -1633,9 +1637,7 @@ export const googleAuth = async (req, res) => {
         },
       });
     }
-console.log('🔥 /auth/google HIT', {
-  hasToken: !!req.body?.idToken,
-});
+
     const token = jwt.sign(
       { id: user._id },
       process.env.JWT_SECRET,
@@ -1648,7 +1650,7 @@ console.log('🔥 /auth/google HIT', {
       { expiresIn: '30d' }
     );
 
-    res.json({
+    return res.json({
       token,
       refreshToken,
       user,
@@ -1656,8 +1658,8 @@ console.log('🔥 /auth/google HIT', {
     });
 
   } catch (error) {
-    console.error('Google verify error:', err.message);
-    res.status(401).json({ error: 'Invalid Google token' });
+    console.error('Google verify error:', error.message);
+    return res.status(401).json({ error: 'Invalid Google token' });
   }
 };
 /**
