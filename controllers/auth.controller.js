@@ -1596,7 +1596,7 @@ export const googleAuth = async (req, res) => {
 
     const ticket = await googleClient.verifyIdToken({
       idToken,
-      audience: process.env.GOOGLE_ANDROID_CLIENT_ID,
+     audience: process.env.GOOGLE_WEB_CLIENT_ID,
     });
 
     const payload = ticket.getPayload();
@@ -1654,7 +1654,7 @@ export const googleAuth = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Google Auth Error:', error.message);
+    console.error('Google verify error:', err.message);
     res.status(401).json({ error: 'Invalid Google token' });
   }
 };
