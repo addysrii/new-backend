@@ -27,7 +27,9 @@ const LINKEDIN_CLIENT_SECRET = process.env.LINKEDIN_CLIENT_SECRET;
 const MOBILE_APP_SCHEME = process.env.MOBILE_APP_SCHEME || 'meetkats';
 const ANDROID_CLIENT_ID = '313533189859-kshbra2ke7jkrritbrk5m2pocnuvjsoi.apps.googleusercontent.com';
 // Initialize Google OAuth client
-const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
+
+const googleClient = new OAuth2Client();
+
 
 // Initialize device detector
 const deviceDetector = new DeviceDetector();
@@ -1584,152 +1586,76 @@ exports.resendVerification = async (req, res) => {
  * @access Public
  */
 // In controllers/auth.controller.js
-exports.googleAuth = async (req, res) => {
+export const googleAuth = async (req, res) => {
   try {
-    const { idToken, userData, deviceInfo } = req.body;
-    
+    const { idToken } = req.body;
+
     if (!idToken) {
-      return res.status(400).json({ error: 'ID token is required' });
+      return res.status(400).json({ error: 'ID token required' });
     }
 
-    console.log('Google auth request received', {
-      hasUserData: !!userData,
-      deviceInfo: deviceInfo || 'none'
-    });
-
-    // Verify Google token - accept both web and Android clients
     const ticket = await googleClient.verifyIdToken({
       idToken,
-      audience: [GOOGLE_CLIENT_ID, ANDROID_CLIENT_ID]
+      audience: process.env.GOOGLE_ANDROID_CLIENT_ID,
     });
 
     const payload = ticket.getPayload();
-    
-    if (!payload) {
-      console.error('Invalid Google token payload');
-      return res.status(400).json({ error: 'Invalid Google token' });
-    }
 
-    // Extract user information from token
     const {
-      email,
-      name,
-      given_name: firstName,
-      family_name: lastName,
-      picture: profileImage,
       sub: googleId,
-      email_verified: isEmailVerified
+      email,
+      given_name,
+      family_name,
+      picture,
+      email_verified,
     } = payload;
 
     if (!email) {
-      console.error('No email in Google payload');
-      return res.status(400).json({ error: 'Email is required from Google' });
+      return res.status(400).json({ error: 'Email not provided by Google' });
     }
 
-    // Check if user exists
     let user = await User.findOne({ email });
     let isNewUser = false;
 
     if (!user) {
-      // Create new user with data from Google
       isNewUser = true;
-      user = new User({
-        firstName: firstName || name?.split(' ')[0] || 'Google',
-        lastName: lastName || name?.split(' ').slice(1).join(' ') || 'User',
+      user = await User.create({
+        firstName: given_name,
+        lastName: family_name,
         email,
-        username: email.split('@')[0] + Math.floor(Math.random() * 1000),
-        profileImage,
-        password: crypto.randomBytes(20).toString('hex'), // Random password
+        profileImage: picture,
+        password: crypto.randomBytes(32).toString('hex'),
         oauth: {
-          google: {
-            id: googleId,
-            email,
-            name,
-            profileImage
-          }
+          google: { id: googleId },
         },
         verification: {
-          isEmailVerified: isEmailVerified || false,
-          verifiedAt: isEmailVerified ? new Date() : null
+          isEmailVerified: email_verified,
         },
-        joinedDate: Date.now(),
-        lastActive: Date.now()
       });
-    } else {
-      // Update existing user's Google info if not set
-      user.oauth = user.oauth || {};
-      if (!user.oauth.google) {
-        user.oauth.google = {
-          id: googleId,
-          email,
-          name,
-          profileImage
-        };
-      }
-
-      // Update profile image if not set
-      if (!user.profileImage) {
-        user.profileImage = profileImage;
-      }
-
-      // Mark email as verified if Google says it's verified
-      if (isEmailVerified && !user.verification.isEmailVerified) {
-        user.verification.isEmailVerified = true;
-        user.verification.verifiedAt = new Date();
-      }
-
-      user.lastActive = Date.now();
     }
 
-    // Generate tokens
     const token = jwt.sign(
-      { id: user.id, role: user.role },
-      JWT_SECRET,
-      { expiresIn: JWT_EXPIRES_IN }
+      { id: user._id },
+      process.env.JWT_SECRET,
+      { expiresIn: '7d' }
     );
 
     const refreshToken = jwt.sign(
-      { id: user.id },
-      JWT_SECRET,
-      { expiresIn: JWT_REFRESH_EXPIRES_IN }
+      { id: user._id },
+      process.env.JWT_SECRET,
+      { expiresIn: '30d' }
     );
-
-    // Save user and tokens
-    await user.save();
-
-    console.log('Google authentication successful', {
-      userId: user.id,
-      isNewUser
-    });
 
     res.json({
       token,
       refreshToken,
-      user: {
-        id: user.id,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        email: user.email,
-        username: user.username,
-        profileImage: user.profileImage,
-        role: user.role,
-        isEmailVerified: user.verification.isEmailVerified,
-        isNewUser
-      }
+      user,
+      isNewUser,
     });
 
   } catch (error) {
-    console.error('Google auth error:', error);
-    
-    // More specific error messages
-    if (error.message.includes('Invalid token signature')) {
-      return res.status(400).json({ error: 'Invalid Google token' });
-    }
-    
-    res.status(500).json({ 
-      error: 'Server error during Google authentication',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
+    console.error('Google Auth Error:', error.message);
+    res.status(401).json({ error: 'Invalid Google token' });
   }
 };
 /**
