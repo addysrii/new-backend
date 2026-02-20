@@ -182,8 +182,8 @@ app.use(cors({
    ' https://meetkats-new.vercel.app',
   'http://192.168.61.248:3000',
     'capacitor://localhost',
-    'ionic://localhost'
-    // Remove '*' in production for security
+    'ionic://localhost',
+    "*"
   ],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
   allowedHeaders: [
