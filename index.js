@@ -431,29 +431,10 @@ try {
   console.error('Failed to import user controller:', error);
 }
 
-try {
-  console.log('Importing chat controller...');
-  chatController = require('./controllers/chat.controller');
-  console.log('Chat controller imported successfully');
-} catch (error) {
-  console.error('Failed to import chat controller:', error);
-}
 
-try {
-  console.log('Importing post controller...');
-  postController = require('./controllers/post.controller');
-  console.log('Post controller imported successfully');
-} catch (error) {
-  console.error('Failed to import post controller:', error);
-}
 
-try {
-  console.log('Importing story controller...');
-  storyController = require('./controllers/story.controller');
-  console.log('Story controller imported successfully');
-} catch (error) {
-  console.error('Failed to import story controller:', error);
-}
+
+
 
 try {
   console.log('Importing network controller...');
@@ -471,29 +452,11 @@ try {
   console.error('Failed to import location controller:', error);
 }
 
-try {
-  console.log('Importing event controller...');
-  eventController = require('./controllers/event.controller');
-  console.log('Event controller imported successfully');
-} catch (error) {
-  console.error('Failed to import event controller:', error);
-}
 
-try {
-  console.log('Importing job controller...');
-  jobController = require('./controllers/job.controller');
-  console.log('Job controller imported successfully');
-} catch (error) {
-  console.error('Failed to import job controller:', error);
-}
 
-try {
-  console.log('Importing company controller...');
-  companyController = require('./controllers/company.controller');
-  console.log('Company controller imported successfully');
-} catch (error) {
-  console.error('Failed to import company controller:', error);
-}
+
+
+
 
 try {
   console.log('Importing notification controller...');
@@ -511,13 +474,7 @@ try {
   console.error('Failed to import portfolio controller:', error);
 }
 
-try {
-  console.log('Importing group controller...');
-  groupController = require('./controllers/group.controller');
-  console.log('Group controller imported successfully');
-} catch (error) {
-  console.error('Failed to import group controller:', error);
-}
+
 
 try {
   console.log('Importing search controller...');
@@ -712,203 +669,11 @@ app.post('/auth/phone-auth/verify', authController.verifyPhoneAuth);
   console.log('Skipping auth routes setup - controller not available');
 }
 
-// ==========================================
-// USER PROFILE ROUTES
-// ==========================================
+
 
 console.log('Setting up user routes...');
 app.use('/api', userRoutes);
-// ==========================================
-// POST ROUTES
-// ==========================================
-console.log('Setting up post routes...');
-if (postController && postValidation) {
-  try {
-    // Post creation and management with validation
-    app.post(
-      '/api/posts', 
-      authenticateToken, 
-      postLimiters.create,
-      postUpload.array('media', config.MAX_MEDIA_FILES_PER_POST),
-      validationMiddleware.validate(postValidation.createPost),
-      postController.createPost
-    );
 
-    app.get(
-      '/api/posts', 
-      authenticateToken, 
-      postController.getPosts
-    );
-
-    app.get(
-      '/api/posts/:postId', 
-      authenticateToken, 
-      postController.getPost
-    );
-
-    app.put(
-      '/api/posts/:postId', 
-      authenticateToken,
-      postLimiters.create,
-      postUpload.array('media', config.MAX_MEDIA_FILES_PER_POST),
-      validationMiddleware.validate(postValidation.updatePost),
-      postController.updatePost
-    );
-
-    app.delete(
-      '/api/posts/:postId', 
-      authenticateToken, 
-      postController.deletePost
-    );
-
-    app.post(
-      '/api/posts/:postId/react', 
-      authenticateToken,
-      postLimiters.interact,
-      validationMiddleware.validate(postValidation.reactToPost),
-      postController.reactToPost
-    );
-
-    app.delete(
-      '/api/posts/:postId/react', 
-      authenticateToken,
-      postLimiters.interact,
-      postController.removeReaction
-    );
-
-    app.post(
-      '/api/posts/:postId/comments', 
-      authenticateToken,
-      postLimiters.comment,
-      validationMiddleware.validate(postValidation.addComment),
-      postController.addComment
-    );
-
-    app.get(
-      '/api/posts/:postId/comments', 
-      authenticateToken,
-      postController.getComments
-    );
-
-    app.post(
-      '/api/posts/:postId/bookmark', 
-      authenticateToken,
-      postLimiters.interact,
-      validationMiddleware.validate(postValidation.bookmarkPost),
-      postController.bookmarkPost
-    );
-
-    app.delete(
-      '/api/posts/:postId/bookmark', 
-      authenticateToken,
-      postController.removeBookmark
-    );
-
-    app.post(
-      '/api/posts/:postId/report', 
-      authenticateToken,
-      upload.single('evidence'),
-      validationMiddleware.validate(postValidation.reportPost),
-      postController.reportPost
-    );
-
-    app.get(
-      '/api/posts/:postId/media/:mediaId/access', 
-      authenticateToken,
-      postController.getMediaAccessUrl
-    );
-
-    console.log('Post routes set up successfully');
-  } catch (error) {
-    console.error('Error setting up post routes:', error);
-  }
-} else {
-  console.log('Skipping post routes setup - controller or validation not available');
-}
-// ==========================================
-// STORY ROUTES
-// ==========================================
-console.log('Setting up story routes...');
-if (storyController) {
-  try {
-    // Story routes
-    app.post('/api/stories', authenticateToken, storyUpload.single('media'), storyController.createStory);
-    app.get('/api/stories', authenticateToken, storyController.getStories);
-    app.get('/api/stories/:storyId', authenticateToken, storyController.getStory);
-    app.delete('/api/stories/:storyId', authenticateToken, storyController.deleteStory);
-    app.post('/api/stories/:storyId/view', authenticateToken, storyController.viewStory);
-    app.post('/api/stories/:storyId/react', authenticateToken, storyController.reactToStory);
-    app.post('/api/stories/:storyId/reply', authenticateToken, storyController.replyToStory);
-    
-    // Highlights
-    app.post('/api/highlights', authenticateToken, storyController.createHighlight);
-    app.get('/api/highlights', authenticateToken, storyController.getHighlights);
-    app.get('/api/highlights/:highlightId', authenticateToken, storyController.getHighlight);
-    app.put('/api/highlights/:highlightId', authenticateToken, storyController.updateHighlight);
-    app.delete('/api/highlights/:highlightId', authenticateToken, storyController.deleteHighlight);
-    app.post('/api/highlights/:highlightId/stories/:storyId', authenticateToken, storyController.addStoryToHighlight);
-    app.delete('/api/highlights/:highlightId/stories/:storyId', authenticateToken, storyController.removeStoryFromHighlight);
-    
-    // Close Friends
-    app.get('/api/close-friends', authenticateToken, storyController.getCloseFriends);
-    app.post('/api/close-friends/:userId', authenticateToken, storyController.addCloseFriend);
-    app.delete('/api/close-friends/:userId', authenticateToken, storyController.removeCloseFriend);
-    
-    console.log('Story routes set up successfully');
-  } catch (error) {
-    console.error('Error setting up story routes:', error);
-  }
-} else {
-  console.log('Skipping story routes setup - controller not available');
-}
-// ==========================================
-// CHAT ROUTES
-// ==========================================
-console.log('Setting up chat routes...');
-if (chatController) {
-  try {
-    // Chat management
-    app.post('/api/chats', authenticateToken, chatController.createChat);
-    app.get('/api/chats', authenticateToken, chatController.getChats);
-    app.get('/api/chats/:chatId', authenticateToken, chatController.getChat);
-    app.put('/api/chats/:chatId', authenticateToken, chatController.updateChat);
-    app.delete('/api/chats/:chatId', authenticateToken, chatController.deleteChat);
-    
-    // Messages
-    app.post('/api/chats/:chatId/messages', authenticateToken, chatUpload.single('media'), chatController.sendMessage);
-    app.get('/api/chats/:chatId/messages', authenticateToken, chatController.getMessages);
-    app.put('/api/messages/:messageId', authenticateToken, chatController.updateMessage);
-    app.delete('/api/messages/:messageId', authenticateToken, chatController.deleteMessage);
-    app.post('/api/messages/:messageId/read', authenticateToken, chatController.markMessageAsRead);
-    
-    // Chat participants
-    app.post('/api/chats/:chatId/participants', authenticateToken, chatController.addParticipant);
-    app.delete('/api/chats/:chatId/participants/:userId', authenticateToken, chatController.removeParticipant);
-    // Chat security and special features
-app.post('/api/chats/:chatId/encrypt', authenticateToken, chatController.setupChatEncryption);
-app.put('/api/chats/:chatId/retention', authenticateToken, chatController.setMessageRetention);
-app.put('/api/chats/:chatId/media-controls', authenticateToken, chatController.setMediaAccessControls);
-app.get('/api/chats/:chatId/audit-log', authenticateToken, chatController.getChatAuditLog);
-app.post('/api/chats/:chatId/self-destruct', authenticateToken, chatController.createSelfDestructMessage);
-app.post('/api/chats/:chatId/report', authenticateToken, chatController.reportSecurityIssue);
-    app.post('/api/chats/:chatId/security-scan', authenticateToken, chatController.runSecurityScan);
-app.post('/api/chats/:chatId/uploads', authenticateToken, upload.single('file'), chatController.secureFileUpload);
-app.post('/api/chats/:chatId/keys/exchange', authenticateToken, chatController.exchangeEncryptionKeys);
-app.post('/api/chats/:chatId/auto-expiration', authenticateToken, chatController.setAutoExpiration);
-
-// Delete message route
-app.delete('/api/chats/:chatId/messages/:messageId', authenticateToken, chatController.deleteMessage);
-    console.log('Chat routes set up successfully');
-  } catch (error) {
-    console.error('Error setting up chat routes:', error);
-  }
-} else {
-  console.log('Skipping chat routes setup - controller not available');
-}
-
-// ==========================================
-// NETWORK ROUTES
-// ==========================================
 console.log('Setting up network routes...');
 if (networkController) {
   try {
@@ -1017,296 +782,12 @@ if (locationController) {
   console.log('Skipping location routes setup - controller not available');
 }
 
-// ==========================================
-// CERTIFICATE ROUTES (IMPORTANT: Must be before event routes)
-// ==========================================
-// Add this section to your index.js file - REPLACE the existing certificate routes section
 
-// ==========================================
-// CERTIFICATE ROUTES (IMPORTANT: Must be before event routes)
-// ==========================================
-console.log('Setting up certificate routes...');
-try {
-  const certificateController = require('./controllers/certificate.controller');
-  const { Certificate } = require('./models/Certificate'); // Import Certificate model
-  
-  console.log('✅ Certificate controller loaded');
-  
-  // ✅ CERTIFICATE API ROUTES (with authentication)
-  app.use('/api/certificates', require('./routes/certificate.routes'));
-  
-  // ✅ PUBLIC CERTIFICATE VERIFICATION PAGE (Frontend route)
-  app.get('/certificates/:certificateId', async (req, res) => {
-    try {
-      const { certificateId } = req.params;
-      
-      console.log('🔍 Certificate verification page requested for:', certificateId);
-      
-      // Verify the certificate exists and is valid
-      const certificate = await Certificate.findOne({ 
-        certificateId,
-        status: 'issued'
-      })
-        .populate('recipient', 'firstName lastName')
-        .populate('event', 'name startDateTime location')
-        .populate('template', 'name')
-        .populate('issuedBy', 'firstName lastName');
 
-      if (!certificate) {
-        console.log('❌ Certificate not found:', certificateId);
-        // Redirect to your React app with error parameter
-        return res.redirect(`${process.env.FRONTEND_URL || 'https://meetkats.com'}/certificates/${certificateId}?error=not_found`);
-      }
 
-      console.log('✅ Certificate found, redirecting to React app');
-      // Redirect to your React app to handle the display
-      return res.redirect(`${process.env.FRONTEND_URL || 'https://meetkats.com'}/certificates/${certificateId}`);
-      
-    } catch (error) {
-      console.error('❌ Certificate verification page error:', error);
-      return res.redirect(`${process.env.FRONTEND_URL || 'https://meetkats.com'}/certificates/${req.params.certificateId}?error=server_error`);
-    }
-  });
 
-  // ✅ API VERIFICATION ENDPOINT (for frontend to fetch data)
-  app.get('/api/certificates/verify/:certificateId', async (req, res) => {
-    try {
-      const { certificateId } = req.params;
 
-      console.log('🔍 API: Verifying certificate:', certificateId);
 
-      const certificate = await Certificate.findOne({ 
-        certificateId,
-        status: 'issued'
-      })
-        .populate('recipient', 'firstName lastName')
-        .populate('event', 'name startDateTime location')
-        .populate('template', 'name')
-        .populate('issuedBy', 'firstName lastName');
-
-      if (!certificate) {
-        console.log('❌ Certificate not found:', certificateId);
-        return res.status(404).json({ 
-          valid: false, 
-          message: 'Certificate not found or invalid' 
-        });
-      }
-
-      console.log('✅ Certificate found and verified:', {
-        id: certificate.certificateId,
-        recipient: certificate.certificateData.recipientName,
-        event: certificate.certificateData.eventName
-      });
-
-      res.json({
-        valid: true,
-        certificate: {
-          id: certificate.certificateId,
-          recipient: certificate.certificateData.recipientName,
-          event: certificate.certificateData.eventName,
-          issuedAt: certificate.issuedAt,
-          issuedBy: certificate.certificateData.issuerName,
-          verificationUrl: certificate.verificationUrl,
-          template: certificate.template ? certificate.template.name : 'Unknown',
-          eventId: certificate.certificateData.eventId,
-          certificateImage: certificate.certificateImage
-        }
-      });
-    } catch (error) {
-      console.error('❌ Verify certificate error:', error);
-      res.status(500).json({ 
-        valid: false,
-        error: 'Server error when verifying certificate' 
-      });
-    }
-  });
-
-  // ✅ TEST ENDPOINT
-  app.get('/api/certificates/test', (req, res) => {
-    console.log('🧪 Certificate test endpoint accessed');
-    
-    res.json({
-      success: true,
-      message: 'Certificate routes are working!',
-      timestamp: new Date().toISOString(),
-      availableEndpoints: [
-        'GET /api/certificates/verify/:certificateId (PUBLIC)',
-        'GET /api/certificates/templates (PRIVATE)',
-        'POST /api/certificates/issue (PRIVATE)',
-        'GET /api/certificates/my (PRIVATE)',
-        'GET /api/certificates/:certificateId/download (PUBLIC)',
-        'GET /certificates/:certificateId (PUBLIC - Frontend Route)'
-      ],
-      testVerificationUrl: `${req.protocol}://${req.get('host')}/api/certificates/verify/TEST-CERT-123`,
-      testFrontendUrl: `${req.protocol}://${req.get('host')}/certificates/TEST-CERT-123`
-    });
-  });
-  
-  console.log('✅ Certificate routes set up successfully');
-  
-} catch (error) {
-  console.error('❌ Error setting up certificate routes:', error);
-  
-  // Create fallback routes
-  app.get('/api/certificates/test', (req, res) => {
-    console.log('🔄 Fallback certificate test endpoint');
-    res.status(500).json({
-      success: false,
-      error: 'Certificate controller not properly loaded',
-      message: 'Check server logs for certificate setup errors'
-    });
-  });
-}
-// ==========================================
-console.log('Setting up event routes...');
-if (eventController) {
-  try {
-    const multer = require('multer'); // Make sure to import multer
-    
-    // First: Define specific non-parameterized routes
-    app.get('/api/events/my', authenticateToken, eventController.getMyEvents);
-    app.post('/api/events/recurrent', authenticateToken, eventUpload.single('coverImage'), eventController.createRecurrentEvent);
-    
-    // Second: Define general routes
-    app.get('/api/events', authenticateToken, eventController.getEvents);
-    app.post('/api/events', authenticateToken, eventUpload.single('coverImage'), check('name', 'Event name is required').not().isEmpty(),
-    check('startDateTime', 'Start date and time is required').not().isEmpty(),
-    check('customFields', 'Custom fields must be an array if provided').optional().isArray(),
-    check('customFields.*.key', 'Each custom field must have a key').optional(),
-    check('customFields.*.value', 'Each custom field must have a value').optional(),
-    check('customFields.*.label', 'Each custom field must have a label').optional(),
-             eventController.createEvent);
-    
-    // Third: Define parameter-based routes
-    app.get('/api/events/:eventId', authenticateToken, eventController.getEvent);
-    app.put('/api/events/:eventId', authenticateToken, eventUpload.single('coverImage'), eventController.updateEvent);
-    app.delete('/api/events/:eventId', authenticateToken, eventController.deleteEvent);
-    
-    // Fourth: Define nested routes with specific endpoints first
-    app.get('/api/events/:eventId/search-users', authenticateToken, eventController.searchUsersForInvite);
-    app.get('/api/events/:eventId/suggested-users', authenticateToken, eventController.getSuggestedUsers);
-    app.get('/api/events/:eventId/similar', authenticateToken, eventController.getSimilarEvents);
-    app.get('/api/events/:eventId/analytics', authenticateToken, eventController.getEventAnalytics);
-    app.get('/api/events/:eventId/export', authenticateToken, eventController.exportEventAttendees);
-    app.get('/api/events/:eventId/attendees', authenticateToken, eventController.getEventAttendees);
-    app.get('/api/events/:eventId/photos', authenticateToken, eventController.getEventPhotos);
-    app.get('/api/events/:eventId/comments', authenticateToken, eventController.getEventComments);
-    app.get('/api/events/search', authenticateToken, eventController.searchEvents);
-    // Event responses and interactions
-    app.post('/api/events/:eventId/respond', authenticateToken, eventController.respondToEvent);
-    app.post('/api/events/:eventId/invite', authenticateToken, eventController.inviteToEvent);
-    app.post('/api/events/:eventId/check-in', authenticateToken, eventController.checkInToEvent);
-    app.post('/api/events/:eventId/checkin-code', authenticateToken, eventController.generateCheckInCode);
-    app.post('/api/events/:eventId/calendar', authenticateToken, eventController.addToCalendar);
-    app.post('/api/events/:eventId/comments', authenticateToken, eventController.addEventComment);
-    app.post('/api/events/:eventId/photos', authenticateToken, eventUpload.single('photo'), eventController.addEventPhoto);
-
-// Add these routes to your existing event routes section:
-app.put('/api/events/:eventId/certificates/enable', authenticateToken, eventController.enableEventCertificates);
-app.put('/api/events/:eventId/certificates/disable', authenticateToken, eventController.disableEventCertificates);
-    // Finally: Define nested routes with parameters
-    app.put('/api/events/:eventId/attendees/:userId/role', authenticateToken, eventController.updateAttendeeRole);
-    app.put('/api/events/:eventId/attendees/:userId/approve', authenticateToken, eventController.approveAttendee);
-    app.delete('/api/events/:eventId/attendees/:userId', authenticateToken, eventController.removeAttendee);
-    app.delete('/api/events/:eventId/photos/:photoId', authenticateToken, eventController.removeEventPhoto);
-    app.delete('/api/events/:eventId/comments/:commentId', authenticateToken, eventController.deleteEventComment);
-    
-    console.log('Event routes set up successfully');
-  } catch (error) {
-    console.error('Error setting up event routes:', error);
-  }
-} else {
-  console.log('Skipping event routes setup - controller not available');
-}
-// ==========================================
-// JOB ROUTES
-// ==========================================
-// Job routes
-console.log('Setting up job routes...');
-if (jobController) {
-  try {
-    // Job management
-    app.post('/api/jobs', authenticateToken, jobController.createJob);
-    app.get('/api/jobs', authenticateToken, jobController.getJobs);
-    app.get('/api/jobs/:jobId', authenticateToken, jobController.getJob);
-    app.put('/api/jobs/:jobId', authenticateToken, jobController.updateJob);
-    app.delete('/api/jobs/:jobId', authenticateToken, jobController.deleteJob);
-    app.post('/api/jobs/:jobId/toggle-active', authenticateToken, jobController.toggleJobActive);
-    app.get('/api/jobs/my', authenticateToken, jobController.getUserPostedJobs);
-    app.post('/api/jobs/:jobId/report', authenticateToken, jobController.reportJob);
-    
-    // Job applications
-    app.post('/api/jobs/:jobId/apply', authenticateToken, upload.fields([{ name: 'resume', maxCount: 1 }, { name: 'coverLetter', maxCount: 1 }]), jobController.applyForJob);
-    app.get('/api/jobs/:jobId/applications', authenticateToken, jobController.getJobApplications);
-    app.get('/api/jobs/applications/my', authenticateToken, jobController.getUserApplications);
-    app.get('/api/jobs/applications/:applicationId', authenticateToken, jobController.getApplicationDetails);
-    app.put('/api/jobs/applications/:applicationId/status', authenticateToken, jobController.updateApplicationStatus);
-    app.post('/api/jobs/applications/:applicationId/withdraw', authenticateToken, jobController.withdrawApplication);
-    app.post('/api/jobs/applications/:applicationId/notes', authenticateToken, jobController.addApplicationNote);
-    
-    // Saved jobs
-    app.post('/api/jobs/:jobId/save', authenticateToken, jobController.saveJob);
-    app.delete('/api/jobs/:jobId/save', authenticateToken, jobController.unsaveJob);
-    app.get('/api/jobs/saved', authenticateToken, jobController.getSavedJobs);
-    
-    // Recommendations and statistics
-    app.get('/api/jobs/recommendations', authenticateToken, jobController.getJobRecommendations);
-    app.get('/api/jobs/stats', authenticateToken, jobController.getJobStats);
-    
-    console.log('Job routes set up successfully');
-  } catch (error) {
-    console.error('Error setting up job routes:', error);
-  }
-} else {
-  console.log('Skipping job routes setup - controller not available');
-}
-// ==========================================
-// COMPANY ROUTES
-// ==========================================
-// Company routes
-console.log('Setting up company routes...');
-if (companyController) {
-  try {
-    // Company profile management
-    app.post('/api/companies', authenticateToken, upload.fields([{ name: 'logo', maxCount: 1 }, { name: 'coverImage', maxCount: 1 }]), companyController.createCompany);
-    app.get('/api/companies', authenticateToken, companyController.getCompanies);
-    app.get('/api/companies/:companyId', authenticateToken, companyController.getCompany);
-    app.put('/api/companies/:companyId', authenticateToken, upload.fields([{ name: 'logo', maxCount: 1 }, { name: 'coverImage', maxCount: 1 }]), companyController.updateCompany);
-    app.delete('/api/companies/:companyId', authenticateToken, companyController.deleteCompany);
-    
-    // Employee management
-    app.post('/api/companies/:companyId/employees', authenticateToken, companyController.addEmployee);
-    app.delete('/api/companies/:companyId/employees/:userId', authenticateToken, companyController.removeEmployee);
-    app.put('/api/companies/:companyId/employees/:userId/verify', authenticateToken, companyController.verifyEmployee);
-    app.put('/api/companies/:companyId/employees/:userId/role', authenticateToken, companyController.updateEmployeeRole);
-    
-    // Admin management
-    app.post('/api/companies/:companyId/admins/:userId', authenticateToken, companyController.addAdmin);
-    app.delete('/api/companies/:companyId/admins/:userId', authenticateToken, companyController.removeAdmin);
-    
-    // Company following
-    app.post('/api/companies/:companyId/follow', authenticateToken, companyController.followCompany);
-    app.delete('/api/companies/:companyId/follow', authenticateToken, companyController.unfollowCompany);
-    app.get('/api/companies/following', authenticateToken, companyController.getFollowedCompanies);
-    app.get('/api/companies/:companyId/followers', authenticateToken, companyController.getFollowers);
-    
-    // Company reviews
-    app.post('/api/companies/:companyId/reviews', authenticateToken, companyController.createCompanyReview);
-    app.get('/api/companies/:companyId/reviews', authenticateToken, companyController.getCompanyReviews);
-    app.put('/api/companies/reviews/:reviewId', authenticateToken, companyController.updateCompanyReview);
-    app.delete('/api/companies/reviews/:reviewId', authenticateToken, companyController.deleteCompanyReview);
-    
-    // Company salaries
-    app.post('/api/companies/:companyId/salaries', authenticateToken, companyController.reportSalary);
-    app.get('/api/companies/:companyId/salaries', authenticateToken, companyController.getCompanySalaries);
-    
-    console.log('Company routes set up successfully');
-  } catch (error) {
-    console.error('Error setting up company routes:', error);
-  }
-} else {
-  console.log('Skipping company routes setup - controller not available');
-}
 
 // ==========================================
 // NOTIFICATION ROUTES
@@ -1405,57 +886,7 @@ if (portfolioController) {
   console.log('Skipping portfolio routes setup - controller not available');
 }
 
-// ==========================================
-// GROUP ROUTES
-console.log('Setting up group routes...');
-if (groupController) {
-  try {
-    // Group management
-    app.post('/api/groups', authenticateToken, upload.single('coverImage'), groupController.createGroup);
-    app.get('/api/groups', authenticateToken, groupController.getGroups);
-    app.get('/api/groups/:groupId', authenticateToken, groupController.getGroup);
-    app.put('/api/groups/:groupId', authenticateToken, upload.single('coverImage'), groupController.updateGroup);
-    app.delete('/api/groups/:groupId', authenticateToken, groupController.deleteGroup);
-    
-    // Membership management
-    app.post('/api/groups/:groupId/membership', authenticateToken, groupController.manageMembership);
-    app.get('/api/groups/:groupId/members', authenticateToken, groupController.getMembers);
-    app.put('/api/groups/:groupId/members/:userId/role', authenticateToken, groupController.updateMemberRole);
-    app.delete('/api/groups/:groupId/members/:userId', authenticateToken, groupController.removeMember);
-    app.get('/api/groups/:groupId/membership-requests', authenticateToken, groupController.getMembershipRequests);
-    app.put('/api/groups/:groupId/membership-requests/:userId', authenticateToken, groupController.respondToMembershipRequest);
-    
-    // Content management
-    app.post('/api/groups/:groupId/posts', authenticateToken, upload.array('media'), groupController.createPost);
-    app.get('/api/groups/:groupId/posts', authenticateToken, groupController.getPosts);
-    app.get('/api/groups/:groupId/posts/:postId', authenticateToken, groupController.getPost);
-    app.put('/api/groups/:groupId/posts/:postId', authenticateToken, groupController.updatePost);
-    app.delete('/api/groups/:groupId/posts/:postId', authenticateToken, groupController.deletePost);
-    
-    // Post interactions
-    app.post('/api/groups/:groupId/posts/:postId/reactions', authenticateToken, groupController.reactToPost);
-    app.post('/api/groups/:groupId/posts/:postId/comments', authenticateToken, groupController.addComment);
-    app.put('/api/groups/:groupId/posts/:postId/comments/:commentId', authenticateToken, groupController.updateComment);
-    app.delete('/api/groups/:groupId/posts/:postId/comments/:commentId', authenticateToken, groupController.deleteComment);
-    app.post('/api/groups/:groupId/posts/:postId/pin', authenticateToken, groupController.pinPost);
-    app.post('/api/groups/:groupId/reports', authenticateToken, groupController.reportContent);
-    app.get('/api/groups/:groupId/reports', authenticateToken, groupController.getReports);
-    app.put('/api/groups/:groupId/reports/:reportId', authenticateToken, groupController.handleReport);
-    
-    // Analytics
-    app.get('/api/groups/:groupId/analytics', authenticateToken, groupController.getGroupAnalytics);
-    
-    console.log('Group routes set up successfully');
-  } catch (error) {
-    console.error('Error setting up group routes:', error);
-  }
-} else {
-  console.log('Skipping group routes setup - controller not available');
-}
 
-// ==========================================
-// SEARCH ROUTES
-// ==========================================
 console.log('Setting up search routes...');
 if (searchController) {
  try {
@@ -1482,9 +913,6 @@ app.get('/api/hashtags/:tag', authenticateToken, searchController.getHashtagDeta
  console.log('Skipping search routes setup - controller not available');
 }
 
-// ==========================================
-// ANALYTICS ROUTES
-// ==========================================
 console.log('Setting up analytics routes...');
 if (analyticsController) {
  try {
