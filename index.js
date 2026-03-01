@@ -522,17 +522,7 @@ try {
     ENABLE_METRICS: false
   };
 }
-app.use('/api/organizer',require('./routes/organizer.routes'))
-app.use('/api/bookings', require('./routes/bookings.routes'));
-app.use('/api/payments', require('./routes/payments.routes'));
-try {
-  console.log('Importing cse routes ');
- 
-  app.use('/api/customevent', require('./routes/customEvent.routes'))
-  console.log('cse imported successfully');
-} catch (error) {
-  console.error('Failed to import comments routes:', error);
-}
+
 
 
 // const eventFieldTemplateRoutes = require('./routes/eventFieldTemplate.routes');
