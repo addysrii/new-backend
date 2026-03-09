@@ -163,3 +163,7 @@ exports.googleCallback = async (req, res) => {
     return res.redirect(`${process.env.FRONTEND_URL || 'www.meetkats.com'}/auth/callback?error=${encodeURIComponent('Authentication failed')}`);
   }
 };
+exports.getMe = async (req,res)=>{
+  const user = await User.findById(req.user.id)
+  res.json(user)
+}
