@@ -510,7 +510,7 @@ userSchema.index({ status: 1 });
 userSchema.index({ createdAt: 1 });
 userSchema.index({ email: 1 }, { unique: true });
 userSchema.index({ username: 1 }, { unique: true });
-
+userSchema.index({ location: "2dsphere" });
 // Pre-save middleware to hash password - ENHANCED WITH DEBUGGING
 userSchema.pre('save', async function(next) {
   const user = this;
