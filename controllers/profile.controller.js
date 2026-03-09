@@ -186,7 +186,6 @@ exports.generateProfile = async (req, res) => {
 /* ===============================
    Update User Location
 ================================*/
-
 exports.updateLocation = async (req, res) => {
   try {
 
