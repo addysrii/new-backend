@@ -5,7 +5,7 @@ const mongoose = require('mongoose');
 const ObjectId = mongoose.Types.ObjectId;
 const { ProfileView } = require('../models/User');
 // const { Achievement, Project } = require('../models/Portfolio');
-const Settings = require('../models/Settings');
+// const Settings = require('../models/Settings');
 
 /**
  * Get the current authenticated user

@@ -1,14 +1,14 @@
-const mongoose = require('mongoose');
+
 const {User} = require('../models/User');
 
 const jwt = require('jsonwebtoken');
-const bcrypt = require('bcryptjs');
+
 const crypto = require('crypto');
 
 
 const { OAuth2Client } = require('google-auth-library');
 
-const DeviceDetector = require('node-device-detector');
+
 
 // Environment variables for services
 const JWT_SECRET = process.env.JWT_SECRET || 'your-jwt-secret';
@@ -18,9 +18,6 @@ const JWT_REFRESH_EXPIRES_IN = process.env.JWT_REFRESH_EXPIRES_IN || '30d';
 
 const googleClient = new OAuth2Client();
 
-
-// Initialize device detector
-const deviceDetector = new DeviceDetector();
 
 
 
@@ -103,11 +100,7 @@ exports.googleAuth = async (req, res) => {
     return res.status(401).json({ error: 'Invalid Google token' });
   }
 };
-/**
- * Google OAuth callback handler
- * @route GET /auth/google/callback
- * @access Public
- */
+
 exports.googleCallback = async (req, res) => {
   try {
     console.log('Google OAuth callback received', { 

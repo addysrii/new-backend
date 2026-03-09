@@ -1,7 +1,6 @@
 const express = require('express')
 const authController = require("../controllers/auth.controller")
 const router = express.Router();
-const { authenticateToken, isAdmin } = require('../middleware/auth.middleware');
 
 const passport = require('passport');
 router.post('/auth/google', authController.googleAuth);
