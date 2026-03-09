@@ -3,10 +3,9 @@ const ProfileAnalysis = require("../models/ProfileAnalysis");
 const { analyzeProfileFromUrls } = require("../services/openai.service");
 const { getGithubProfile } = require("../services/github.service");
 
-exports.generateProfile = async (req, res) => {
-  try {
+exports.generateProfile = async (req,res)=>{
 
-    const userId = req.user.id;
+ try{
 
   const userId = req.user.id;
 
@@ -19,23 +18,29 @@ exports.generateProfile = async (req, res) => {
 
   const urls=[];
 
-    let { githubId, linkedinId } = req.body;
+  if (githubId) {
 
-    // If frontend didn't send them, use stored ones
-    githubId = githubId || user.githubId;
-    linkedinId = linkedinId || user.linkedinId;
+  if (githubId.includes("github.com")) {
+    urls.push(githubId);
+  } else {
+    urls.push(`https://github.com/${githubId}`);
+  }
 
-    if (!githubId && !linkedinId) {
-      return res.status(400).json({
-        error: "GitHub or LinkedIn required"
-      });
-    }
+}
 
-    const urls = [];
+if (linkedinId) {
 
-    // Handle full URLs OR usernames
-    if (githubId) {
+  if (linkedinId.includes("linkedin.com")) {
+    urls.push(linkedinId);
+  } else {
+    urls.push(`https://linkedin.com/in/${linkedinId}`);
+  }
 
+}
+await User.findByIdAndUpdate(userId,{
+  githubId,
+  linkedinId
+});
   // 🔵 fetch GitHub real data
   let githubData=null;
 
@@ -66,10 +71,9 @@ exports.generateProfile = async (req, res) => {
 
   );
 
-    }
+  res.json(profile);
 
-    // Run AI analysis
-    const aiResult = await analyzeProfileFromUrls(urls);
+ }catch(err){
 
   console.error(err);
 
@@ -77,28 +81,34 @@ exports.generateProfile = async (req, res) => {
    error:"Profile generation failed"
   });
 
-    // Update user profile
-    await User.findByIdAndUpdate(userId, {
-      githubId,
-      linkedinId,
-      skills
-    });
+ }
 
 };
 
 
-
 exports.updateLocation = async (req, res) => {
-
   try {
 
-    const { lat, lng } = req.body;
     const userId = req.user.id;
+
+    const lat = Number(req.body.lat);
+    const lng = Number(req.body.lng);
+
+    // Validate coordinates
+    if (isNaN(lat) || isNaN(lng)) {
+      return res.status(400).json({
+        error: "Invalid coordinates"
+      });
+    }
 
     await User.findByIdAndUpdate(userId, {
       location: {
         type: "Point",
         coordinates: [lng, lat]
+      },
+      locationMetadata: {
+        accuracy: req.body.accuracy || null,
+        lastUpdated: new Date()
       }
     });
 
@@ -113,5 +123,4 @@ exports.updateLocation = async (req, res) => {
     });
 
   }
-
 };
