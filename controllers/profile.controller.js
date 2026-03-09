@@ -26,6 +26,11 @@ exports.generateProfile = async (req,res)=>{
    urls.push(`https://linkedin.com/in/${linkedinId}`);
   }
 
+}
+await User.findByIdAndUpdate(userId,{
+  githubId,
+  linkedinId
+});
   // 🔵 fetch GitHub real data
   let githubData=null;
 
@@ -71,18 +76,29 @@ exports.generateProfile = async (req,res)=>{
 };
 
 
-
 exports.updateLocation = async (req, res) => {
-
   try {
 
-    const { lat, lng } = req.body;
     const userId = req.user.id;
+
+    const lat = Number(req.body.lat);
+    const lng = Number(req.body.lng);
+
+    // Validate coordinates
+    if (isNaN(lat) || isNaN(lng)) {
+      return res.status(400).json({
+        error: "Invalid coordinates"
+      });
+    }
 
     await User.findByIdAndUpdate(userId, {
       location: {
         type: "Point",
         coordinates: [lng, lat]
+      },
+      locationMetadata: {
+        accuracy: req.body.accuracy || null,
+        lastUpdated: new Date()
       }
     });
 
@@ -97,5 +113,4 @@ exports.updateLocation = async (req, res) => {
     });
 
   }
-
 };
