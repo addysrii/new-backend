@@ -18,22 +18,12 @@ exports.generateProfile = async (req,res)=>{
 
   const urls=[];
 
-  if (githubId) {
-
-  if (githubId.includes("github.com")) {
-    urls.push(githubId);
-  } else {
-    urls.push(`https://github.com/${githubId}`);
+  if(githubId){
+   urls.push(`https://github.com/${githubId}`);
   }
 
-}
-
-if (linkedinId) {
-
-  if (linkedinId.includes("linkedin.com")) {
-    urls.push(linkedinId);
-  } else {
-    urls.push(`https://linkedin.com/in/${linkedinId}`);
+  if(linkedinId){
+   urls.push(`https://linkedin.com/in/${linkedinId}`);
   }
 
 }

@@ -1,31 +1,41 @@
 import axios from "axios";
 
-export const getGithubProfile = async (username)=>{
+const githubApi = axios.create({
+  baseURL: "https://api.github.com",
+  headers: {
+    Authorization: `token ${process.env.GITHUB_TOKEN}`,
+    Accept: "application/vnd.github+json"
+  }
+});
 
- const user = await axios.get(
-  `https://api.github.com/users/${username}`
- );
+export const getGithubProfile = async (githubInput) => {
 
- const repos = await axios.get(
-  `https://api.github.com/users/${username}/repos`
- );
+  let username = githubInput;
 
- return {
+  if (githubInput.includes("github.com")) {
+    username = githubInput.split("github.com/")[1].replace("/", "");
+  }
 
-  username:user.data.login,
-  name:user.data.name,
-  avatar:user.data.avatar_url,
-  bio:user.data.bio,
-  followers:user.data.followers,
-  following:user.data.following,
-  publicRepos:user.data.public_repos,
+  const user = await githubApi.get(`/users/${username}`);
 
-  repos:repos.data.slice(0,10).map(r=>({
-   name:r.name,
-   stars:r.stargazers_count,
-   language:r.language
-  }))
+  const repos = await githubApi.get(`/users/${username}/repos`, {
+    params: { per_page: 10, sort: "updated" }
+  });
 
- };
+  return {
+    username: user.data.login,
+    name: user.data.name,
+    avatar: user.data.avatar_url,
+    bio: user.data.bio,
+    followers: user.data.followers,
+    following: user.data.following,
+    publicRepos: user.data.public_repos,
 
+    repos: repos.data.map(r => ({
+      name: r.name,
+      stars: r.stargazers_count,
+      language: r.language,
+      url: r.html_url
+    }))
+  };
 };

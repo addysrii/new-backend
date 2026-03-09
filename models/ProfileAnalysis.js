@@ -1,4 +1,4 @@
-const mongoose = require("mongoose");
+const mongoose = require('mongoose')
 
 const GitHubSchema = new mongoose.Schema({
  username:String,
@@ -60,8 +60,7 @@ const ProfileAnalysisSchema = new mongoose.Schema({
 },{
  timestamps:true
 });
-
-export default mongoose.model(
+module.exports = mongoose.model(
  "ProfileAnalysis",
  ProfileAnalysisSchema
 );

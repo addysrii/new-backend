@@ -272,11 +272,6 @@ const userSchema = new Schema({
     type: String,
     trim: true
   },
-  username: {
-    type: String,
-    trim: true,
-    lowercase: true
-  },
   email: {
     type: String,
     required: true,
