@@ -191,61 +191,37 @@ exports.updateLocation = async (req, res) => {
 
     const userId = req.user?.id;
 
-    if (!userId) {
-      return res.status(401).json({ error: "Unauthorized" });
-    }
+    const lat = parseFloat(req.body.lat);
+    const lng = parseFloat(req.body.lng);
 
-    const { lat, lng, accuracy } = req.body;
-
-    // Ensure values exist
-    if (lat === undefined || lng === undefined) {
-      return res.status(400).json({
-        error: "Latitude and longitude required"
-      });
-    }
-
-    const latitude = parseFloat(lat);
-    const longitude = parseFloat(lng);
-
-    // Validate numbers
-    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
       return res.status(400).json({
         error: "Invalid coordinates"
       });
     }
 
-    // Validate ranges
-    if (
-      latitude < -90 ||
-      latitude > 90 ||
-      longitude < -180 ||
-      longitude > 180
-    ) {
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
       return res.status(400).json({
         error: "Coordinates out of range"
       });
     }
 
-    await User.findByIdAndUpdate(
-      userId,
-      {
-        location: {
-          type: "Point",
-          coordinates: [longitude, latitude]
-        },
-        locationMetadata: {
-          accuracy: accuracy || null,
-          lastUpdated: new Date()
-        }
+    await User.findByIdAndUpdate(userId, {
+      location: {
+        type: "Point",
+        coordinates: [lng, lat]
       },
-      { new: true }
-    );
+      locationMetadata: {
+        accuracy: req.body.accuracy || null,
+        lastUpdated: new Date()
+      }
+    });
 
     res.json({ success: true });
 
   } catch (err) {
 
-    console.error("Location update error:", err);
+    console.error(err);
 
     res.status(500).json({
       error: "Location update failed"
