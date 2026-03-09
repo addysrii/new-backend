@@ -4,14 +4,14 @@
   "description": "backend",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js",
+    "start": "nodemon index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "",
   "license": "ISC",
   "dependencies": {
     "@socket.io/redis-adapter": "^8.3.0",
-    "axios": "^1.7.9",
+    "axios": "^1.13.6",
     "bcryptjs": "^3.0.0",
     "body-parser": "^1.20.3",
     "cloudinary": "^1.41.3",
@@ -38,7 +38,7 @@
     "multer-storage-cloudinary": "^4.0.0",
     "node-device-detector": "^2.2.0",
     "nodemailer": "^6.9.9",
-    "nodemon": "^3.0.3",
+    "nodemon": "^3.1.14",
     "openai": "^6.27.0",
     "passport": "^0.7.0",
     "passport-google-oauth20": "^2.0.0",
