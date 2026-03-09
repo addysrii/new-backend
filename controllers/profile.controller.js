@@ -3,10 +3,9 @@ const ProfileAnalysis = require("../models/ProfileAnalysis");
 const { analyzeProfileFromUrls } = require("../services/openai.service");
 const { getGithubProfile } = require("../services/github.service");
 
-exports.generateProfile = async (req, res) => {
-  try {
+exports.generateProfile = async (req,res)=>{
 
-    const userId = req.user.id;
+ try{
 
   const userId = req.user.id;
 
@@ -19,22 +18,13 @@ exports.generateProfile = async (req, res) => {
 
   const urls=[];
 
-    let { githubId, linkedinId } = req.body;
+  if(githubId){
+   urls.push(`https://github.com/${githubId}`);
+  }
 
-    // If frontend didn't send them, use stored ones
-    githubId = githubId || user.githubId;
-    linkedinId = linkedinId || user.linkedinId;
-
-    if (!githubId && !linkedinId) {
-      return res.status(400).json({
-        error: "GitHub or LinkedIn required"
-      });
-    }
-
-    const urls = [];
-
-    // Handle full URLs OR usernames
-    if (githubId) {
+  if(linkedinId){
+   urls.push(`https://linkedin.com/in/${linkedinId}`);
+  }
 
   // 🔵 fetch GitHub real data
   let githubData=null;
@@ -66,10 +56,9 @@ exports.generateProfile = async (req, res) => {
 
   );
 
-    }
+  res.json(profile);
 
-    // Run AI analysis
-    const aiResult = await analyzeProfileFromUrls(urls);
+ }catch(err){
 
   console.error(err);
 
@@ -77,12 +66,7 @@ exports.generateProfile = async (req, res) => {
    error:"Profile generation failed"
   });
 
-    // Update user profile
-    await User.findByIdAndUpdate(userId, {
-      githubId,
-      linkedinId,
-      skills
-    });
+ }
 
 };
 
