@@ -405,7 +405,7 @@ console.log('Setting up auth routes...');
 const authRoutes = require("./routes/auth.routes.js")
 if (authRoutes) {
   try {
-  app.use('/api',authRoutes)
+  app.use('/',authRoutes)
     
 
     console.log('Auth routes set up successfully');
