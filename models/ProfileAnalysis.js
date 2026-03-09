@@ -1,4 +1,4 @@
-const mongoose = require("mongoose");
+import mongoose from "mongoose";
 
 const GitHubSchema = new mongoose.Schema({
  username:String,
