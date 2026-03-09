@@ -128,7 +128,7 @@ const ProfileAnalysisSchema = new mongoose.Schema(
   }
 );
 
-export default mongoose.model(
+module.exports = mongoose.model(
   "ProfileAnalysis",
   ProfileAnalysisSchema
 );
