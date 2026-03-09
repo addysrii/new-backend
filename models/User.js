@@ -136,19 +136,17 @@ const userSchema = new Schema({
   headline: String,
   bio: String,
 
-  location: {
-    type: {
-      type: String,
-      enum: ["Point"],
-      default: "Point"
-    },
-    coordinates: {
-      type: [Number],
-      index: "2dsphere"
-    },
-    name: String,
-    address: String
+ location: {
+  type: {
+    type: String,
+    enum: ["Point"],
+    default: "Point"
   },
+  coordinates: {
+    type: [Number],
+    default: [0, 0]
+  }
+},
 
   locationMetadata: {
     accuracy: Number,
