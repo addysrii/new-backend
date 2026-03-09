@@ -8,45 +8,61 @@ function calculateMatch(a,b){
 
 }
 
-exports.getMatches = async(req,res)=>{
+exports.getMatches = async (req, res) => {
+  try {
 
- const {lat,lng,distance=10000} = req.query;
- const userId = req.user.id;
+    const lat = parseFloat(req.query.lat || req.query.latitude);
+    const lng = parseFloat(req.query.lng || req.query.longitude);
+    const distance = parseInt(req.query.distance || 10000);
 
- const currentUser = await User.findById(userId);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return res.status(400).json({
+        error: "Invalid coordinates"
+      });
+    }
 
- const nearbyUsers = await User.find({
+    const userId = req.user.id;
 
-  _id:{$ne:userId},
+    const currentUser = await User.findById(userId);
 
-  location:{
-   $near:{
-    $geometry:{
-     type:"Point",
-     coordinates:[parseFloat(lng),parseFloat(lat)]
-    },
-    $maxDistance:parseInt(distance)
-   }
+    const nearbyUsers = await User.find({
+      _id: { $ne: userId },
+      location: {
+        $near: {
+          $geometry: {
+            type: "Point",
+            coordinates: [lng, lat]
+          },
+          $maxDistance: distance
+        }
+      }
+    });
+
+    const matches = nearbyUsers.map(u => {
+
+      const score = calculateMatch(
+        currentUser.skills || [],
+        u.skills || []
+      );
+
+      return {
+        id: u._id,
+        name: u.firstName,
+        location: u.location.coordinates,
+        matchScore: score
+      };
+
+    });
+
+    res.json(matches);
+
+  } catch (err) {
+
+    console.error("Match error:", err);
+
+    res.status(500).json({
+      error: "Failed to fetch matches"
+    });
+
   }
-
- });
-
- const matches = nearbyUsers.map(u=>{
-
-  const score = calculateMatch(
-   currentUser.skills || [],
-   u.skills || []
-  );
-
-  return{
-   id:u._id,
-   name:u.firstName,
-   location:u.location.coordinates,
-   matchScore:score
-  };
-
- });
-
- res.json(matches);
-
-}
+};
