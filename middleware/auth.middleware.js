@@ -66,58 +66,58 @@ exports.authenticateToken = async (req, res, next) => {
  * @param {string} ownerField - Owner field name in the model
  * @returns {Function} Middleware function
  */
-exports.isResourceOwner = (model, paramField = 'id', ownerField = 'user') => {
-  return async (req, res, next) => {
-    try {
-      // Get resource ID from params
-      const resourceId = req.params[paramField];
+// exports.isResourceOwner = (model, paramField = 'id', ownerField = 'user') => {
+//   return async (req, res, next) => {
+//     try {
+//       // Get resource ID from params
+//       const resourceId = req.params[paramField];
       
-      if (!resourceId) {
-        return res.status(400).json({ error: 'Resource ID not provided' });
-      }
+//       if (!resourceId) {
+//         return res.status(400).json({ error: 'Resource ID not provided' });
+//       }
       
-      // Validate that it's a proper MongoDB ObjectId
-      if (!mongoose.Types.ObjectId.isValid(resourceId)) {
-        return res.status(400).json({ error: 'Invalid resource ID format' });
-      }
+//       // Validate that it's a proper MongoDB ObjectId
+//       if (!mongoose.Types.ObjectId.isValid(resourceId)) {
+//         return res.status(400).json({ error: 'Invalid resource ID format' });
+//       }
       
-      // Get the model
-      const Model = require(`../models/${model}`);
+//       // Get the model
+//       const Model = require(`../models/${model}`);
       
-      // Find the resource
-      const resource = await Model.findById(resourceId);
+//       // Find the resource
+//       const resource = await Model.findById(resourceId);
       
-      if (!resource) {
-        return res.status(404).json({ error: 'Resource not found' });
-      }
+//       if (!resource) {
+//         return res.status(404).json({ error: 'Resource not found' });
+//       }
       
-      // Check ownership
-      let ownerId;
+//       // Check ownership
+//       let ownerId;
       
-      if (typeof resource[ownerField] === 'object' && resource[ownerField] !== null) {
-        // Handle if it's an ObjectId reference
-        ownerId = resource[ownerField].toString();
-      } else if (typeof resource[ownerField] === 'string') {
-        // Handle if it's already a string
-        ownerId = resource[ownerField];
-      } else {
-        return res.status(500).json({ error: 'Invalid owner field format in resource' });
-      }
+//       if (typeof resource[ownerField] === 'object' && resource[ownerField] !== null) {
+//         // Handle if it's an ObjectId reference
+//         ownerId = resource[ownerField].toString();
+//       } else if (typeof resource[ownerField] === 'string') {
+//         // Handle if it's already a string
+//         ownerId = resource[ownerField];
+//       } else {
+//         return res.status(500).json({ error: 'Invalid owner field format in resource' });
+//       }
       
-      if (ownerId !== req.user.id) {
-        return res.status(403).json({ error: 'Not authorized to access this resource' });
-      }
+//       if (ownerId !== req.user.id) {
+//         return res.status(403).json({ error: 'Not authorized to access this resource' });
+//       }
       
-      // Add resource to request
-      req.resource = resource;
+//       // Add resource to request
+//       req.resource = resource;
       
-      next();
-    } catch (error) {
-      console.error('Resource owner check error:', error);
-      res.status(500).json({ error: 'Error checking resource ownership' });
-    }
-  };
-};
+//       next();
+//     } catch (error) {
+//       console.error('Resource owner check error:', error);
+//       res.status(500).json({ error: 'Error checking resource ownership' });
+//     }
+//   };
+// };
 
 /**
  * Check if user has admin role

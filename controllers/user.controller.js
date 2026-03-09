@@ -4,7 +4,7 @@ const { User } = require('../models/User');
 const mongoose = require('mongoose');
 const ObjectId = mongoose.Types.ObjectId;
 const { ProfileView } = require('../models/User');
-const { Achievement, Project } = require('../models/Portfolio');
+// const { Achievement, Project } = require('../models/Portfolio');
 const Settings = require('../models/Settings');
 
 /**
@@ -1098,18 +1098,18 @@ exports.getUserStats = async (req, res) => {
     }
     
     // Get project count from Project model (you need to create or import this model)
-    const projectCount = await Project.countDocuments({ user: userId });
+    // const projectCount = await Project.countDocuments({ user: userId });
     
     // Get connection count
     const connectionCount = user.connections ? user.connections.length : 0;
     
     // Get achievement count from Achievement model (you need to create or import this model)
-    const achievementCount = await Achievement.countDocuments({ user: userId });
+    // const achievementCount = await Achievement.countDocuments({ user: userId });
     
     res.json({
-      projectCount,
+      // projectCount,
       connectionCount,
-      achievementCount
+      // achievementCount
     });
   } catch (error) {
     console.error(`Error fetching user stats for ID ${req.params.userId}:`, error);
