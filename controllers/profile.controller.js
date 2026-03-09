@@ -188,66 +188,61 @@ exports.generateProfile = async (req, res) => {
 ================================*/
 
 exports.updateLocation = async (req, res) => {
-
   try {
 
     const userId = req.user?.id;
 
     if (!userId) {
-
-      return res.status(401).json({
-        error: "Unauthorized"
-      });
-
+      return res.status(401).json({ error: "Unauthorized" });
     }
 
-    const lat = Number(req.body.lat);
-    const lng = Number(req.body.lng);
-    const accuracy = req.body.accuracy || null;
+    const { lat, lng, accuracy } = req.body;
 
-    /* ===============================
-       Validate Coordinates
-    ================================*/
+    // Ensure values exist
+    if (lat === undefined || lng === undefined) {
+      return res.status(400).json({
+        error: "Latitude and longitude required"
+      });
+    }
 
-    if (
-      isNaN(lat) ||
-      isNaN(lng) ||
-      lat < -90 ||
-      lat > 90 ||
-      lng < -180 ||
-      lng > 180
-    ) {
+    const latitude = parseFloat(lat);
+    const longitude = parseFloat(lng);
 
+    // Validate numbers
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
       return res.status(400).json({
         error: "Invalid coordinates"
       });
+    }
 
+    // Validate ranges
+    if (
+      latitude < -90 ||
+      latitude > 90 ||
+      longitude < -180 ||
+      longitude > 180
+    ) {
+      return res.status(400).json({
+        error: "Coordinates out of range"
+      });
     }
 
     await User.findByIdAndUpdate(
-
       userId,
-
       {
         location: {
           type: "Point",
-          coordinates: [lng, lat]
+          coordinates: [longitude, latitude]
         },
-
         locationMetadata: {
-          accuracy,
+          accuracy: accuracy || null,
           lastUpdated: new Date()
         }
-
       },
-
       { new: true }
-
     );
 
-    res.json({
-      success: true
-    });
+    res.json({ success: true });
 
   } catch (err) {
 
@@ -258,5 +253,4 @@ exports.updateLocation = async (req, res) => {
     });
 
   }
-
 };
