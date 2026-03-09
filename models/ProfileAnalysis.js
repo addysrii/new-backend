@@ -61,7 +61,7 @@ const ProfileAnalysisSchema = new mongoose.Schema({
  timestamps:true
 });
 
-export default mongoose.model(
+module.exports = mongoose.model(
  "ProfileAnalysis",
  ProfileAnalysisSchema
 );
