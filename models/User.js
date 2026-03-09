@@ -320,7 +320,7 @@ const userSchema = new Schema({
   gender: String,
  skills: [{
  type: String
-}]
+}],
   skillEndorsements: [skillEndorsementSchema],
   interests: {
     topics: [String],
