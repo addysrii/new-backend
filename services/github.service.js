@@ -3,7 +3,8 @@ import axios from "axios";
 const githubApi = axios.create({
   baseURL: "https://api.github.com",
   headers: {
-    Authorization: `Bearer ${process.env.GITHUB_TOKEN}`
+    Authorization: `token ${process.env.GITHUB_TOKEN}`,
+    Accept: "application/vnd.github+json"
   }
 });
 
@@ -17,7 +18,9 @@ export const getGithubProfile = async (githubInput) => {
 
   const user = await githubApi.get(`/users/${username}`);
 
-  const repos = await githubApi.get(`/users/${username}/repos`);
+  const repos = await githubApi.get(`/users/${username}/repos`, {
+    params: { per_page: 10, sort: "updated" }
+  });
 
   return {
     username: user.data.login,
@@ -27,10 +30,12 @@ export const getGithubProfile = async (githubInput) => {
     followers: user.data.followers,
     following: user.data.following,
     publicRepos: user.data.public_repos,
-    repos: repos.data.slice(0,10).map(r=>({
-      name:r.name,
-      stars:r.stargazers_count,
-      language:r.language
+
+    repos: repos.data.map(r => ({
+      name: r.name,
+      stars: r.stargazers_count,
+      language: r.language,
+      url: r.html_url
     }))
   };
 };
