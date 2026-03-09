@@ -348,7 +348,12 @@ const userSchema = new Schema({
       enum: ['immediate', '2weeks', 'month', 'negotiable']
     }
   },
-  
+  githubId : {
+    type: String,
+  },
+  linkedinId : {
+    type: String,
+  },
   // Account Status
   status: {
     type: String,
