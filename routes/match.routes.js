@@ -1,16 +1,14 @@
 const express = require("express");
 const router = express.Router();
 
-const matchController =
-require("../controllers/match.controller");
+const {
+ getNearbyUsers,
+ getProfileMatches
+} = require("../controllers/match.controller");
 
-const {authenticateToken} =
-require("../middleware/auth.middleware");
+const auth = require("../middleware/auth");
 
-router.get(
- "/matches",
- authenticateToken,
- matchController.getMatches
-);
+router.get("/nearby", auth, getNearbyUsers);
+router.get("/profile", auth, getProfileMatches);
 
 module.exports = router;
