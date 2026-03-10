@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
-const authenticate = require("../middleware/auth");
+const {authenticateToken} =
+require("../middleware/auth.middleware");
 
 const {
  sendConnectionRequest,
@@ -8,10 +9,10 @@ const {
  getConnectionRequests
 } = require("../controllers/network.controller");
 
-router.post("/connect/:userId", auth, sendConnectionRequest);
+router.post("/connect/:userId", authenticateToken, sendConnectionRequest);
 
-router.post("/accept/:id", auth, acceptConnectionRequest);
+router.post("/accept/:id", authenticateToken, acceptConnectionRequest);
 
-router.get("/requests", auth, getConnectionRequests);
+router.get("/requests", authenticateToken, getConnectionRequests);
 
 module.exports = router;
