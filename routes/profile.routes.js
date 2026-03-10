@@ -8,13 +8,13 @@ const {authenticateToken} =
 require("../middleware/auth.middleware");
 
 router.post(
- "/profile/generate",
+ "/generate",
  authenticateToken,
  profileController.generateProfile
 );
 
 router.post(
- "/profile/location",
+ "/location",
  authenticateToken,
  profileController.updateLocation
 );
