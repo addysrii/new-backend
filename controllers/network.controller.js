@@ -46,3 +46,66 @@ exports.sendConnectionRequest = async (req, res) => {
  }
 
 };
+exports.acceptConnectionRequest = async (req, res) => {
+
+ try {
+
+  const requestId = req.params.id;
+
+  const request = await ConnectionRequest.findById(requestId);
+
+  if (!request) {
+   return res.status(404).json({
+    error: "Request not found"
+   });
+  }
+
+  request.status = "accepted";
+
+  await request.save();
+
+  await User.findByIdAndUpdate(request.sender, {
+   $addToSet: { connections: request.receiver }
+  });
+
+  await User.findByIdAndUpdate(request.receiver, {
+   $addToSet: { connections: request.sender }
+  });
+
+  res.json({
+   message: "Connection accepted"
+  });
+
+ } catch (err) {
+
+  res.status(500).json({
+   error: "Failed to accept request"
+  });
+
+ }
+
+};
+exports.getConnectionRequests = async (req, res) => {
+
+ try {
+
+  const userId = req.user.id;
+
+  const requests = await ConnectionRequest
+   .find({
+    receiver: userId,
+    status: "pending"
+   })
+   .populate("sender", "firstName lastName profileImage headline");
+
+  res.json({ requests });
+
+ } catch (err) {
+
+  res.status(500).json({
+   error: "Failed to fetch requests"
+  });
+
+ }
+
+};
