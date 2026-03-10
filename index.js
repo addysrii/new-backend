@@ -305,9 +305,9 @@ if (authRoutes) {
 // console.log('Setting up user routes...');
 // app.use('/api', userRoutes);
 
-app.use("/api",profileRoutes);
-app.use("/api",matchRoutes);
-app.use("/api",networkRoutes);
+app.use("/api/profile",profileRoutes);
+app.use("/api/match",matchRoutes);
+app.use("/api/network",networkRoutes);
 
 
 console.log('Setting up metrics endpoint...');
