@@ -15,6 +15,7 @@ const setupSocketIO = require('./lib/socket');
 const jwt = require('jsonwebtoken');
 const profileRoutes = require("./routes/profile.routes.js");
 const matchRoutes = require("./routes/match.routes.js");
+const networkRoutes = require("./routes/network.routes.js");
 console.log('Starting application initialization...');
 
 // Keep your current import
@@ -306,6 +307,7 @@ if (authRoutes) {
 
 app.use("/api",profileRoutes);
 app.use("/api",matchRoutes);
+app.use("/api",networkRoutes);
 
 
 console.log('Setting up metrics endpoint...');
