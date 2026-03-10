@@ -40,24 +40,20 @@ exports.generateProfile = async (req, res) => {
 
     let githubUsername = null;
 
-    if (githubId) {
+   if (githubId) {
 
-      if (githubId.includes("github.com")) {
+  if (githubId.includes("github.com")) {
 
-        urls.push(githubId);
+    githubUsername = githubId.split("github.com/")[1]?.split("/")[0];
 
-        githubUsername = githubId.split("github.com/")[1];
+  } else {
 
-      } else {
+    githubUsername = githubId;
 
-        githubUsername = githubId;
+  }
 
-        urls.push(`https://github.com/${githubId}`);
-
-      }
-
-    }
-
+  urls.push(`https://github.com/${githubUsername}`);
+}
     /* ===============================
        Normalize LinkedIn URL
     ================================*/
