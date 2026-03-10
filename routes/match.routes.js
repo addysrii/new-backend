@@ -6,9 +6,10 @@ const {
  getProfileMatches
 } = require("../controllers/match.controller");
 
-const auth = require("../middleware/auth");
+const {authenticateToken} =
+require("../middleware/auth.middleware");
 
-router.get("/nearby", auth, getNearbyUsers);
-router.get("/profile", auth, getProfileMatches);
+router.get("/nearby", authenticateToken, getNearbyUsers);
+router.get("/profile", authenticateToken, getProfileMatches);
 
 module.exports = router;
