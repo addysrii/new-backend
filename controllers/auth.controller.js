@@ -19,7 +19,104 @@ const JWT_REFRESH_EXPIRES_IN = process.env.JWT_REFRESH_EXPIRES_IN || '30d';
 const googleClient = new OAuth2Client();
 
 
+exports.register = async (req, res) => {
+  try {
 
+    const {
+      firstName,
+      lastName,
+      email,
+      password,
+      phone
+    } = req.body;
+
+    /* =========================
+       Validate Input
+    ==========================*/
+
+    if (!firstName || !email || !password) {
+      return res.status(400).json({
+        message: "First name, email and password are required"
+      });
+    }
+
+    if (password.length < 6) {
+      return res.status(400).json({
+        message: "Password must be at least 6 characters"
+      });
+    }
+
+    /* =========================
+       Check Existing User
+    ==========================*/
+
+    const existingUser = await User.findOne({ email });
+
+    if (existingUser) {
+      return res.status(409).json({
+        message: "User already exists with this email"
+      });
+    }
+
+    /* =========================
+       Create User
+    ==========================*/
+
+    const user = new User({
+      firstName,
+      lastName,
+      email,
+      password,
+      phone
+    });
+
+    await user.save();
+
+    /* =========================
+       Generate Tokens
+    ==========================*/
+
+    const token = user.generateAuthToken();
+    const refreshToken = user.generateRefreshToken();
+
+    /* =========================
+       Save Refresh Token
+    ==========================*/
+
+    user.security.refreshTokens.push({
+      token: refreshToken,
+      device: req.headers["user-agent"] || "unknown",
+      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+    });
+
+    await user.save();
+
+    /* =========================
+       Response
+    ==========================*/
+
+    const userData = user.toObject();
+    delete userData.password;
+
+    return res.status(201).json({
+      success: true,
+      message: "User registered successfully",
+      token,
+      refreshToken,
+      user: userData
+    });
+
+  } catch (error) {
+
+    console.error("Register error:", error);
+
+    return res.status(500).json({
+      message: "Registration failed",
+      error: error.message
+    });
+
+  }
+};
 
 
 
