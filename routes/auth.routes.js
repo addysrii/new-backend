@@ -32,7 +32,6 @@ router.get('/auth/google/callback',
   }),
   authController.googleCallback
 );
-
-    
+router.post("/register", authController.register);
 
 module.exports = router
