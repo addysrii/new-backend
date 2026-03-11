@@ -118,8 +118,141 @@ exports.register = async (req, res) => {
   }
 };
 
+exports.login = async (req, res) => {
+  try {
 
+    const { email, password } = req.body;
 
+    /* ======================
+       Validate Input
+    =======================*/
+
+    if (!email || !password) {
+      return res.status(400).json({
+        message: "Email and password are required"
+      });
+    }
+
+    /* ======================
+       Find User
+    =======================*/
+
+    const user = await User.findOne({ email });
+
+    if (!user) {
+      return res.status(401).json({
+        message: "Invalid email or password"
+      });
+    }
+
+    /* ======================
+       Check Account Status
+    =======================*/
+
+    if (user.status !== "active") {
+      return res.status(403).json({
+        message: "Account is not active"
+      });
+    }
+
+    /* ======================
+       Check Account Lock
+    =======================*/
+
+    if (user.security.lockUntil && user.security.lockUntil > Date.now()) {
+      return res.status(423).json({
+        message: "Account locked due to multiple failed login attempts"
+      });
+    }
+
+    /* ======================
+       Compare Password
+    =======================*/
+
+    const isMatch = await user.comparePassword(password);
+
+    if (!isMatch) {
+
+      user.security.loginAttempts += 1;
+
+      if (user.security.loginAttempts >= 5) {
+        user.security.lockUntil = Date.now() + 30 * 60 * 1000; // 30 min lock
+      }
+
+      await user.save();
+
+      return res.status(401).json({
+        message: "Invalid email or password"
+      });
+    }
+
+    /* ======================
+       Reset Login Attempts
+    =======================*/
+
+    user.security.loginAttempts = 0;
+    user.security.lockUntil = undefined;
+
+    /* ======================
+       Generate Tokens
+    =======================*/
+
+    const token = user.generateAuthToken();
+    const refreshToken = user.generateRefreshToken();
+
+    /* ======================
+       Save Session
+    =======================*/
+
+    user.security.activeLoginSessions.push({
+      token,
+      device: req.headers["user-agent"] || "unknown",
+      ip: req.ip,
+      lastActive: new Date()
+    });
+
+    /* ======================
+       Save Refresh Token
+    =======================*/
+
+    user.security.refreshTokens.push({
+      token: refreshToken,
+      device: req.headers["user-agent"] || "unknown",
+      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+    });
+
+    await user.save();
+
+    /* ======================
+       Remove Sensitive Data
+    =======================*/
+
+    const userData = user.toObject();
+    delete userData.password;
+
+    /* ======================
+       Response
+    =======================*/
+
+    res.json({
+      success: true,
+      message: "Login successful",
+      token,
+      refreshToken,
+      user: userData
+    });
+
+  } catch (error) {
+
+    console.error("Login error:", error);
+
+    res.status(500).json({
+      message: "Login failed",
+      error: error.message
+    });
+
+  }
+};
 
 exports.googleAuth = async (req, res) => {
   try {
