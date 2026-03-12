@@ -1,7 +1,7 @@
 
 const ConnectionRequest = require("../models/ConnectionRequest");
 const { User } = require("../models/User");
-
+const Notification = require("../models/Notification")
 exports.sendConnectionRequest = async (req, res) => {
 
  try {
@@ -32,6 +32,13 @@ exports.sendConnectionRequest = async (req, res) => {
    receiver
   });
 
+
+await Notification.create({
+ user:receiver,
+ actor:sender,
+ type:"connection_request",
+ entityId:request._id
+})
   res.json({
    message: "Connection request sent",
    request
