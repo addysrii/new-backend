@@ -10,73 +10,80 @@ exports.generateProfile = async (req, res) => {
     const userId = req.user?.id;
 
     if (!userId) {
-      return res.status(401).json({ error: "Unauthorized" });
+      return res.status(401).json({
+        error: "Unauthorized"
+      });
     }
 
-    let { githubId, linkedinId, forceRefresh } = req.body;
+    let { githubId, linkedinId } = req.body;
 
     const user = await User.findById(userId);
 
     if (!user) {
-      return res.status(404).json({ error: "User not found" });
+      return res.status(404).json({
+        error: "User not found"
+      });
     }
 
     githubId = githubId || user.githubId;
     linkedinId = linkedinId || user.linkedinId;
 
-    /* ===============================
-       Check Cached Profile
-    ================================*/
-
-    const existingProfile = await ProfileAnalysis.findOne({
-      user_identifier: userId
-    });
-
-    if (existingProfile && !forceRefresh) {
-
-      return res.json({
-        cached: true,
-        profile: existingProfile
-      });
-
-    }
-
-    /* ===============================
-       Normalize URLs
-    ================================*/
-
     const urls = [];
+
+    /* ===============================
+       Normalize GitHub URL
+    ================================*/
 
     let githubUsername = null;
 
-    if (githubId) {
+   if (githubId) {
 
-      if (githubId.includes("github.com")) {
-        githubUsername = githubId.split("github.com/")[1]?.split("/")[0];
-      } else {
-        githubUsername = githubId;
-      }
+  if (githubId.includes("github.com")) {
 
-      urls.push(`https://github.com/${githubUsername}`);
-    }
+    githubUsername = githubId.split("github.com/")[1]?.split("/")[0];
+
+  } else {
+
+    githubUsername = githubId;
+
+  }
+
+  urls.push(`https://github.com/${githubUsername}`);
+}
+    /* ===============================
+       Normalize LinkedIn URL
+    ================================*/
 
     let linkedinUrl = null;
 
     if (linkedinId) {
 
       if (linkedinId.includes("linkedin.com")) {
+
         linkedinUrl = linkedinId;
+
+        urls.push(linkedinId);
+
       } else {
+
         linkedinUrl = `https://linkedin.com/in/${linkedinId}`;
+
+        urls.push(linkedinUrl);
+
       }
 
-      urls.push(linkedinUrl);
     }
 
+    /* ===============================
+       Validate URLs
+    ================================*/
+
     if (urls.length === 0) {
+
       return res.status(400).json({
         error: "Provide GitHub or LinkedIn profile"
       });
+
     }
 
     /* ===============================
@@ -89,7 +96,7 @@ exports.generateProfile = async (req, res) => {
     });
 
     /* ===============================
-       Fetch GitHub
+       Fetch GitHub Data
     ================================*/
 
     let githubData = null;
@@ -97,9 +104,13 @@ exports.generateProfile = async (req, res) => {
     if (githubUsername) {
 
       try {
+
         githubData = await getGithubProfile(githubUsername);
+
       } catch (err) {
+
         console.error("GitHub fetch failed:", err);
+
       }
 
     }
@@ -108,10 +119,24 @@ exports.generateProfile = async (req, res) => {
        AI Analysis
     ================================*/
 
-    const aiResult = await analyzeProfileFromUrls(urls);
+    let aiResult = null;
+
+    try {
+
+      aiResult = await analyzeProfileFromUrls(urls);
+
+    } catch (err) {
+
+      console.error("AI analysis failed:", err);
+
+      return res.status(500).json({
+        error: "AI analysis failed"
+      });
+
+    }
 
     /* ===============================
-       Save Profile
+       Save Profile Analysis
     ================================*/
 
     const profile = await ProfileAnalysis.findOneAndUpdate(
@@ -135,10 +160,7 @@ exports.generateProfile = async (req, res) => {
 
     );
 
-    res.json({
-      cached: false,
-      profile
-    });
+    res.json(profile);
 
   } catch (err) {
 
