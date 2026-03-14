@@ -9,7 +9,7 @@ exports.getDashboard = async(req,res)=>{
   const userId = req.user.id
 
   const user = await User.findById(userId)
-
+const image = user.profileImage
   const profileViews = await ProfileView.countDocuments({
    viewed:userId
   })
@@ -53,7 +53,8 @@ exports.getDashboard = async(req,res)=>{
    profileScore,
    profileViews,
    connections:connectionCount,
-   pendingRequests
+   pendingRequests, 
+   image
   })
 
  }catch(err){
