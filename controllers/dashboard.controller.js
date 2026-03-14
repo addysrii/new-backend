@@ -47,12 +47,26 @@ exports.getDashboard = async (req, res) => {
     /* =========================
        Profile Score
     ==========================*/
+  const aiProfile = await ProfileAnalysis.findOne({
+   user_identifier:userId
+  })
 
-    const profileScore =
-      (user.skills?.length || 0) * 5 +
-      (user.experience?.length || 0) * 10 +
-      (user.education?.length || 0) * 5 +
-      connectionCount * 2;
+  let aiSkills = 0
+
+  if(aiProfile?.data_nodes?.technologies){
+
+   aiProfile.data_nodes.technologies.forEach(domain=>{
+    aiSkills += domain.stack?.length || 0
+   })
+
+  }
+
+  const profileScore =
+   (user.skills?.length || 0) * 5 +
+   (user.experience?.length || 0) * 10 +
+   aiSkills * 4 +
+   connectionCount * 2
+
 
     /* =========================
        Get Domains from AI Profile
