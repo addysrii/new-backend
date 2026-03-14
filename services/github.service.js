@@ -41,9 +41,7 @@ export const getGithubProfile = async (githubInput) => {
 };
 export const getGithubActivity = async (username) => {
 
-  const res = await axios.get(
-    `https://api.github.com/users/${username}/events`
-  );
+const res = await githubApi.get(`/users/${username}/events`);
 
   return res.data.slice(0,5).map(event => {
 
