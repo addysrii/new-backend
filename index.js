@@ -18,6 +18,7 @@ const matchRoutes = require("./routes/match.routes.js");
 const networkRoutes = require("./routes/network.routes.js");
 const dashboardRoutes = require("./routes/dashboard.routes.js")
 const notificationRoutes = require("./routes/notification.routes")
+const recentActivity = require("./routes/activity.routes")
 console.log('Starting application initialization...');
 
 // Keep your current import
@@ -312,7 +313,7 @@ app.use("/api/match",matchRoutes);
 app.use("/api/network",networkRoutes);
 app.use("/api/dashboard",dashboardRoutes);
 app.use("/api/notification",notificationRoutes);
-
+app.use("/api/recentactivity",recentActivity)
 console.log('Setting up metrics endpoint...');
 try {
  const metrics = require('./utils/metrics');
