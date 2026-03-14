@@ -19,4 +19,11 @@ router.post(
  profileController.updateLocation
 );
 
+
+router.get("/me", authenticateToken, profileController.getProfile);
+
+router.get("/:userId", authenticateToken, profileController.getProfile);
+
+module.exports = router;
+
 module.exports = router;

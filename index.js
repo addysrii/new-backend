@@ -16,6 +16,7 @@ const jwt = require('jsonwebtoken');
 const profileRoutes = require("./routes/profile.routes.js");
 const matchRoutes = require("./routes/match.routes.js");
 const networkRoutes = require("./routes/network.routes.js");
+const dashboardRoutes = require("./routes/dashboard.routes.js")
 console.log('Starting application initialization...');
 
 // Keep your current import
@@ -308,7 +309,7 @@ if (authRoutes) {
 app.use("/api/profile",profileRoutes);
 app.use("/api/match",matchRoutes);
 app.use("/api/network",networkRoutes);
-
+app.use("/api/dashboard",dashboardRoutes);
 
 console.log('Setting up metrics endpoint...');
 try {
