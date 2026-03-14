@@ -311,6 +311,7 @@ app.use("/api/profile",profileRoutes);
 app.use("/api/match",matchRoutes);
 app.use("/api/network",networkRoutes);
 app.use("/api/dashboard",dashboardRoutes);
+app.use("/api/notification",notificationRoutes);
 
 console.log('Setting up metrics endpoint...');
 try {
