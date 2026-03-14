@@ -17,6 +17,7 @@ const profileRoutes = require("./routes/profile.routes.js");
 const matchRoutes = require("./routes/match.routes.js");
 const networkRoutes = require("./routes/network.routes.js");
 const dashboardRoutes = require("./routes/dashboard.routes.js")
+const notificationRoutes = require("./routes/notification.routes")
 console.log('Starting application initialization...');
 
 // Keep your current import
