@@ -39,3 +39,44 @@ export const getGithubProfile = async (githubInput) => {
     }))
   };
 };
+export const getGithubActivity = async (username) => {
+
+  const res = await axios.get(
+    `https://api.github.com/users/${username}/events`
+  );
+
+  return res.data.slice(0,5).map(event => {
+
+    let message = "did something on GitHub";
+
+    switch(event.type){
+
+      case "PushEvent":
+        message = `pushed commits to ${event.repo.name}`;
+        break;
+
+      case "PullRequestEvent":
+        message = `opened a pull request in ${event.repo.name}`;
+        break;
+
+      case "IssuesEvent":
+        message = `created an issue in ${event.repo.name}`;
+        break;
+
+      case "CreateEvent":
+        message = `created repository ${event.repo.name}`;
+        break;
+
+    }
+
+    return {
+      type: "github_activity",
+      user: username,
+      message,
+      repo: event.repo.name,
+      time: event.created_at
+    };
+
+  });
+
+};

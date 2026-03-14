@@ -2242,3 +2242,39 @@
 {"service":"chat-api","level":"info","message":"No REDIS_URL configured, using in-memory adapter","timestamp":"2026-03-14T12:21:55.289Z"}
 {"service":"chat-api","level":"info","message":"Socket events handler initialized","timestamp":"2026-03-14T12:21:55.290Z"}
 {"service":"chat-api","level":"info","message":"Socket events handler initialized","timestamp":"2026-03-14T12:21:55.290Z"}
+{"service":"chat-api","level":"info","message":"Google strategy configured","timestamp":"2026-03-14T12:39:30.752Z"}
+{"service":"chat-api","level":"info","message":"LinkedIn strategy configured","timestamp":"2026-03-14T12:39:30.753Z"}
+{"message":"MongoDB transport added to security logger","level":"info","service":"chat-api","timestamp":"2026-03-14T12:39:31.645Z"}
+{"service":"chat-api","level":"info","message":"No REDIS_URL configured, using in-memory adapter","timestamp":"2026-03-14T12:39:31.648Z"}
+{"service":"chat-api","level":"info","message":"Socket events handler initialized","timestamp":"2026-03-14T12:39:31.651Z"}
+{"service":"chat-api","level":"info","message":"Socket events handler initialized","timestamp":"2026-03-14T12:39:31.651Z"}
+{"service":"chat-api","level":"info","message":"Google strategy configured","timestamp":"2026-03-14T12:40:32.348Z"}
+{"service":"chat-api","level":"info","message":"LinkedIn strategy configured","timestamp":"2026-03-14T12:40:32.349Z"}
+{"message":"MongoDB transport added to security logger","level":"info","service":"chat-api","timestamp":"2026-03-14T12:40:33.519Z"}
+{"service":"chat-api","level":"info","message":"No REDIS_URL configured, using in-memory adapter","timestamp":"2026-03-14T12:40:33.520Z"}
+{"service":"chat-api","level":"info","message":"Socket events handler initialized","timestamp":"2026-03-14T12:40:33.522Z"}
+{"service":"chat-api","level":"info","message":"Socket events handler initialized","timestamp":"2026-03-14T12:40:33.522Z"}
+{"service":"chat-api","level":"info","message":"Google strategy configured","timestamp":"2026-03-14T12:40:39.088Z"}
+{"service":"chat-api","level":"info","message":"LinkedIn strategy configured","timestamp":"2026-03-14T12:40:39.088Z"}
+{"message":"MongoDB transport added to security logger","level":"info","service":"chat-api","timestamp":"2026-03-14T12:40:41.293Z"}
+{"service":"chat-api","level":"info","message":"No REDIS_URL configured, using in-memory adapter","timestamp":"2026-03-14T12:40:41.294Z"}
+{"service":"chat-api","level":"info","message":"Socket events handler initialized","timestamp":"2026-03-14T12:40:41.295Z"}
+{"service":"chat-api","level":"info","message":"Socket events handler initialized","timestamp":"2026-03-14T12:40:41.295Z"}
+{"service":"chat-api","level":"info","message":"Google strategy configured","timestamp":"2026-03-14T12:40:42.804Z"}
+{"service":"chat-api","level":"info","message":"LinkedIn strategy configured","timestamp":"2026-03-14T12:40:42.805Z"}
+{"message":"MongoDB transport added to security logger","level":"info","service":"chat-api","timestamp":"2026-03-14T12:40:43.625Z"}
+{"service":"chat-api","level":"info","message":"No REDIS_URL configured, using in-memory adapter","timestamp":"2026-03-14T12:40:43.627Z"}
+{"service":"chat-api","level":"info","message":"Socket events handler initialized","timestamp":"2026-03-14T12:40:43.628Z"}
+{"service":"chat-api","level":"info","message":"Socket events handler initialized","timestamp":"2026-03-14T12:40:43.628Z"}
+{"service":"chat-api","level":"info","message":"Google strategy configured","timestamp":"2026-03-14T12:40:52.703Z"}
+{"service":"chat-api","level":"info","message":"LinkedIn strategy configured","timestamp":"2026-03-14T12:40:52.703Z"}
+{"message":"MongoDB transport added to security logger","level":"info","service":"chat-api","timestamp":"2026-03-14T12:40:54.279Z"}
+{"service":"chat-api","level":"info","message":"No REDIS_URL configured, using in-memory adapter","timestamp":"2026-03-14T12:40:54.281Z"}
+{"service":"chat-api","level":"info","message":"Socket events handler initialized","timestamp":"2026-03-14T12:40:54.283Z"}
+{"service":"chat-api","level":"info","message":"Socket events handler initialized","timestamp":"2026-03-14T12:40:54.283Z"}
+{"service":"chat-api","level":"info","message":"Google strategy configured","timestamp":"2026-03-14T12:41:09.447Z"}
+{"service":"chat-api","level":"info","message":"LinkedIn strategy configured","timestamp":"2026-03-14T12:41:09.448Z"}
+{"message":"MongoDB transport added to security logger","level":"info","service":"chat-api","timestamp":"2026-03-14T12:41:10.909Z"}
+{"service":"chat-api","level":"info","message":"No REDIS_URL configured, using in-memory adapter","timestamp":"2026-03-14T12:41:10.912Z"}
+{"service":"chat-api","level":"info","message":"Socket events handler initialized","timestamp":"2026-03-14T12:41:10.915Z"}
+{"service":"chat-api","level":"info","message":"Socket events handler initialized","timestamp":"2026-03-14T12:41:10.916Z"}

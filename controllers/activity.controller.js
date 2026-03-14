@@ -1,12 +1,12 @@
-const { ProfileView } = require("../models/User");
+const { ProfileView,User } = require("../models/User");
 const ConnectionRequest = require("../models/ConnectionRequest");
-
+const { getGithubActivity  } = require("../services/github.service");
 exports.getRecentActivity = async (req, res) => {
 
   try {
 
     const userId = req.user.id;
-
+  const users = await User.findById(req.user.id)
     /* =============================
        PROFILE VIEWS
     ============================== */
@@ -36,7 +36,23 @@ exports.getRecentActivity = async (req, res) => {
 
     }));
 
+let githubActivities = [];
 
+if(users.githubId){
+
+  const githubUsername = users.githubId.includes("github.com")
+    ? users.githubId.split("github.com/")[1]
+    : users.githubId;
+
+  try{
+
+    githubActivities = await getGithubActivity(githubUsername);
+
+  }catch(err){
+    console.log("GitHub activity failed");
+  }
+
+}
     /* =============================
        CONNECTION REQUESTS
     ============================== */
@@ -71,7 +87,8 @@ exports.getRecentActivity = async (req, res) => {
 
     const activities = [
       ...viewActivities,
-      ...requestActivities
+      ...requestActivities,
+        ...githubActivities,
     ];
 
     activities.sort((a, b) => new Date(b.time) - new Date(a.time));
