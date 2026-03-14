@@ -7,7 +7,7 @@ const githubApi = axios.create({
     Accept: "application/vnd.github+json"
   }
 });
-
+console.log("github", process.env.GITHUB_TOKEN)
 export const getGithubProfile = async (githubInput) => {
 
   let username = githubInput;
