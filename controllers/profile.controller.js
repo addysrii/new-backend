@@ -231,7 +231,7 @@ exports.getProfile = async (req, res) => {
     const user = await User.findById(targetUserId)
       .select("-password -security.refreshTokens -security.activeLoginSessions")
       .populate("connections", "firstName lastName profileImage headline")
-      .populate("followers", "firstName lastName profileImage headline");
+      // .populate("followers", "firstName lastName profileImage headline");
 
     if (!user) {
       return res.status(404).json({
