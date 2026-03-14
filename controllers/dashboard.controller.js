@@ -9,8 +9,9 @@ exports.getDashboard = async(req,res)=>{
   const userId = req.user.id
 
   const user = await User.findById(userId)
-const image = user.profileImage
-  console.log(image)
+//   console.log(user)
+const image = user.profileImage||"https://lh3.googleusercontent.com/aida-public/AB6AXuBFBvKDAjveldgGFCnIfH3mTcf2eyYyn_sC1HdBFDmaO5T8KxzvjVgyvYmIO7mD-iHREdhrNk3UbMXpMTXce1RNEhIP1EhTTvVnRbjmYJCiOo8giCEqosA8rIJwCnXx9sj0a9rjQew7KWBBW7eUFSE4-WBvUpEVoOM7iLqBx4HILbHIy0__XCi0B6WqCw7P1RSW5cryOp-tycz9802THCJ0ft72NnrTj-iUfUi8uVJw_rin9HZbeQf-ZjWETx5rX0g8Ej9j9gOu3g2g"
+console.log(image )
   const profileViews = await ProfileView.countDocuments({
    viewed:userId
   })
