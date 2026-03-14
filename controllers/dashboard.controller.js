@@ -10,6 +10,7 @@ exports.getDashboard = async(req,res)=>{
 
   const user = await User.findById(userId)
 const image = user.profileImage
+  console.log(image)
   const profileViews = await ProfileView.countDocuments({
    viewed:userId
   })
