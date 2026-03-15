@@ -75,52 +75,56 @@ exports.getProfileMatches = async (req, res) => {
 
   const userId = req.user.id;
 
+  const currentUser = await User.findById(userId)
+    .select("connections");
+
   const currentAnalysis = await ProfileAnalysis.findOne({
-   user_identifier: userId
+    user_identifier: userId
   });
 
   if (!currentAnalysis) {
-   return res.json({ matches: [] });
+    return res.json({ matches: [] });
   }
 
   const currentTech = extractTechnologies(
-   currentAnalysis.data_nodes?.technologies || []
+    currentAnalysis.data_nodes?.technologies || []
   );
 
   const otherUsers = await User.find({
-   _id: { $ne: userId }
+    _id: {
+      $nin: [...currentUser.connections, userId]
+    }
   }).select("firstName lastName profileImage headline");
 
   const analyses = await ProfileAnalysis.find({
-   user_identifier: { $in: otherUsers.map(u => u._id) }
+    user_identifier: { $in: otherUsers.map(u => u._id) }
   });
 
   const analysisMap = {};
-
   analyses.forEach(a => {
-   analysisMap[a.user_identifier] = a;
+    analysisMap[a.user_identifier] = a;
   });
 
   const matches = otherUsers.map(user => {
 
-   const analysis = analysisMap[user._id];
+    const analysis = analysisMap[user._id];
 
-   const userTech = extractTechnologies(
-    analysis?.data_nodes?.technologies || []
-   );
+    const userTech = extractTechnologies(
+      analysis?.data_nodes?.technologies || []
+    );
 
-   const score = calculateMatch(currentTech, userTech);
+    const score = calculateMatch(currentTech, userTech);
 
-   const common = userTech.filter(t => currentTech.includes(t));
+    const common = userTech.filter(t => currentTech.includes(t));
 
-   return {
-    id: user._id,
-    name: `${user.firstName} ${user.lastName}`,
-    profileImage: user.profileImage,
-    headline: user.headline,
-    matchedSkills: common,
-    matchScore: Math.round(score * 100)
-   };
+    return {
+      id: user._id,
+      name: `${user.firstName} ${user.lastName}`,
+      profileImage: user.profileImage,
+      headline: user.headline,
+      matchedSkills: common,
+      matchScore: Math.round(score * 100)
+    };
 
   });
 
@@ -139,4 +143,3 @@ exports.getProfileMatches = async (req, res) => {
  }
 
 };
-
