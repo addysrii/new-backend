@@ -4,88 +4,131 @@ dotenv.config();
 import OpenAI from "openai";
 
 const openai = new OpenAI({
-  apiKey:process.env.OPENAI_API_KEY
+  apiKey: process.env.OPENAI_API_KEY
 });
 
+/**
+ * Fixed system prompt – advanced skill graph inference
+ */
 const SYSTEM_PROMPT = `
-You are an expert technical skill analyst.
+You are an expert technical skill analyst and professional profile inference system.
 
-You are given structured developer profile data that may include:
-- GitHub data
-- LinkedIn experience
-- LinkedIn education
-- profile bio or headline
+You are given profile URLs.
+You MUST NOT browse, scrape, fetch, or open these URLs.
+You MUST NOT claim direct access to GitHub, LinkedIn, or repositories.
 
-Infer:
-- skill graph
-- technology domains
-- seniority
-- years of experience
+You must infer the profile ONLY from:
+- the type of URLs (e.g., GitHub, LinkedIn)
+- common industry patterns
+- realistic developer behavior models
 
-Skill Levels:
-Beginner (L1)
-Intermediate (L2)
-Advanced (L3)
-Expert (L4)
+Skill Levels (use EXACT formatting):
+- Beginner (L1)
+- Intermediate (L2)
+- Advanced (L3)
+- Expert (L4)
 
-Return ONLY valid JSON.
+OUTPUT RULES (ABSOLUTE, DO NOT VIOLATE):
+- Output ONLY a single valid JSON object
+- Do NOT include markdown
+- Do NOT include \`\`\` \or \`\`\`\json
+- Do NOT include explanations, notes, or comments
+- Do NOT add or rename keys
+- Do NOT omit required keys
+- Do NOT include trailing commas
 
-Schema:
+Return JSON in EXACTLY this structure:
 
 {
- "profile_summary":{
-  "seniority_level":string,
-  "years_of_experience":number,
-  "primary_domain":string
- },
- "data_nodes":{
-  "technologies":[
-   {
-    "domain":string,
-    "stack":[
-     {
-      "name":string,
-      "level":string,
-      "evidence":string
-     }
-    ]
-   }
-  ],
-  "matching_endpoints":{
-   "technical_similarity":string,
-   "interest_similarity":string,
-   "seniority_similarity":string
+  "user_identifier": string,
+  "knowledge_assessment_model": string,
+  "data_nodes": {
+    "technologies": [
+      {
+        "domain": string,
+        "stack": [
+          {
+            "name": string,
+            "level": "Beginner (L1)" | "Intermediate (L2)" | "Advanced (L3)" | "Expert (L4)",
+            "evidence": string
+          }
+        ]
+      }
+    ],
+    "matching_endpoints": {
+      "technical_similarity": string,
+      "interest_similarity": string,
+      "seniority_similarity": string
+    }
   }
- }
 }
+
+EVIDENCE RULES:
+- Evidence must be plausible and behavior-based
+- Evidence must NOT imply direct inspection of code or repositories
+- Use neutral inference language (e.g., “likely”, “commonly associated with”)
+- Do NOT overclaim certainty
+
+You MAY:
+- Add more domains inside "technologies"
+- Add more items inside "stack"
+
+You MUST NOT:
+- Change the schema
+- Add new top-level fields
+- Add new nested sections
+
+If confidence is low, still produce reasonable inferences.
+
 `;
 
-export async function analyzeProfile(profileData){
+/**
+ * Extract first JSON object safely
+ */
+function extractJSON(text) {
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+
+  if (start === -1 || end === -1) {
+    throw new Error("No JSON found in AI response");
+  }
+
+  return text.slice(start, end + 1);
+}
+
+/**
+ * Analyze profile from URLs only
+ * @param {string[]} urls
+ * @returns {Promise<Object>}
+ */
+export async function analyzeProfileFromUrls(urls) {
+  if (!Array.isArray(urls) || urls.length === 0) {
+    throw new Error("URLs array is required");
+  }
 
   const response = await openai.chat.completions.create({
-
-    model:"gpt-4.1-mini",
-    temperature:0.2,
-
-    messages:[
+    model: "gpt-4.1-mini",
+    temperature: 0.25,
+    messages: [
       {
-        role:"system",
-        content:SYSTEM_PROMPT
+        role: "system",
+        content: SYSTEM_PROMPT
       },
       {
-        role:"user",
-        content:JSON.stringify(profileData)
+        role: "user",
+        content: `Profile URLs:\n${urls.join("\n")}`
       }
     ]
-
   });
 
-  const text = response.choices[0].message.content;
+  let content = response.choices[0].message.content;
 
-  const json = text.substring(
-    text.indexOf("{"),
-    text.lastIndexOf("}")+1
-  );
+  // Defensive cleanup
+  content = content
+    .replace(/```json/gi, "")
+    .replace(/```/g, "")
+    .trim();
 
-  return JSON.parse(json);
+  const jsonString = extractJSON(content);
+  return JSON.parse(jsonString);
 }
