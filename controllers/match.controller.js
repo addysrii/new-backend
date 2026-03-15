@@ -1,15 +1,26 @@
 const {User} = require("../models/User");
+const ProfileAnalysis = require("../models/ProfileAnalysis");
 
 
+function extractTechnologies(dataNodes = []) {
 
-function calculateMatch(skillsA = [], skillsB = []) {
+ const techs = [];
 
- const common = skillsA.filter(skill => skillsB.includes(skill));
+ dataNodes.forEach(domain => {
+  (domain.stack || []).forEach(item => {
+   if (item.name) techs.push(item.name.toLowerCase());
+  });
+ });
 
- return common.length / Math.max(skillsA.length, 1);
-
+ return techs;
 }
 
+function calculateMatch(techA = [], techB = []) {
+
+ const common = techA.filter(t => techB.includes(t));
+
+ return common.length / Math.max(techA.length, 1);
+}
 exports.getNearbyUsers = async (req, res) => {
 
  try {
@@ -55,47 +66,67 @@ exports.getNearbyUsers = async (req, res) => {
 
 };
 
+
+
+
 exports.getProfileMatches = async (req, res) => {
 
  try {
 
   const userId = req.user.id;
 
-  const currentUser = await User.findById(userId);
+  const currentAnalysis = await ProfileAnalysis.findOne({
+   user_identifier: userId
+  });
 
-  if (!currentUser) {
-   return res.status(404).json({ error: "User not found" });
+  if (!currentAnalysis) {
+   return res.json({ matches: [] });
   }
 
-  const users = await User.find({
+  const currentTech = extractTechnologies(
+   currentAnalysis.data_nodes?.technologies || []
+  );
+
+  const otherUsers = await User.find({
    _id: { $ne: userId }
-  }).select("firstName lastName profileImage headline skills");
+  }).select("firstName lastName profileImage headline");
 
-  const matches = users.map(user => {
+  const analyses = await ProfileAnalysis.find({
+   user_identifier: { $in: otherUsers.map(u => u._id) }
+  });
 
-   const score = calculateMatch(
-    currentUser.skills || [],
-    user.skills || []
+  const analysisMap = {};
+
+  analyses.forEach(a => {
+   analysisMap[a.user_identifier] = a;
+  });
+
+  const matches = otherUsers.map(user => {
+
+   const analysis = analysisMap[user._id];
+
+   const userTech = extractTechnologies(
+    analysis?.data_nodes?.technologies || []
    );
+
+   const score = calculateMatch(currentTech, userTech);
+
+   const common = userTech.filter(t => currentTech.includes(t));
 
    return {
     id: user._id,
     name: `${user.firstName} ${user.lastName}`,
     profileImage: user.profileImage,
     headline: user.headline,
-    matchedSkills: (user.skills || []).filter(skill =>
-     (currentUser.skills || []).includes(skill)
-    ),
-    matchScore: score
+    matchedSkills: common,
+    matchScore: Math.round(score * 100)
    };
 
   });
 
-  matches.sort((a, b) => b.matchScore - a.matchScore);
+  matches.sort((a,b)=> b.matchScore - a.matchScore);
 
-  res.json({
-   matches
-  });
+  res.json({ matches });
 
  } catch (err) {
 
