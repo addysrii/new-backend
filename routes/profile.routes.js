@@ -20,7 +20,7 @@ router.post(
 );
 
 
-router.get("/me", authenticateToken, profileController.getProfile);
+// router.get("/me", authenticateToken, profileController.getProfile);
 
 router.get("/:userId", authenticateToken, profileController.getProfile);
 

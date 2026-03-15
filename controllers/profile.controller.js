@@ -1,179 +1,138 @@
 const { User, ProfileView } = require("../models/User");
 const ProfileAnalysis = require("../models/ProfileAnalysis");
-const { analyzeProfileFromUrls } = require("../services/openai.service");
+const { analyzeProfile } = require("../services/openai.service");
 const { getGithubProfile } = require("../services/github.service");
+const { getLinkedinProfile } = require("../services/linkedin.service");
 
-exports.generateProfile = async (req, res) => {
+exports.generateProfile = async(req,res)=>{
 
-  try {
+  try{
 
     const userId = req.user?.id;
 
-    if (!userId) {
-      return res.status(401).json({
-        error: "Unauthorized"
-      });
+    if(!userId){
+      return res.status(401).json({error:"Unauthorized"});
     }
 
     let { githubId, linkedinId } = req.body;
 
     const user = await User.findById(userId);
 
-    if (!user) {
-      return res.status(404).json({
-        error: "User not found"
-      });
-    }
-
     githubId = githubId || user.githubId;
     linkedinId = linkedinId || user.linkedinId;
 
-    const urls = [];
+    const urls=[];
 
-    /* ===============================
-       Normalize GitHub URL
-    ================================*/
+    /* normalize github */
 
-    let githubUsername = null;
+    let githubUsername=null;
 
-   if (githubId) {
+    if(githubId){
 
-  if (githubId.includes("github.com")) {
-
-    githubUsername = githubId.split("github.com/")[1]?.split("/")[0];
-
-  } else {
-
-    githubUsername = githubId;
-
-  }
-
-  urls.push(`https://github.com/${githubUsername}`);
-}
-    /* ===============================
-       Normalize LinkedIn URL
-    ================================*/
-
-    let linkedinUrl = null;
-
-    if (linkedinId) {
-
-      if (linkedinId.includes("linkedin.com")) {
-
-        linkedinUrl = linkedinId;
-
-        urls.push(linkedinId);
-
-      } else {
-
-        linkedinUrl = `https://linkedin.com/in/${linkedinId}`;
-
-        urls.push(linkedinUrl);
-
+      if(githubId.includes("github.com")){
+        githubUsername = githubId.split("github.com/")[1]?.split("/")[0];
+      }else{
+        githubUsername = githubId;
       }
 
+      urls.push(`https://github.com/${githubUsername}`);
     }
 
-    /* ===============================
-       Validate URLs
-    ================================*/
+    /* normalize linkedin */
 
-    if (urls.length === 0) {
+    let linkedinUrl=null;
+console.log(linkedinId)
+    if(linkedinId){
 
+      if(linkedinId.includes("linkedin.com")){
+        linkedinUrl=linkedinId;
+      }else{
+        linkedinUrl=`https://linkedin.com/in/${linkedinId}`;
+      }
+
+      urls.push(linkedinUrl);
+    }
+
+    if(urls.length===0){
       return res.status(400).json({
-        error: "Provide GitHub or LinkedIn profile"
+        error:"Provide GitHub or LinkedIn"
       });
-
     }
 
-    /* ===============================
-       Save IDs in user
-    ================================*/
-
-    await User.findByIdAndUpdate(userId, {
+    await User.findByIdAndUpdate(userId,{
       githubId,
       linkedinId
     });
 
-    /* ===============================
-       Fetch GitHub Data
-    ================================*/
+    /* fetch github */
 
-    let githubData = null;
+    let githubData=null;
 
-    if (githubUsername) {
-
-      try {
-
+    if(githubUsername){
+      try{
         githubData = await getGithubProfile(githubUsername);
-
-      } catch (err) {
-
-        console.error("GitHub fetch failed:", err);
-
+      }catch(err){
+        console.error("GitHub error",err);
       }
-
     }
 
-    /* ===============================
-       AI Analysis
-    ================================*/
+    /* fetch linkedin */
 
-    let aiResult = null;
+    let linkedinData=null;
 
-    try {
-
-      aiResult = await analyzeProfileFromUrls(urls);
-
-    } catch (err) {
-
-      console.error("AI analysis failed:", err);
-
-      return res.status(500).json({
-        error: "AI analysis failed"
-      });
-
+    if(linkedinUrl){
+      console.log("yes")
+      try{
+        linkedinData = await getLinkedinProfile(linkedinUrl);
+      }catch(err){
+        console.error("LinkedIn error",err);
+      }
     }
 
-    /* ===============================
-       Save Profile Analysis
-    ================================*/
+    /* AI analysis */
+
+    const aiResult = await analyzeProfile({
+      github:githubData,
+      linkedin:linkedinData
+    });
+
+    /* save */
 
     const profile = await ProfileAnalysis.findOneAndUpdate(
 
-      { user_identifier: userId },
+      {user_identifier:userId},
 
       {
-        user_identifier: userId,
-        source_urls: urls,
-        github: githubData,
-        linkedin: linkedinUrl ? { url: linkedinUrl } : null,
-        knowledge_assessment_model: "AI inference",
-        data_nodes: aiResult?.data_nodes || [],
-        raw_ai_response: aiResult
+        user_identifier:userId,
+        source_urls:urls,
+        github:githubData,
+        linkedin:linkedinData,
+        profile_summary:aiResult.profile_summary,
+        data_nodes:aiResult.data_nodes,
+        knowledge_assessment_model:"AI inference",
+        raw_ai_response:aiResult
       },
 
       {
-        upsert: true,
-        new: true
+        upsert:true,
+        new:true
       }
 
     );
 
     res.json(profile);
 
-  } catch (err) {
+  }catch(err){
 
-    console.error("Profile generation error:", err);
+    console.error(err);
 
     res.status(500).json({
-      error: "Profile generation failed"
+      error:"Profile generation failed"
     });
 
   }
 
 };
-
 /* ===============================
    Update User Location
 ================================*/

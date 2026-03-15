@@ -20,9 +20,23 @@ const LinkedInSchema = new mongoose.Schema({
  name:String,
  headline:String,
  location:String,
- about:String
-},{_id:false});
+ about:String,
 
+ experience:[{
+  company:String,
+  role:String,
+  duration:String,
+  description:String
+ }],
+
+ education:[{
+  school:String,
+  degree:String,
+  field:String,
+  duration:String
+ }]
+
+},{_id:false});
 const TechStackSchema = new mongoose.Schema({
  name:String,
  level:String,
