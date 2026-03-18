@@ -1,6 +1,6 @@
 const { User, ProfileView } = require("../models/User");
 const ProfileAnalysis = require("../models/ProfileAnalysis");
-const { analyzeProfileFromUrls } = require("../services/openai.service");
+const { analyzeProfile } = require("../services/openai.service");
 const { getGithubProfile } = require("../services/github.service");
 const { getLinkedinProfile } = require("../services/linkedin.service");
 
@@ -91,7 +91,7 @@ console.log(linkedinId)
 
     /* AI analysis */
 
-    const aiResult = await analyzeProfileFromUrls({
+    const aiResult = await analyzeProfile({
       github:githubData,
       linkedin:linkedinData
     });
