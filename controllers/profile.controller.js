@@ -91,7 +91,7 @@ console.log(linkedinId)
 
     /* AI analysis */
 
-    const aiResult = await analyzeProfile({
+    const aiResult = await analyzeProfileFromUrls(({
       github:githubData,
       linkedin:linkedinData
     });
